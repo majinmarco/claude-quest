@@ -1,0 +1,10 @@
+{
+  "name": "quest-mod",
+  "displayName": "Claude Quest",
+  "version": "0.1.0",
+  "description": "Claude Quest: turns AI-assisted coding in Claude Code into an RPG with Quests, Encounters, XP and a HUD.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "majinmarco"
+  }
+}

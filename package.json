@@ -1,0 +1,13 @@
+{
+  "name": "claude-quest",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "validate": "claude plugin validate .",
+    "test": "claude plugin test ."
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}
