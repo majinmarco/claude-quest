@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { SessionUsage } from 'claude-code'
 
-import { translateToolCall } from '../src/translate'
+import { translateMeasure, translateToolCall } from '../src/translate'
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
 
 describe('Event translator: tool.call', () => {
@@ -46,5 +47,38 @@ describe('Event translator: tool.call', () => {
     const bash = { tool: 'Bash', tool_use_id: 'toolu_x', command: 'ls' }
 
     expect(translateToolCall(bash, { result: {} })).toBeNull()
+  })
+})
+
+describe('Event translator: session.measure', () => {
+  test('a measurement becomes a SESSION_MEASURED of its Mana, model and spend', () => {
+    const measured = {
+      context: { tokens: 84_000, window: 200_000, percent: 42 },
+      rateLimits: [],
+      cost: { usd: 1.25 },
+      changed: ['context', 'cost'],
+    }
+
+    expect(translateMeasure(measured, 'claude-opus-5-5')).toEqual({
+      type: 'SESSION_MEASURED',
+      mana: 42,
+      model: 'claude-opus-5-5',
+      spendUsd: 1.25,
+    })
+  })
+
+  test('a window with no reading yet and no cost ledger leaves Mana and spend out', () => {
+    const fresh: SessionUsage = {
+      startedAt: 0,
+      context: { window: 200_000 },
+      rateLimits: [],
+    }
+
+    expect(translateMeasure(fresh, 'claude-opus-5-5')).toEqual({
+      type: 'SESSION_MEASURED',
+      mana: undefined,
+      model: 'claude-opus-5-5',
+      spendUsd: undefined,
+    })
   })
 })

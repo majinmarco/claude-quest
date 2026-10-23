@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { newGame, step } from '../src/engine'
+import { manaLevel, newGame, step } from '../src/engine'
 
 describe('Game Engine: a new Player', () => {
   test('starts at level 1 with no XP, full HP and no Stats', () => {
@@ -63,5 +63,94 @@ describe('Game Engine: levelling', () => {
 
     expect(state.player).toMatchObject({ level: 2, xp: 195 })
     expect(effects).not.toContainEqual({ type: 'LEVEL_UP', level: 3 })
+  })
+})
+
+describe('Game Engine: session vitals', () => {
+  test('a new game has no Mana, model or spend yet', () => {
+    expect(newGame().vitals).toEqual({ mana: null, model: null, spendUsd: null })
+  })
+
+  test('a measurement sets Mana, the model and the spend', () => {
+    const { state, effects } = step(newGame(), {
+      type: 'SESSION_MEASURED',
+      mana: 42,
+      model: 'claude-opus-5-5',
+      spendUsd: 1.25,
+    })
+
+    expect(state.vitals).toEqual({
+      mana: 42,
+      model: 'claude-opus-5-5',
+      spendUsd: 1.25,
+    })
+    expect(effects).toEqual([])
+  })
+
+  test('a measurement with no context reading (just compacted) clears Mana but keeps the rest', () => {
+    const measured = step(newGame(), {
+      type: 'SESSION_MEASURED',
+      mana: 90,
+      model: 'claude-opus-5-5',
+      spendUsd: 3,
+    }).state
+
+    const { state } = step(measured, { type: 'SESSION_MEASURED' })
+
+    expect(state.vitals).toEqual({
+      mana: null,
+      model: 'claude-opus-5-5',
+      spendUsd: 3,
+    })
+  })
+})
+
+describe('Game Engine: Mana thresholds', () => {
+  const LEVELS = [
+    [0, 'calm'],
+    [49, 'calm'],
+    [50, 'filling'],
+    [79, 'filling'],
+    [80, 'warning'],
+    [100, 'warning'],
+  ] as const
+
+  for (const [percent, level] of LEVELS) {
+    test(`${percent}% of the context window is ${level}`, () => {
+      expect(manaLevel(percent)).toBe(level)
+    })
+  }
+
+  test('Mana with no reading yet is calm', () => {
+    expect(manaLevel(null)).toBe('calm')
+  })
+})
+
+describe('Game Engine: compaction warning', () => {
+  const measured = (mana?: number) =>
+    ({ type: 'SESSION_MEASURED', mana }) as const
+
+  test('Mana crossing 80% warns of compaction', () => {
+    const at79 = step(newGame(), measured(79)).state
+
+    const { effects } = step(at79, measured(81))
+
+    expect(effects).toEqual([{ type: 'COMPACTION_WARNING', mana: 81 }])
+  })
+
+  test('Mana staying past 80% warns only once', () => {
+    const warned = step(newGame(), measured(82)).state
+
+    expect(step(warned, measured(88)).effects).toEqual([])
+  })
+
+  test('after a compaction, Mana crossing 80% again warns again', () => {
+    const warned = step(newGame(), measured(85)).state
+    const compacted = step(warned, measured()).state
+    const refilled = step(compacted, measured(30)).state
+
+    expect(step(refilled, measured(80)).effects).toEqual([
+      { type: 'COMPACTION_WARNING', mana: 80 },
+    ])
   })
 })

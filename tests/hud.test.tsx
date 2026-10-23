@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { On, SessionMeasureInput } from 'claude-code'
 
 import { read, readMissing } from './fixtures/tool-calls'
 
@@ -121,5 +121,124 @@ describe('HUD', () => {
     await $.tool.call(read.input)
 
     expect(kept.get('player')).toMatchObject({ level: 3, xp: 47 })
+  })
+})
+
+/** Answers the session's model and usage, as Claude Code would. */
+const measuring = (on: On, context: { window: number; percent?: number } = { window: 200_000 }) => {
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context, rateLimits: [], cost: { usd: 0.5 } },
+  }))
+}
+
+const measurement = (percent: number, usd: number): SessionMeasureInput => ({
+  context: { tokens: percent * 2_000, window: 200_000, percent },
+  rateLimits: [],
+  cost: { usd },
+  changed: ['context', 'cost'],
+})
+
+describe('HUD: session vitals', () => {
+  test('before any measurement, a fresh session shows Mana with no reading', async ($, on) => {
+    keptStore(on)
+    measuring(on)
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...HUD, surface })
+      expect((await ui.find({ type: 'Text', text: /^Mana / }))?.text).toBe('Mana --')
+      expect((await ui.find({ type: 'Text', text: /^\$/ }))?.text).toBe('$0.50')
+      await ui.unmount()
+    }
+  })
+
+  test('a resumed session shows its Mana from the start', async ($, on) => {
+    keptStore(on)
+    measuring(on, { window: 200_000, percent: 63 })
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...HUD, surface })
+      expect((await ui.find({ type: 'Text', text: /^Mana / }))?.text).toBe('Mana 63%')
+      await ui.unmount()
+    }
+  })
+
+  test('a measurement shows Mana, the model and the spend', async ($, on) => {
+    keptStore(on)
+    measuring(on)
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    on('session.measure', (_, e) => ({ changed: e.changed }))
+    await $.session.start(START)
+
+    await $.session.measure(measurement(42, 1.25))
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...HUD, surface })
+
+      const mana = await ui.find({ type: 'Text', text: /^Mana / })
+      expect(mana?.text).toBe('Mana 42%')
+      expect(mana?.props.color).toBe('blue')
+      expect((await ui.find({ type: 'Text', text: /opus/ }))?.text).toBe(
+        'claude-opus-5-5',
+      )
+      expect((await ui.find({ type: 'Text', text: /^\$/ }))?.text).toBe('$1.25')
+      expect(await ui.find({ type: 'Text', text: /compaction/i })).toBeUndefined()
+      await ui.unmount()
+    }
+  })
+
+  test('Mana turns yellow as it fills', async ($, on) => {
+    keptStore(on)
+    measuring(on)
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    on('session.measure', (_, e) => ({ changed: e.changed }))
+    await $.session.start(START)
+
+    await $.session.measure(measurement(65, 2))
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...HUD, surface })
+      expect((await ui.find({ type: 'Text', text: /^Mana / }))?.props.color).toBe(
+        'yellow',
+      )
+      await ui.unmount()
+    }
+  })
+
+  test('Mana past 80% turns red and warns before compaction, once', async ($, on) => {
+    const toasts: string[] = []
+    keptStore(on)
+    measuring(on)
+    on('ui.toast', (_, e) => {
+      toasts.push(e.text)
+
+      return { value: undefined }
+    })
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    on('session.measure', (_, e) => ({ changed: e.changed }))
+    await $.session.start(START)
+
+    await $.session.measure(measurement(85, 4))
+    await $.session.measure(measurement(88, 4.5))
+
+    expect(toasts).toEqual([
+      'Mana at 85%: the context will compact soon. Wrap up or start a fresh session.',
+    ])
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...HUD, surface })
+
+      expect((await ui.find({ type: 'Text', text: /^Mana / }))?.props.color).toBe(
+        'red',
+      )
+      expect((await ui.find({ type: 'Text', text: /compaction/i }))?.text).toBe(
+        'Compaction near',
+      )
+      await ui.unmount()
+    }
   })
 })

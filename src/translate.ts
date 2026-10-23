@@ -35,3 +35,19 @@ export const translateToolCall = (
 
   return null
 }
+
+/** The part of a `session.measure` input, or of `$.session.usage()`, it reads. */
+export type MeasureSeen = {
+  context: { percent?: number }
+  cost?: { usd: number }
+}
+
+export const translateMeasure = (
+  usage: MeasureSeen,
+  model: string,
+): GameEvent => ({
+  type: 'SESSION_MEASURED',
+  mana: usage.context.percent,
+  model,
+  spendUsd: usage.cost?.usd,
+})

@@ -21,9 +21,20 @@ export type Player = {
 
 export type Encounter = { kind: 'Exploration'; target: string }
 
+/** The session's vitals, as the engine last measured them; null until then. */
+export type Vitals = {
+  /** Mana: the share of the context window used, a whole percentage. */
+  mana: number | null
+  /** The main loop's model, as `/model` shows it. */
+  model: string | null
+  /** What the session has cost so far, in US dollars. */
+  spendUsd: number | null
+}
+
 export type GameState = {
   player: Player
   encounter: Encounter | null
+  vitals: Vitals
 }
 
 declare module 'claude-code' {
