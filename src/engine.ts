@@ -1,12 +1,16 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
+import type { Difficulty, Encounter, GameState, Player, Quest, StatName, Vitals } from '../types'
 
 export type { Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
 
 export type GameEvent =
-  | { type: 'FILE_READ'; path: string }
+  /**
+   * A read or search of `path`, in `module` (see GameState.visitedModules);
+   * null when it was outside the project, or where that is not known.
+   */
+  | { type: 'FILE_READ'; path: string; module: string | null }
   | {
       type: 'SESSION_MEASURED'
       /** Absent while the context window has no reading yet. */
@@ -18,13 +22,23 @@ export type GameEvent =
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
-  | { type: 'XP_GAINED'; amount: number }
+  /** XP earned; `stat` is the Stat whose kind of work earned it, if any. */
+  | { type: 'XP_GAINED'; amount: number; stat?: StatName }
+  /** The Player's first visit to a Module in this Region. */
+  | { type: 'MODULE_DISCOVERED'; module: string }
   | { type: 'LEVEL_UP'; level: number }
   | { type: 'COMPACTION_WARNING'; mana: number }
   | { type: 'QUEST_STARTED'; ticket: string }
   | { type: 'QUEST_ABANDONED'; ticket: string }
 
 const EXPLORATION_XP = 5
+
+/**
+ * The bonus for a first visit to a Module: Wisdom's kind of XP, for learning
+ * how the system is laid out. It goes to the Player's XP like any other; no
+ * Stat grows from it yet.
+ */
+export const DISCOVERY_XP = 10
 
 /** How full Mana is: it turns `filling`, then `warning` before compaction. */
 export type ManaLevel = 'calm' | 'filling' | 'warning'
@@ -80,6 +94,7 @@ export const newGame = (player: Player = newPlayer()): GameState => ({
   encounter: null,
   vitals: { mana: null, model: null, spendUsd: null },
   quest: null,
+  visitedModules: [],
 })
 
 export const step = (
@@ -88,7 +103,7 @@ export const step = (
 ): { state: GameState; effects: Effect[] } => {
   switch (event.type) {
     case 'FILE_READ':
-      return explore(state, event.path)
+      return explore(state, event.path, event.module)
     case 'SESSION_MEASURED':
       return measure(state, event)
     case 'QUEST_START':
@@ -99,9 +114,23 @@ export const step = (
 const explore = (
   state: GameState,
   path: string,
+  module: string | null,
 ): { state: GameState; effects: Effect[] } => {
-  const encounter: Encounter = { kind: 'Exploration', target: path }
-  const gained = gainXp(state.player, EXPLORATION_XP)
+  // Outside the project there is no Module to discover.
+  const isFirstVisit = module !== null && !state.visitedModules.includes(module)
+  const encounter: Encounter = { kind: 'Exploration', target: path, module, isFirstVisit }
+  const earned: Effect[] = [{ type: 'XP_GAINED', amount: EXPLORATION_XP }]
+  if (isFirstVisit) {
+    earned.push(
+      { type: 'MODULE_DISCOVERED', module },
+      { type: 'XP_GAINED', amount: DISCOVERY_XP, stat: 'wisdom' },
+    )
+  }
+  const total = earned.reduce(
+    (sum, effect) => sum + (effect.type === 'XP_GAINED' ? effect.amount : 0),
+    0,
+  )
+  const gained = gainXp(state.player, total)
 
   return {
     state: {
@@ -109,12 +138,10 @@ const explore = (
       player: gained.player,
       encounter,
       quest: attach(state.quest, encounter),
+      visitedModules:
+        isFirstVisit && module !== null ? [...state.visitedModules, module] : state.visitedModules,
     },
-    effects: [
-      { type: 'ENCOUNTER_STARTED', encounter },
-      { type: 'XP_GAINED', amount: EXPLORATION_XP },
-      ...gained.effects,
-    ],
+    effects: [{ type: 'ENCOUNTER_STARTED', encounter }, ...earned, ...gained.effects],
   }
 }
 

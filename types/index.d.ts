@@ -19,7 +19,18 @@ export type Player = {
   stats: Stats
 }
 
-export type Encounter = { kind: 'Exploration'; target: string }
+/**
+ * A game moment the session's activity played. An Exploration is a read or a
+ * search: `target` is what was read or searched, `module` the Module it was in
+ * (see `GameState.visitedModules`), null outside the project, `isFirstVisit`
+ * whether the Player had never been in that Module before.
+ */
+export type Encounter = {
+  kind: 'Exploration'
+  target: string
+  module: string | null
+  isFirstVisit: boolean
+}
 
 /** The session's vitals, as the engine last measured them; null until then. */
 export type Vitals = {
@@ -45,6 +56,14 @@ export type GameState = {
   vitals: Vitals
   /** The active Quest; one at a time per session, null between Quests. */
   quest: Quest | null
+  /**
+   * The Modules the Player has explored in this Region, in order of first
+   * visit. A Module is the folder a read or search was in, relative to the
+   * project's root (`src`, `tests/fixtures`, `.` for the root itself); a
+   * folder outside the project is no Module. Seeded from the Region file at
+   * session start.
+   */
+  visitedModules: string[]
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */
@@ -62,6 +81,11 @@ export type Region = {
   quests: QuestRecord[]
   /** Where the Region's Quests come from; GitHub Issues when absent. */
   questSource?: QuestSourceSetting
+  /**
+   * The Modules the Player has explored in the project, in order of first
+   * visit (GameState.visitedModules), so a first visit is a first visit once.
+   */
+  discoveredModules?: string[]
 }
 
 /**

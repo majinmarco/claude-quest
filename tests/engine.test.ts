@@ -25,31 +25,148 @@ describe('Game Engine: a new Player', () => {
 
 describe('Game Engine: Exploration', () => {
   test('a file read starts an Exploration Encounter and earns 5 XP', () => {
-    const { state, effects } = step(newGame(), {
+    const visited = { ...newGame(), visitedModules: ['src'] }
+
+    const { state, effects } = step(visited, {
       type: 'FILE_READ',
       path: 'src/engine.ts',
+      module: 'src',
     })
 
     expect(state.player.xp).toBe(5)
     expect(state.encounter).toEqual({
       kind: 'Exploration',
       target: 'src/engine.ts',
+      module: 'src',
+      isFirstVisit: false,
     })
     expect(effects).toEqual([
       {
         type: 'ENCOUNTER_STARTED',
-        encounter: { kind: 'Exploration', target: 'src/engine.ts' },
+        encounter: {
+          kind: 'Exploration',
+          target: 'src/engine.ts',
+          module: 'src',
+          isFirstVisit: false,
+        },
       },
       { type: 'XP_GAINED', amount: 5 },
     ])
   })
 })
 
+describe('Game Engine: first visit to a module', () => {
+  test('a new game has visited no module', () => {
+    expect(newGame().visitedModules).toEqual([])
+  })
+
+  test('the first read in a module earns 10 bonus Wisdom XP on top of the 5', () => {
+    const { state, effects } = step(newGame(), {
+      type: 'FILE_READ',
+      path: 'src/engine.ts',
+      module: 'src',
+    })
+
+    expect(state.player.xp).toBe(15)
+    expect(state.visitedModules).toEqual(['src'])
+    expect(state.encounter).toEqual({
+      kind: 'Exploration',
+      target: 'src/engine.ts',
+      module: 'src',
+      isFirstVisit: true,
+    })
+    expect(effects).toEqual([
+      {
+        type: 'ENCOUNTER_STARTED',
+        encounter: {
+          kind: 'Exploration',
+          target: 'src/engine.ts',
+          module: 'src',
+          isFirstVisit: true,
+        },
+      },
+      { type: 'XP_GAINED', amount: 5 },
+      { type: 'MODULE_DISCOVERED', module: 'src' },
+      { type: 'XP_GAINED', amount: 10, stat: 'wisdom' },
+    ])
+  })
+
+  test('a repeat visit to the module earns only the 5', () => {
+    const first = step(newGame(), { type: 'FILE_READ', path: 'src/engine.ts', module: 'src' })
+
+    const { state, effects } = step(first.state, {
+      type: 'FILE_READ',
+      path: 'src/hud.tsx',
+      module: 'src',
+    })
+
+    expect(state.player.xp).toBe(20)
+    expect(state.visitedModules).toEqual(['src'])
+    expect(state.encounter).toMatchObject({ module: 'src', isFirstVisit: false })
+    expect(effects).not.toContainEqual({ type: 'MODULE_DISCOVERED', module: 'src' })
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 5 })
+  })
+
+  test('each module is a first visit of its own, a nested one included', () => {
+    const first = step(newGame(), { type: 'FILE_READ', path: 'src/engine.ts', module: 'src' })
+    const second = step(first.state, { type: 'FILE_READ', path: 'tests/engine.test.ts', module: 'tests' })
+    const third = step(second.state, {
+      type: 'FILE_READ',
+      path: 'tests/fixtures/tool-calls.ts',
+      module: 'tests/fixtures',
+    })
+
+    expect(third.state.player.xp).toBe(45)
+    expect(third.state.visitedModules).toEqual(['src', 'tests', 'tests/fixtures'])
+  })
+
+  test('a module visited in an earlier session is no first visit', () => {
+    const remembered = { ...newGame(), visitedModules: ['src'] }
+
+    const { state } = step(remembered, { type: 'FILE_READ', path: 'src/hud.tsx', module: 'src' })
+
+    expect(state.player.xp).toBe(5)
+  })
+
+  test('a read outside the project discovers nothing and earns only the 5', () => {
+    const { state, effects } = step(newGame(), {
+      type: 'FILE_READ',
+      path: '/home/marco/.claude/settings.json',
+      module: null,
+    })
+
+    expect(state.player.xp).toBe(5)
+    expect(state.visitedModules).toEqual([])
+    expect(state.encounter).toMatchObject({ module: null, isFirstVisit: false })
+    expect(effects).toEqual([
+      {
+        type: 'ENCOUNTER_STARTED',
+        encounter: {
+          kind: 'Exploration',
+          target: '/home/marco/.claude/settings.json',
+          module: null,
+          isFirstVisit: false,
+        },
+      },
+      { type: 'XP_GAINED', amount: 5 },
+    ])
+  })
+
+  test('the bonus counts toward levelling up', () => {
+    const start = newGame({ ...newGame().player, xp: 90 })
+
+    const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts', module: '.' })
+
+    expect(state.player).toMatchObject({ level: 2, xp: 5 })
+    expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
+  })
+})
+
 describe('Game Engine: levelling', () => {
   test('crossing 100 XP at level 1 reaches level 2, carrying the rest over', () => {
-    const start = newGame({ ...newGame().player, xp: 98 })
+    const start = { ...newGame({ ...newGame().player, xp: 98 }), visitedModules: ['.'] }
 
-    const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts' })
+    const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts', module: '.' })
 
     expect(state.player.level).toBe(2)
     expect(state.player.xp).toBe(3)
@@ -57,9 +174,9 @@ describe('Game Engine: levelling', () => {
   })
 
   test('level 2 takes 200 XP to clear', () => {
-    const start = newGame({ ...newGame().player, level: 2, xp: 190 })
+    const start = { ...newGame({ ...newGame().player, level: 2, xp: 190 }), visitedModules: ['.'] }
 
-    const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts' })
+    const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts', module: '.' })
 
     expect(state.player).toMatchObject({ level: 2, xp: 195 })
     expect(effects).not.toContainEqual({ type: 'LEVEL_UP', level: 3 })
@@ -170,18 +287,18 @@ describe('Game Engine: Quest start', () => {
   test('Encounters during the Quest are attached to it, oldest first', () => {
     const questing = step(newGame(), { type: 'QUEST_START', ticket: '#4' }).state
 
-    const once = step(questing, { type: 'FILE_READ', path: 'src/engine.ts' }).state
-    const { state } = step(once, { type: 'FILE_READ', path: 'src/hud.tsx' })
+    const once = step(questing, { type: 'FILE_READ', path: 'src/engine.ts', module: 'src' }).state
+    const { state } = step(once, { type: 'FILE_READ', path: 'src/hud.tsx', module: 'src' })
 
     expect(state.quest?.encounters).toEqual([
-      { kind: 'Exploration', target: 'src/engine.ts' },
-      { kind: 'Exploration', target: 'src/hud.tsx' },
+      { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true },
+      { kind: 'Exploration', target: 'src/hud.tsx', module: 'src', isFirstVisit: false },
     ])
   })
 
   test('starting a second Quest abandons the active one and replaces it', () => {
     const questing = step(newGame(), { type: 'QUEST_START', ticket: '#4' }).state
-    const explored = step(questing, { type: 'FILE_READ', path: 'a.ts' }).state
+    const explored = step(questing, { type: 'FILE_READ', path: 'a.ts', module: '.' }).state
 
     const { state, effects } = step(explored, { type: 'QUEST_START', ticket: 'ABC-123' })
 
@@ -194,13 +311,13 @@ describe('Game Engine: Quest start', () => {
 
   test('starting the active Quest again carries on with it', () => {
     const questing = step(newGame(), { type: 'QUEST_START', ticket: '#4' }).state
-    const explored = step(questing, { type: 'FILE_READ', path: 'a.ts' }).state
+    const explored = step(questing, { type: 'FILE_READ', path: 'a.ts', module: '.' }).state
 
     const { state, effects } = step(explored, { type: 'QUEST_START', ticket: '#4' })
 
     expect(state.quest).toEqual({
       ticket: '#4',
-      encounters: [{ kind: 'Exploration', target: 'a.ts' }],
+      encounters: [{ kind: 'Exploration', target: 'a.ts', module: '.', isFirstVisit: true }],
     })
     expect(effects).toEqual([])
   })

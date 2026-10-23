@@ -52,34 +52,74 @@ const isRegion = (value: unknown): value is Region =>
   value !== null &&
   Array.isArray((value as Partial<Region>).quests)
 
+/** The Region file's changes, one after another, so none undoes another. */
+let regionChanges: Promise<void> = Promise.resolve()
+
 /**
- * Changes the Region file's Quest history, creating the file on first use.
- * A file that is not a Region (hand-edited into invalid JSON, say) is left as
- * it is rather than overwritten: the Quest still plays, unrecorded.
+ * Changes the Region file, creating it on first use. A file that is not a
+ * Region (hand-edited into invalid JSON, say) is left as it is rather than
+ * overwritten: the game still plays, unrecorded. Changes run one at a time,
+ * each reading what the last wrote.
  */
-async function changeRegion(
+function changeRegion(
+  $: EngineInterface,
+  change: (region: Region) => Region,
+): Promise<void> {
+  const changed = regionChanges.then(async () => {
+    const path = `${await $.session.root()}/${REGION_FILE}`
+    let region: Region = { quests: [] }
+
+    if (await $.fs.exists(path)) {
+      let kept: unknown
+      try {
+        kept = JSON.parse(await $.fs.read(path))
+      } catch {
+        return
+      }
+      if (!isRegion(kept)) {
+        return
+      }
+      region = kept
+    }
+
+    // Keys the mod does not know yet are kept as they are.
+    await $.fs.write(path, `${JSON.stringify(change(region), null, 2)}\n`)
+  })
+  regionChanges = changed.catch(() => undefined)
+
+  return changed
+}
+
+function changeQuests(
   $: EngineInterface,
   change: (quests: QuestRecord[]) => QuestRecord[],
 ): Promise<void> {
-  const path = `${await $.session.root()}/${REGION_FILE}`
-  let region: Region = { quests: [] }
+  return changeRegion($, region => ({ ...region, quests: change(region.quests) }))
+}
 
-  if (await $.fs.exists(path)) {
-    let kept: unknown
-    try {
-      kept = JSON.parse(await $.fs.read(path))
-    } catch {
-      return
-    }
-    if (!isRegion(kept)) {
-      return
-    }
-    region = kept
-  }
+/**
+ * Adds the modules the session has discovered to the Region's. The session's
+ * whole list goes in, not one module, so a write that failed is made good by
+ * the next.
+ */
+export function recordModulesDiscovered(
+  $: EngineInterface,
+  modules: readonly string[],
+): Promise<void> {
+  return changeRegion($, region => ({
+    ...region,
+    discoveredModules: [...new Set([...discoveredModulesOf(region), ...modules])],
+  }))
+}
 
-  // Keys the mod does not know yet are kept as they are.
-  const changed = { ...region, quests: change(region.quests) }
-  await $.fs.write(path, `${JSON.stringify(changed, null, 2)}\n`)
+/** The modules a Region file's JSON says were discovered; none when it says none. */
+export const discoveredModulesOf = (region: unknown): string[] => {
+  const modules =
+    typeof region === 'object' && region !== null
+      ? (region as Partial<Region>).discoveredModules
+      : undefined
+
+  return Array.isArray(modules) ? modules.filter(module => typeof module === 'string') : []
 }
 
 /**
@@ -108,7 +148,7 @@ export async function recordQuestStarted(
 ): Promise<void> {
   const startedAt = new Date(await $.clock.now()).toISOString()
 
-  await changeRegion($, quests => [
+  await changeQuests($, quests => [
     ...quests,
     { ticket, startedAt, status: 'active' },
   ])
@@ -119,7 +159,7 @@ export function recordQuestAbandoned(
   $: EngineInterface,
   ticket: string,
 ): Promise<void> {
-  return changeRegion($, quests => {
+  return changeQuests($, quests => {
     const latest = quests.findLastIndex(
       quest => quest.ticket === ticket && quest.status === 'active',
     )

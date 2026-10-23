@@ -26,6 +26,10 @@ _Avoid_: Level, zone, project map
 One epic within a Region; cleared when all its Quests are done.
 _Avoid_: Epic (outside the Jira adapter), area
 
+**Module**:
+A folder of a Region's project, as the Player explores it: the folder a read file is in, or the folder searched, relative to the project's root (`.` for the root itself). The first visit to a Module earns bonus XP; the Region file keeps the Modules discovered.
+_Avoid_: Package, directory (outside the event translator)
+
 **Fog**:
 The unrevealed part of a Region or Dungeon, standing for work not yet planned.
 _Avoid_: Fog of war, hidden tiles
@@ -47,6 +51,10 @@ _Avoid_: Ticket list, backlog view
 **Encounter**:
 A game moment produced by real session activity during a Quest (Exploration, Battle, Crafting, Puzzle, Trap, Rest).
 _Avoid_: Event (that's the raw session activity), scene
+
+**Scene**:
+The pane that plays the current Encounter: animated pixel art where the surface draws it, one line of text in the terminal.
+_Avoid_: Encounter view, animation pane
 
 **Boss Fight**:
 The code-review challenge that ends a Quest, built from the Quest's actual diff.

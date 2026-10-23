@@ -1,12 +1,14 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import { newGame, step } from '../src/engine'
 import type { Effect, GameEvent } from '../src/engine'
 import { drawHud } from '../src/hud'
 import {
+  discoveredModulesOf,
   loadPlayer,
   readRegionFile,
+  recordModulesDiscovered,
   recordQuestAbandoned,
   recordQuestStarted,
   savePlayer,
@@ -15,6 +17,7 @@ import { drawQuestBoard, noFilters } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
 import type { QuestSource } from '../src/quest-source'
 import { questSourceFor, questSourceSettingOf, unavailable } from '../src/quest-source-setting'
+import { drawScene } from '../src/scene'
 import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard } from '../types'
@@ -29,6 +32,21 @@ const board = atom({ plugin: 'quest-mod', key: 'board' } as const, {
 } satisfies QuestBoard)
 
 const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
+
+const SCENE = { id: 'scene', title: 'Scene' } as const
+
+/**
+ * Opens the Scene, unasked, when one of `surfaces` draws its art. In the
+ * terminal alone it waits for /scene: the HUD already tells the Encounter.
+ */
+async function openSceneForArt(
+  $: EngineInterface,
+  surfaces: readonly RenderSurface[],
+): Promise<void> {
+  if (surfaces.some(surface => surface !== 'terminal')) {
+    await $.ui.open(SCENE).catch(() => undefined)
+  }
+}
 
 /** The command a Quest card fills the prompt with; the Player sends it. */
 const IMPLEMENT = '/mattpocock-skills:implement'
@@ -112,6 +130,13 @@ async function play($: EngineInterface, event: GameEvent): Promise<void> {
     await savePlayer($, saved.player)
   }
 
+  // The session's whole list goes to the Region file, not awaited: a file
+  // write never holds up the tool call that made the discovery. One that
+  // fails leaves the discovery to this session, until the next writes it.
+  if (saved !== null && effects.some(effect => effect.type === 'MODULE_DISCOVERED')) {
+    void recordModulesDiscovered($, saved.visitedModules).catch(() => undefined)
+  }
+
   for (const effect of effects) {
     if (effect.type === 'LEVEL_UP') {
       $.ui.toast(`Level up! You are now level ${effect.level}.`)
@@ -143,12 +168,28 @@ export const register: Register = on => {
     // kept by an older version of the mod gains the fields it lacks.
     const kept = await read($, game)
     const player = kept?.player ?? (await loadPlayer($))
-    await update($, game, current => ({ ...newGame(player), ...current }))
+    // The modules explored in this Region in earlier sessions are no first
+    // visit; with no Region file to read, every module is new.
+    const region = await readRegionFile($).catch(() => ({ ok: false as const }))
+    const discovered = region.ok ? discoveredModulesOf(region.value) : []
+    await update($, game, current => {
+      const resumed = { ...newGame(player), ...current }
 
-    // The command is a convenience: the game plays without it.
+      return {
+        ...resumed,
+        visitedModules: [...new Set([...discovered, ...resumed.visitedModules])],
+      }
+    })
+
+    // The commands are a convenience: the game plays without them.
     await $.command
       .register({ name: 'quest-board', description: 'Open the Quest Board: this Region\'s open Quests' })
       .catch(() => undefined)
+    await $.command
+      .register({ name: 'scene', description: 'Open the Scene: the current Encounter, played' })
+      .catch(() => undefined)
+
+    await openSceneForArt($, await $.session.surfaces().catch(() => []))
 
     const started = await next(e)
 
@@ -164,7 +205,9 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const outcome = await next(e)
-    const event = translateToolCall(e, outcome)
+    // Without the root, the read still explores, but discovers no Module.
+    const root = await $.session.root().catch(() => null)
+    const event = translateToolCall(e, outcome, root)
 
     if (event !== null) {
       await play($, event)
@@ -185,6 +228,23 @@ export const register: Register = on => {
         ? 'Quest Board opened.'
         : 'Quest Board opened: it shows once the window is wide enough.',
     }
+  })
+
+  on('command.run', { command: 'scene' }, async $ => {
+    const opened = await $.ui.open(SCENE)
+
+    return {
+      text: opened.isPlaced
+        ? 'Scene opened.'
+        : 'Scene opened: it shows once the window is wide enough.',
+    }
+  })
+
+  on('session.attach', async ($, e, next) => {
+    const attached = await next(e)
+    await openSceneForArt($, [e.surface])
+
+    return attached
   })
 
   on('command.run', async ($, e, next) => {
@@ -211,6 +271,12 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) =>
     drawQuestBoard($, e, await read($, board), boardActions($)),
+  )
+
+  // The Scene draws what the game already holds: it never runs in a tool
+  // call, so it never slows one.
+  on('ui.render', { component: 'Pane', requestId: SCENE.id }, async ($, e) =>
+    drawScene($, e, (await read($, game))?.encounter ?? null),
   )
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

@@ -15,22 +15,75 @@ export type ToolCallOutcome = { result?: unknown; deny?: string; isError?: true 
 
 const SEARCHES = new Set(['Grep', 'Glob'])
 
+/**
+ * An absolute path with `.` and `..` resolved and no trailing slash; a
+ * relative one taken from `base`.
+ */
+const resolve = (base: string, path: string): string => {
+  const segments: string[] = []
+  for (const segment of `${path.startsWith('/') ? '' : base}/${path}`.split('/')) {
+    if (segment === '..') {
+      segments.pop()
+    } else if (segment !== '' && segment !== '.') {
+      segments.push(segment)
+    }
+  }
+
+  return `/${segments.join('/')}`
+}
+
+/** The folder holding `path`. */
+const folderOf = (path: string): string => `${path.replace(/\/+$/, '')}/..`
+
+/** Whether the last segment looks like a file's name: `engine.ts`, not `.claude`. */
+const namesFile = (path: string): boolean => /[^/.][^/]*\.[^/.]+$/.test(path)
+
+/**
+ * The Module a folder is: its path relative to the project's root, `.` for
+ * the root itself. A relative folder is taken from the root, where the
+ * session works. A folder outside the project, or any folder when the root is
+ * not known, is no Module (null).
+ */
+const moduleOf = (folder: string, root: string | null): string | null => {
+  if (root === null) {
+    return null
+  }
+
+  const base = resolve('/', root)
+  const absolute = resolve(base, folder)
+  if (absolute === base) {
+    return '.'
+  }
+
+  const prefix = base === '/' ? '/' : `${base}/`
+
+  return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : null
+}
+
+// A Module is a folder of the project: a Read is in its file's folder; a
+// search, in the folder it searched. A Glob searches a folder always; a Grep
+// may search one file, taken as a file when its last segment has an extension.
 export const translateToolCall = (
   input: ToolCallSeen,
   outcome: ToolCallOutcome,
+  /** The project's root, absolute; null when it cannot be read. */
+  root: string | null,
 ): GameEvent | null => {
   if (outcome.deny !== undefined || outcome.isError === true) {
     return null
   }
 
   if (input.tool === 'Read' && typeof input.file_path === 'string') {
-    return { type: 'FILE_READ', path: input.file_path }
+    const path = input.file_path
+
+    return { type: 'FILE_READ', path, module: moduleOf(folderOf(path), root) }
   }
 
   if (SEARCHES.has(input.tool)) {
     const path = typeof input.path === 'string' ? input.path : '.'
+    const folder = input.tool === 'Grep' && namesFile(path) ? folderOf(path) : path
 
-    return { type: 'FILE_READ', path }
+    return { type: 'FILE_READ', path, module: moduleOf(folder, root) }
   }
 
   return null
