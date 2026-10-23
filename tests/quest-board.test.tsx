@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { On, PromptFillInput, ProcessRunResult } from 'claude-code'
+import type { McpToolResult, On, PromptFillInput, ProcessRunResult } from 'claude-code'
 
 const BOARD = {
   plugin: 'quest-mod',
@@ -309,6 +309,231 @@ describe('Quest Board', () => {
 
     expect(runs).toHaveLength(2)
     expect(await ui.find({ type: 'Button', key: 'quest:#5' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+const REGION = '/work/.claude/claude-quest.json'
+
+/** The project's Region file, as the mod reads it with `$.fs`; absent when null. */
+const regionFile = (on: On, region: unknown) => {
+  on('session.root', () => ({ value: '/work' }))
+  on('fs.exists', (_, e) => ({ value: e.path === REGION && region !== null }))
+  on('fs.read', (_, e) => ({
+    value: typeof region === 'string' ? region : JSON.stringify(region),
+  }))
+}
+
+const answered = (value: unknown, isError = false): McpToolResult => ({
+  content: [{ type: 'text', text: JSON.stringify(value) }],
+  isError,
+})
+
+const JIRA_ISSUES = [
+  {
+    key: 'CPI-12',
+    webUrl: 'https://example.atlassian.net/browse/CPI-12',
+    fields: {
+      summary: 'Dashboard filters',
+      labels: ['ready-for-agent'],
+      issuetype: { name: 'Story' },
+      status: { name: 'To Do' },
+      customFields: { 'Story point estimate': { id: 'customfield_10016', value: 3 } },
+    },
+  },
+  {
+    key: 'CPI-9',
+    webUrl: 'https://example.atlassian.net/browse/CPI-9',
+    fields: {
+      summary: 'Occupancy is off by one night',
+      labels: [],
+      issuetype: { name: 'Bug' },
+      status: { name: 'In Progress' },
+    },
+  },
+]
+
+/** A fake Atlassian MCP answering through `$.mcp.call`; records each call. */
+const atlassian = (on: On, answer?: () => McpToolResult) => {
+  const calls: { server: string; tool: string; args: Record<string, unknown> }[] = []
+  on('mcp.call', (_, e) => {
+    calls.push(e)
+    if (answer !== undefined) {
+      return { value: answer() }
+    }
+    if (e.tool === 'getAccessibleAtlassianResources') {
+      return {
+        value: answered({
+          data: { resources: [{ cloudId: 'cloud-1', products: [{ id: 'jira' }] }] },
+        }),
+      }
+    }
+
+    return { value: answered({ issues: { nodes: JIRA_ISSUES, pageInfo: { hasNextPage: false } } }) }
+  })
+
+  return calls
+}
+
+const JIRA_REGION = {
+  questSource: { kind: 'jira', project: 'CPI', storyPointsField: 'customfield_10016' },
+  quests: [],
+}
+
+describe('Quest Board: the Region chooses its Quest Source', () => {
+  test('a Region set to Jira lists its project through the Atlassian connection', async ($, on) => {
+    engine(on)
+    regionFile(on, JIRA_REGION)
+    const runs = gh(on)
+    const calls = atlassian(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    expect(runs).toEqual([])
+    expect(calls.map(call => call.tool)).toEqual([
+      'getAccessibleAtlassianResources',
+      'searchJiraIssuesUsingJql',
+    ])
+    expect(calls[1]?.args.jql).toBe('project = "CPI" AND statusCategory != Done ORDER BY created DESC')
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...BOARD, surface })
+      expect((await ui.find({ type: 'Button', key: 'quest:CPI-12' }))?.text).toBe(
+        'CPI-12 Dashboard filters',
+      )
+      const shown = await texts(ui)
+      expect(shown).toContain('Medium · 100 XP · INT · To Do')
+      expect(shown).toContain('Unrated · 50 XP · STR · In Progress')
+      await ui.unmount()
+    }
+  })
+
+  test('clicking a Jira Quest card fills the prompt with /implement for its key', async ($, on) => {
+    const { filled } = engine(on)
+    regionFile(on, JIRA_REGION)
+    atlassian(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    await ui.press({ key: 'quest:CPI-12' })
+    await ui.unmount()
+
+    expect(filled.map(fill => fill.text)).toEqual(['/mattpocock-skills:implement CPI-12'])
+  })
+
+  test('a Region set to GitHub Issues lists them with gh', async ($, on) => {
+    engine(on)
+    regionFile(on, { questSource: { kind: 'github' }, quests: [] })
+    const runs = gh(on)
+    const calls = atlassian(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    expect(runs[0]?.slice(0, 3)).toEqual(['gh', 'issue', 'list'])
+    expect(calls).toEqual([])
+  })
+
+  test('a Region that names no Quest Source lists its GitHub Issues', async ($, on) => {
+    engine(on)
+    regionFile(on, { quests: [] })
+    const runs = gh(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    expect(runs[0]?.slice(0, 3)).toEqual(['gh', 'issue', 'list'])
+  })
+
+  test('without the Atlassian connection, the Quest Board says to connect it', async ($, on) => {
+    engine(on)
+    regionFile(on, JIRA_REGION)
+    on('mcp.call', () => {
+      throw new Error('MCP server "claude.ai Atlassian MCP" is not connected')
+    })
+    await $.session.start(START)
+    await questBoard($)
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...BOARD, surface })
+      const shown = await texts(ui)
+      expect(shown).toContain('The Quest Board could not be read.')
+      expect(shown.some(text => text.startsWith(
+        'The Atlassian connection (claude.ai Atlassian MCP) is not available: connect it with /mcp.',
+      ))).toBe(true)
+      await ui.unmount()
+    }
+  })
+
+  test('with the Atlassian connection signed out, the Quest Board says to sign in', async ($, on) => {
+    engine(on)
+    regionFile(on, JIRA_REGION)
+    atlassian(on, () => answered({ error: true, message: 'Unauthorized', statusCode: 401 }, true))
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    expect(await texts(ui)).toContain(
+      'The Atlassian connection (claude.ai Atlassian MCP) is not signed in: authenticate it with /mcp.',
+    )
+    await ui.unmount()
+  })
+
+  test('a Jira Quest Source without a project says what to set', async ($, on) => {
+    engine(on)
+    regionFile(on, { questSource: { kind: 'jira' }, quests: [] })
+    const calls = atlassian(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    expect(calls).toEqual([])
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    expect(await texts(ui)).toContain(
+      'The Jira Quest Source needs its project: set questSource.project in .claude/claude-quest.json.',
+    )
+    await ui.unmount()
+  })
+
+  test('a Quest Source the mod does not know says which ones it does', async ($, on) => {
+    engine(on)
+    regionFile(on, { questSource: { kind: 'linear' }, quests: [] })
+    const runs = gh(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    expect(runs).toEqual([])
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    expect(await texts(ui)).toContain(
+      'Unknown Quest Source "linear" in .claude/claude-quest.json: use "github" or "jira".',
+    )
+    await ui.unmount()
+  })
+
+  test('an unavailable Quest Board says where the Quest Source is chosen', async ($, on) => {
+    engine(on)
+    regionFile(on, null)
+    gh(on, () => ran(1, '', 'failed to run git: fatal: not a git repository\n'))
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    expect(await texts(ui)).toContain(
+      'The Quest Source is chosen in .claude/claude-quest.json: "github" (the default) or "jira".',
+    )
+    await ui.unmount()
+  })
+
+  test('a Region file that is not JSON says so, rather than guess its Quest Source', async ($, on) => {
+    engine(on)
+    regionFile(on, '{ "questSource": { "kind": "jira", }')
+    const runs = gh(on)
+    const calls = atlassian(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    expect(runs).toEqual([])
+    expect(calls).toEqual([])
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    expect(await texts(ui)).toContain('.claude/claude-quest.json is not valid JSON.')
     await ui.unmount()
   })
 })

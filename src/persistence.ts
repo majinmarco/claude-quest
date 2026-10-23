@@ -45,7 +45,7 @@ export function savePlayer($: EngineInterface, player: Player): Promise<void> {
 }
 
 /** The Region file, under the project's root. */
-const REGION_FILE = '.claude/claude-quest.json'
+export const REGION_FILE = '.claude/claude-quest.json'
 
 const isRegion = (value: unknown): value is Region =>
   typeof value === 'object' &&
@@ -80,6 +80,25 @@ async function changeRegion(
   // Keys the mod does not know yet are kept as they are.
   const changed = { ...region, quests: change(region.quests) }
   await $.fs.write(path, `${JSON.stringify(changed, null, 2)}\n`)
+}
+
+/**
+ * The Region file's JSON as kept, for reading settings from it: undefined
+ * when there is none; not ok, with the reason, when it is not JSON.
+ */
+export async function readRegionFile(
+  $: EngineInterface,
+): Promise<{ ok: true; value: unknown } | { ok: false; reason: string }> {
+  const path = `${await $.session.root()}/${REGION_FILE}`
+  if (!(await $.fs.exists(path))) {
+    return { ok: true, value: undefined }
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(await $.fs.read(path)) as unknown }
+  } catch {
+    return { ok: false, reason: `${REGION_FILE} is not valid JSON.` }
+  }
 }
 
 /** Adds a Quest, just started, to the Region's history. */

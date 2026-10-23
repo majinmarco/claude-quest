@@ -4,8 +4,8 @@
 
 import type { ProcessRunResult } from 'claude-code'
 
-import { difficultyOf, statsOf } from './quest-source'
-import type { QuestCard, QuestSource, QuestSourceProblem, Size } from './quest-source'
+import { difficultyOf, pointsFromLabels, sizeFromLabels, statsOf } from './quest-source'
+import type { QuestCard, QuestSource, QuestSourceProblem } from './quest-source'
 
 /** Runs a command by argv, as `$.process.run` does; rejects when it cannot start. */
 export type RunCommand = (argv: readonly string[]) => Promise<ProcessRunResult>
@@ -33,51 +33,6 @@ const TRIAGE = new Set([
   'wontfix',
 ])
 
-const SIZE_WORDS: Record<string, Size> = {
-  xs: 'XS',
-  'extra-small': 'XS',
-  xsmall: 'XS',
-  tiny: 'XS',
-  s: 'S',
-  small: 'S',
-  m: 'M',
-  medium: 'M',
-  l: 'L',
-  large: 'L',
-  xl: 'XL',
-  'extra-large': 'XL',
-  xlarge: 'XL',
-  huge: 'XL',
-}
-
-// `size: M`, `size:M`, `size/M`, `size-M`, `Size: medium`.
-const SIZE_LABEL = /^size\s*[:/-]?\s*([a-z-]+)$/i
-// `points: 5`, `sp:5`, `story points: 5`, `estimate: 5`.
-const POINTS_LABEL = /^(?:points|sp|story[ -]?points|estimate)\s*[:/-]?\s*(\d+(?:\.\d+)?)$/i
-
-const sizeOf = (labels: string[]): Size | undefined => {
-  for (const label of labels) {
-    const word = SIZE_LABEL.exec(label.trim())?.[1]?.toLowerCase()
-    const size = word === undefined ? undefined : SIZE_WORDS[word]
-    if (size !== undefined) {
-      return size
-    }
-  }
-
-  return undefined
-}
-
-const pointsOf = (labels: string[]): number | undefined => {
-  for (const label of labels) {
-    const points = POINTS_LABEL.exec(label.trim())?.[1]
-    if (points !== undefined) {
-      return Number(points)
-    }
-  }
-
-  return undefined
-}
-
 const asQuest = (issue: GhIssue): QuestCard => {
   const labels = (issue.labels ?? []).map(label => label.name)
   const triage = labels.find(label => TRIAGE.has(label))
@@ -87,7 +42,7 @@ const asQuest = (issue: GhIssue): QuestCard => {
     ticket: `#${issue.number}`,
     title: issue.title,
     status: closed ? 'closed' : (triage ?? 'open'),
-    difficulty: difficultyOf({ points: pointsOf(labels), size: sizeOf(labels) }),
+    difficulty: difficultyOf({ points: pointsFromLabels(labels), size: sizeFromLabels(labels) }),
     recommendedStats: statsOf(labels),
     ...(issue.url === undefined ? {} : { url: issue.url }),
   }

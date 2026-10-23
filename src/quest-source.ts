@@ -43,6 +43,55 @@ const pointsDifficulty = (points: number): Difficulty => {
   return points <= 7 ? 'Hard' : 'Epic'
 }
 
+// Labels are where a Quest Source with no size or points field of its own
+// (GitHub Issues; Jira, for size) keeps them.
+const SIZE_WORDS: Record<string, Size> = {
+  xs: 'XS',
+  'extra-small': 'XS',
+  xsmall: 'XS',
+  tiny: 'XS',
+  s: 'S',
+  small: 'S',
+  m: 'M',
+  medium: 'M',
+  l: 'L',
+  large: 'L',
+  xl: 'XL',
+  'extra-large': 'XL',
+  xlarge: 'XL',
+  huge: 'XL',
+}
+
+// `size: M`, `size:M`, `size/M`, `size-M`, `Size: medium`.
+const SIZE_LABEL = /^size\s*[:/-]?\s*([a-z-]+)$/i
+// `points: 5`, `sp:5`, `story points: 5`, `estimate: 5`.
+const POINTS_LABEL = /^(?:points|sp|story[ -]?points|estimate)\s*[:/-]?\s*(\d+(?:\.\d+)?)$/i
+
+/** The size a label names, the first that names one. */
+export const sizeFromLabels = (labels: readonly string[]): Size | undefined => {
+  for (const label of labels) {
+    const word = SIZE_LABEL.exec(label.trim())?.[1]?.toLowerCase()
+    const size = word === undefined ? undefined : SIZE_WORDS[word]
+    if (size !== undefined) {
+      return size
+    }
+  }
+
+  return undefined
+}
+
+/** The story points a label names, the first that names some. */
+export const pointsFromLabels = (labels: readonly string[]): number | undefined => {
+  for (const label of labels) {
+    const points = POINTS_LABEL.exec(label.trim())?.[1]
+    if (points !== undefined) {
+      return Number(points)
+    }
+  }
+
+  return undefined
+}
+
 /**
  * A Quest's difficulty, from its ticket alone: story points when it has them,
  * else its size, else Unrated. Nothing about the Player goes in.

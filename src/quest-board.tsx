@@ -6,6 +6,7 @@
 import type { EngineInterface, RenderInput } from 'claude-code'
 
 import { questXp } from './engine'
+import { REGION_FILE } from './persistence'
 import type { Difficulty, QuestBoard, QuestCard, StatName } from '../types'
 
 export type QuestBoardActions = {
@@ -88,6 +89,9 @@ export function drawQuestBoard(
           The Quest Board could not be read.
         </Text>
         <Text>{listing.problem.message}</Text>
+        <Text dimColor>
+          {`The Quest Source is chosen in ${REGION_FILE}: "github" (the default) or "jira".`}
+        </Text>
         <Box flexDirection="row">{refresh}</Box>
       </Box>
     )

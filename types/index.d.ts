@@ -60,6 +60,40 @@ export type QuestRecord = {
 export type Region = {
   /** Every Quest started in the project, oldest first. */
   quests: QuestRecord[]
+  /** Where the Region's Quests come from; GitHub Issues when absent. */
+  questSource?: QuestSourceSetting
+}
+
+/**
+ * The Region's choice of Quest Source, kept by hand in its Region file:
+ * `{ "kind": "github" }` or `{ "kind": "jira", "project": "CPI", ... }`.
+ */
+export type QuestSourceSetting = { kind: 'github' } | ({ kind: 'jira' } & JiraSettings)
+
+/** How a Region reads its Quests from Jira, through the Atlassian MCP server. */
+export type JiraSettings = {
+  /** The Jira project's key (`CPI`). */
+  project: string
+  /**
+   * The JQL listing the open Quests; by default the project's issues not
+   * done, newest first.
+   */
+  jql?: string
+  /**
+   * The Atlassian site: its cloudId or URL (`https://acme.atlassian.net`).
+   * By default the first Jira site the connection can reach.
+   */
+  site?: string
+  /** The Atlassian MCP server's name as /mcp lists it; `claude.ai Atlassian MCP` by default. */
+  server?: string
+  /**
+   * The story points field's id (`customfield_10016`), which differs per
+   * site: getJiraIssue with view "evidence" lists each custom field's label
+   * and id under fields.customFields. Without it only a points label
+   * (`points: 5`) gives story points: the server's default view leaves custom
+   * fields out unless asked by id.
+   */
+  storyPointsField?: string
 }
 
 /** One of the six Stats, by its key in `Stats`. */

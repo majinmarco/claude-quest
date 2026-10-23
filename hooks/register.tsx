@@ -3,16 +3,18 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { newGame, step } from '../src/engine'
 import type { Effect, GameEvent } from '../src/engine'
-import { githubIssues } from '../src/github-issues'
 import { drawHud } from '../src/hud'
 import {
   loadPlayer,
+  readRegionFile,
   recordQuestAbandoned,
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
 import { drawQuestBoard, noFilters } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
+import type { QuestSource } from '../src/quest-source'
+import { questSourceFor, questSourceSettingOf, unavailable } from '../src/quest-source-setting'
 import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard } from '../types'
@@ -31,11 +33,33 @@ const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 /** The command a Quest card fills the prompt with; the Player sends it. */
 const IMPLEMENT = '/mattpocock-skills:implement'
 
-/** Lists the repo's open Quests again, from its GitHub Issues. */
+/**
+ * The Quest Source the Region chose in its Region file, GitHub Issues when it
+ * chose none or the file cannot be read. A file that is not JSON may hold a
+ * choice gone wrong, so the board says so rather than guess.
+ */
+async function regionQuestSource($: EngineInterface): Promise<QuestSource> {
+  const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
+  if (!region.ok) {
+    return unavailable({ kind: 'unreachable', message: region.reason })
+  }
+
+  const setting = questSourceSettingOf(region.value)
+  if (!setting.ok) {
+    return unavailable(setting.problem)
+  }
+
+  return questSourceFor(setting.value, {
+    run: argv => $.process.run(argv),
+    call: (server, tool, args) => $.mcp.call(server, tool, args),
+  })
+}
+
+/** Lists the Region's open Quests again, from its Quest Source. */
 async function listQuests($: EngineInterface): Promise<void> {
   await update($, board, (current): QuestBoard => ({ ...current, listing: { state: 'loading' } }))
 
-  const listed = await githubIssues(argv => $.process.run(argv)).list()
+  const listed = await (await regionQuestSource($)).list()
 
   await update($, board, (current): QuestBoard => ({
     ...current,
@@ -123,7 +147,7 @@ export const register: Register = on => {
 
     // The command is a convenience: the game plays without it.
     await $.command
-      .register({ name: 'quest-board', description: 'Open the Quest Board: this repo\'s open Quests' })
+      .register({ name: 'quest-board', description: 'Open the Quest Board: this Region\'s open Quests' })
       .catch(() => undefined)
 
     const started = await next(e)
