@@ -154,3 +154,54 @@ describe('Game Engine: compaction warning', () => {
     ])
   })
 })
+
+describe('Game Engine: Quest start', () => {
+  test('a new game has no active Quest', () => {
+    expect(newGame().quest).toBeNull()
+  })
+
+  test('starting a Quest makes it the active Quest, with no Encounters yet', () => {
+    const { state, effects } = step(newGame(), { type: 'QUEST_START', ticket: '#4' })
+
+    expect(state.quest).toEqual({ ticket: '#4', encounters: [] })
+    expect(effects).toEqual([{ type: 'QUEST_STARTED', ticket: '#4' }])
+  })
+
+  test('Encounters during the Quest are attached to it, oldest first', () => {
+    const questing = step(newGame(), { type: 'QUEST_START', ticket: '#4' }).state
+
+    const once = step(questing, { type: 'FILE_READ', path: 'src/engine.ts' }).state
+    const { state } = step(once, { type: 'FILE_READ', path: 'src/hud.tsx' })
+
+    expect(state.quest?.encounters).toEqual([
+      { kind: 'Exploration', target: 'src/engine.ts' },
+      { kind: 'Exploration', target: 'src/hud.tsx' },
+    ])
+  })
+
+  test('starting a second Quest abandons the active one and replaces it', () => {
+    const questing = step(newGame(), { type: 'QUEST_START', ticket: '#4' }).state
+    const explored = step(questing, { type: 'FILE_READ', path: 'a.ts' }).state
+
+    const { state, effects } = step(explored, { type: 'QUEST_START', ticket: 'ABC-123' })
+
+    expect(state.quest).toEqual({ ticket: 'ABC-123', encounters: [] })
+    expect(effects).toEqual([
+      { type: 'QUEST_ABANDONED', ticket: '#4' },
+      { type: 'QUEST_STARTED', ticket: 'ABC-123' },
+    ])
+  })
+
+  test('starting the active Quest again carries on with it', () => {
+    const questing = step(newGame(), { type: 'QUEST_START', ticket: '#4' }).state
+    const explored = step(questing, { type: 'FILE_READ', path: 'a.ts' }).state
+
+    const { state, effects } = step(explored, { type: 'QUEST_START', ticket: '#4' })
+
+    expect(state.quest).toEqual({
+      ticket: '#4',
+      encounters: [{ kind: 'Exploration', target: 'a.ts' }],
+    })
+    expect(effects).toEqual([])
+  })
+})

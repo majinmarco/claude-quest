@@ -31,10 +31,35 @@ export type Vitals = {
   spendUsd: number | null
 }
 
+/** The Quest the session is playing: one ticket, and its Encounters so far. */
+export type Quest = {
+  /** The ticket's reference as its Quest Source writes it: `#4`, `ABC-123`. */
+  ticket: string
+  /** The Encounters played during the Quest, oldest first. */
+  encounters: Encounter[]
+}
+
 export type GameState = {
   player: Player
   encounter: Encounter | null
   vitals: Vitals
+  /** The active Quest; one at a time per session, null between Quests. */
+  quest: Quest | null
+}
+
+/** One Quest in a Region's history, as the Region file keeps it. */
+export type QuestRecord = {
+  ticket: string
+  /** When the Quest started, as an ISO 8601 timestamp. */
+  startedAt: string
+  /** `abandoned` once another Quest replaced it before it closed. */
+  status: 'active' | 'abandoned'
+}
+
+/** The Region file: one project's `.claude/claude-quest.json`. */
+export type Region = {
+  /** Every Quest started in the project, oldest first. */
+  quests: QuestRecord[]
 }
 
 declare module 'claude-code' {

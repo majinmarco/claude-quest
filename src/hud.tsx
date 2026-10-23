@@ -1,5 +1,6 @@
-// The HUD band above the prompt: level, XP bar and the current Encounter, and
-// below them the session's vitals: Mana, the model and the spend.
+// The HUD band above the prompt: level, XP bar, the active Quest and the
+// current Encounter, and below them the session's vitals: Mana, the model and
+// the spend.
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
@@ -29,7 +30,7 @@ const describeEncounter = (encounter: Encounter): string => {
 export function drawHud(
   $: EngineInterface,
   e: RenderInput<'AbovePrompt'>,
-  { player, encounter, vitals }: GameState,
+  { player, encounter, vitals, quest }: GameState,
 ) {
   const { Box, Text } = $.ui.resolve(e)
   const toClear = xpToClear(player.level)
@@ -46,6 +47,11 @@ export function drawHud(
         <Text>
           XP {player.xp}/{toClear}
         </Text>
+        {quest !== null && (
+          <Text bold color="magenta">
+            Quest {quest.ticket}
+          </Text>
+        )}
         {encounter !== null && <Text dimColor>{describeEncounter(encounter)}</Text>}
       </Box>
       <Box flexDirection="row" gap={2}>

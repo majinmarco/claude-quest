@@ -1,9 +1,11 @@
-// Persistence: the Player in `$.store`, shared by every session and project.
+// Persistence: the Player in `$.store`, shared by every session and project,
+// and the Region in the project's `.claude/claude-quest.json`.
 // (The session's game is in `$.state`, held in hooks/register.tsx: Claude Code's
 // mod loader wants every state reference written in the file that uses it.)
 
 import type { EngineInterface } from 'claude-code'
 
+import type { QuestRecord, Region } from '../types'
 import { newPlayer } from './engine'
 import type { Player } from './engine'
 
@@ -40,4 +42,71 @@ export async function loadPlayer($: EngineInterface): Promise<Player> {
 
 export function savePlayer($: EngineInterface, player: Player): Promise<void> {
   return $.store.set(PLAYER, player)
+}
+
+/** The Region file, under the project's root. */
+const REGION_FILE = '.claude/claude-quest.json'
+
+const isRegion = (value: unknown): value is Region =>
+  typeof value === 'object' &&
+  value !== null &&
+  Array.isArray((value as Partial<Region>).quests)
+
+/**
+ * Changes the Region file's Quest history, creating the file on first use.
+ * A file that is not a Region (hand-edited into invalid JSON, say) is left as
+ * it is rather than overwritten: the Quest still plays, unrecorded.
+ */
+async function changeRegion(
+  $: EngineInterface,
+  change: (quests: QuestRecord[]) => QuestRecord[],
+): Promise<void> {
+  const path = `${await $.session.root()}/${REGION_FILE}`
+  let region: Region = { quests: [] }
+
+  if (await $.fs.exists(path)) {
+    let kept: unknown
+    try {
+      kept = JSON.parse(await $.fs.read(path))
+    } catch {
+      return
+    }
+    if (!isRegion(kept)) {
+      return
+    }
+    region = kept
+  }
+
+  // Keys the mod does not know yet are kept as they are.
+  const changed = { ...region, quests: change(region.quests) }
+  await $.fs.write(path, `${JSON.stringify(changed, null, 2)}\n`)
+}
+
+/** Adds a Quest, just started, to the Region's history. */
+export async function recordQuestStarted(
+  $: EngineInterface,
+  ticket: string,
+): Promise<void> {
+  const startedAt = new Date(await $.clock.now()).toISOString()
+
+  await changeRegion($, quests => [
+    ...quests,
+    { ticket, startedAt, status: 'active' },
+  ])
+}
+
+/** Marks the Quest's latest active run abandoned in the Region's history. */
+export function recordQuestAbandoned(
+  $: EngineInterface,
+  ticket: string,
+): Promise<void> {
+  return changeRegion($, quests => {
+    const latest = quests.findLastIndex(
+      quest => quest.ticket === ticket && quest.status === 'active',
+    )
+
+    return quests.map((quest, index) =>
+      index === latest ? { ...quest, status: 'abandoned' } : quest,
+    )
+  })
 }

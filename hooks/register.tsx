@@ -4,8 +4,13 @@ import type { EngineInterface, Register } from 'claude-code'
 import { newGame, step } from '../src/engine'
 import type { Effect, GameEvent } from '../src/engine'
 import { drawHud } from '../src/hud'
-import { loadPlayer, savePlayer } from '../src/persistence'
-import { translateMeasure, translateToolCall } from '../src/translate'
+import {
+  loadPlayer,
+  recordQuestAbandoned,
+  recordQuestStarted,
+  savePlayer,
+} from '../src/persistence'
+import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
@@ -37,6 +42,14 @@ async function play($: EngineInterface, event: GameEvent): Promise<void> {
       $.ui.toast(
         `Mana at ${effect.mana}%: the context will compact soon. Wrap up or start a fresh session.`,
       )
+    }
+    if (effect.type === 'QUEST_ABANDONED') {
+      $.ui.toast(`Quest abandoned: ${effect.ticket}`)
+      await recordQuestAbandoned($, effect.ticket)
+    }
+    if (effect.type === 'QUEST_STARTED') {
+      $.ui.toast(`Quest started: ${effect.ticket}`)
+      await recordQuestStarted($, effect.ticket)
     }
   }
 }
@@ -78,6 +91,20 @@ export const register: Register = on => {
   })
     // The game never blocks a tool call: on a failure the call's own result
     // stands.
+    .catch(($, e, next) => next(e))
+
+  on('command.run', async ($, e, next) => {
+    // The Quest starts before the command runs: `next(e)` may not resolve
+    // until the run is under way, and its Encounters belong to the Quest.
+    const event = translateCommand(e)
+
+    if (event !== null) {
+      await play($, event)
+    }
+
+    return next(e)
+  })
+    // The game never blocks a command: on a failure it runs as typed.
     .catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {

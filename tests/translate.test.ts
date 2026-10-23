@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { SessionUsage } from 'claude-code'
 
-import { translateMeasure, translateToolCall } from '../src/translate'
+import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
 
 describe('Event translator: tool.call', () => {
@@ -80,5 +80,45 @@ describe('Event translator: session.measure', () => {
       model: 'claude-opus-5-5',
       spendUsd: undefined,
     })
+  })
+})
+
+describe('Event translator: command.run', () => {
+  const implement = (args: string, command = 'mattpocock-skills:implement') => ({
+    command,
+    args,
+    origin: { kind: 'composer' },
+  })
+
+  const STARTS = [
+    ['#4', '#4'],
+    ['4', '#4'],
+    ['ABC-123', 'ABC-123'],
+    ['abc-123', 'ABC-123'],
+    ['https://github.com/majinmarco/claude-quest/issues/4', '#4'],
+    ['https://acme.atlassian.net/browse/ABC-123', 'ABC-123'],
+    ['  #4  then review it', '#4'],
+  ] as const
+
+  for (const [args, ticket] of STARTS) {
+    test(`/implement ${args.trim()} starts the Quest for ${ticket}`, () => {
+      expect(translateCommand(implement(args))).toEqual({ type: 'QUEST_START', ticket })
+    })
+  }
+
+  test('bare /implement, as typed without its plugin, starts a Quest too', () => {
+    expect(translateCommand(implement('#4', 'implement'))).toEqual({
+      type: 'QUEST_START',
+      ticket: '#4',
+    })
+  })
+
+  test('/implement with no ticket reference is no game event', () => {
+    expect(translateCommand(implement(''))).toBeNull()
+    expect(translateCommand(implement('the spec in docs/spec.md'))).toBeNull()
+  })
+
+  test('another command with a ticket reference is no game event', () => {
+    expect(translateCommand(implement('#4', 'mattpocock-skills:triage'))).toBeNull()
   })
 })

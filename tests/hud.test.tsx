@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 import type { On, SessionMeasureInput } from 'claude-code'
 
 import { read, readMissing } from './fixtures/tool-calls'
@@ -240,5 +241,142 @@ describe('HUD: session vitals', () => {
       )
       await ui.unmount()
     }
+  })
+})
+
+const REGION = '/work/.claude/claude-quest.json'
+
+/** Answers the mod's `$.fs` from a Map of files the test can read afterwards. */
+const projectFiles = (on: On, files: Record<string, string> = {}) => {
+  const kept = new Map(Object.entries(files))
+  on('session.root', () => ({ value: '/work' }))
+  on('clock.now', () => ({ value: Date.UTC(2026, 9, 23, 20, 0) }))
+  on('fs.exists', (_, e) => ({ value: kept.has(e.path) }))
+  on('fs.read', (_, e) => ({ value: kept.get(e.path) ?? '' }))
+  on('fs.write', (_, e) => {
+    kept.set(e.path, e.text)
+
+    return { value: undefined }
+  })
+
+  return kept
+}
+
+/** Runs `/<command> <args>` as the person types it at the terminal. */
+const implement = (
+  $: Engine,
+  args: string,
+  command = 'mattpocock-skills:implement',
+) =>
+  $.command.run({
+    command,
+    args,
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 80 },
+  })
+
+describe('Quests', () => {
+  test('/implement #4 starts a Quest the HUD shows', async ($, on) => {
+    keptStore(on)
+    projectFiles(on)
+    on('command.run', () => ({}))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    await implement($, '#4')
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...HUD, surface })
+      expect((await ui.find({ type: 'Text', text: /^Quest / }))?.text).toBe('Quest #4')
+      await ui.unmount()
+    }
+  })
+
+  test('with no Quest started, the HUD shows none', async ($, on) => {
+    keptStore(on)
+    projectFiles(on)
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    const ui = await $.ui.mount({ ...HUD, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /^Quest / })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('the first Quest creates the Region file and records the Quest in its history', async ($, on) => {
+    keptStore(on)
+    const files = projectFiles(on)
+    on('command.run', () => ({}))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    await implement($, '#4', 'implement')
+
+    expect(JSON.parse(files.get(REGION) ?? 'null')).toEqual({
+      quests: [{ ticket: '#4', startedAt: '2026-10-23T20:00:00.000Z', status: 'active' }],
+    })
+  })
+
+  test('a Quest is added to the history the Region file already holds', async ($, on) => {
+    keptStore(on)
+    const earlier = { ticket: '#2', startedAt: '2026-10-22T09:00:00.000Z', status: 'active' }
+    const files = projectFiles(on, { [REGION]: JSON.stringify({ quests: [earlier] }) })
+    on('command.run', () => ({}))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    await implement($, 'ABC-123')
+
+    expect(JSON.parse(files.get(REGION) ?? 'null')).toEqual({
+      quests: [
+        earlier,
+        { ticket: 'ABC-123', startedAt: '2026-10-23T20:00:00.000Z', status: 'active' },
+      ],
+    })
+  })
+
+  test('a second Quest replaces the first, which the history records as abandoned', async ($, on) => {
+    const toasts: string[] = []
+    keptStore(on)
+    const files = projectFiles(on)
+    on('ui.toast', (_, e) => {
+      toasts.push(e.text)
+
+      return { value: undefined }
+    })
+    on('command.run', () => ({}))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    await implement($, '#4')
+    await implement($, '#5')
+
+    expect(toasts).toEqual([
+      'Quest started: #4',
+      'Quest abandoned: #4',
+      'Quest started: #5',
+    ])
+    expect(JSON.parse(files.get(REGION) ?? 'null')).toEqual({
+      quests: [
+        { ticket: '#4', startedAt: '2026-10-23T20:00:00.000Z', status: 'abandoned' },
+        { ticket: '#5', startedAt: '2026-10-23T20:00:00.000Z', status: 'active' },
+      ],
+    })
+
+    const ui = await $.ui.mount({ ...HUD, surface: 'terminal' })
+    expect((await ui.find({ type: 'Text', text: /^Quest / }))?.text).toBe('Quest #5')
+    await ui.unmount()
+  })
+
+  test('/implement with no ticket starts no Quest and writes no Region file', async ($, on) => {
+    keptStore(on)
+    const files = projectFiles(on)
+    on('command.run', () => ({}))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    await implement($, 'the spec in docs/spec.md')
+
+    expect(files.has(REGION)).toBe(false)
   })
 })

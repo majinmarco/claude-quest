@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Encounter, GameState, Player, Vitals } from '../types'
+import type { Encounter, GameState, Player, Quest, Vitals } from '../types'
 
-export type { Encounter, GameState, Player, Vitals } from '../types'
+export type { Encounter, GameState, Player, Quest, Vitals } from '../types'
 
 export type GameEvent =
   | { type: 'FILE_READ'; path: string }
@@ -14,12 +14,15 @@ export type GameEvent =
       model?: string
       spendUsd?: number
     }
+  | { type: 'QUEST_START'; ticket: string }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
   | { type: 'XP_GAINED'; amount: number }
   | { type: 'LEVEL_UP'; level: number }
   | { type: 'COMPACTION_WARNING'; mana: number }
+  | { type: 'QUEST_STARTED'; ticket: string }
+  | { type: 'QUEST_ABANDONED'; ticket: string }
 
 const EXPLORATION_XP = 5
 
@@ -60,6 +63,7 @@ export const newGame = (player: Player = newPlayer()): GameState => ({
   player,
   encounter: null,
   vitals: { mana: null, model: null, spendUsd: null },
+  quest: null,
 })
 
 export const step = (
@@ -71,6 +75,8 @@ export const step = (
       return explore(state, event.path)
     case 'SESSION_MEASURED':
       return measure(state, event)
+    case 'QUEST_START':
+      return startQuest(state, event.ticket)
   }
 }
 
@@ -82,7 +88,12 @@ const explore = (
   const gained = gainXp(state.player, EXPLORATION_XP)
 
   return {
-    state: { ...state, player: gained.player, encounter },
+    state: {
+      ...state,
+      player: gained.player,
+      encounter,
+      quest: attach(state.quest, encounter),
+    },
     effects: [
       { type: 'ENCOUNTER_STARTED', encounter },
       { type: 'XP_GAINED', amount: EXPLORATION_XP },
@@ -90,6 +101,12 @@ const explore = (
     ],
   }
 }
+
+/** An Encounter belongs to the active Quest; between Quests, to none. */
+const attach = (quest: Quest | null, encounter: Encounter): Quest | null =>
+  quest === null
+    ? null
+    : { ...quest, encounters: [...quest.encounters, encounter] }
 
 const gainXp = (
   player: Player,
@@ -130,4 +147,26 @@ const measure = (
       : []
 
   return { state: { ...state, vitals }, effects }
+}
+
+// One active Quest per session. Starting another replaces it: the Quest
+// running is abandoned, not refused, because until a Boss Fight can close a
+// Quest a refusal would hold the session to its first Quest for good. The
+// Quest already running, started again, carries on with its Encounters.
+const startQuest = (
+  state: GameState,
+  ticket: string,
+): { state: GameState; effects: Effect[] } => {
+  if (state.quest?.ticket === ticket) {
+    return { state, effects: [] }
+  }
+
+  const abandoned: Effect[] =
+    state.quest === null ? [] : [{ type: 'QUEST_ABANDONED', ticket: state.quest.ticket }]
+  const quest: Quest = { ticket, encounters: [] }
+
+  return {
+    state: { ...state, quest },
+    effects: [...abandoned, { type: 'QUEST_STARTED', ticket }],
+  }
 }
