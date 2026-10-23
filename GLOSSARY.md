@@ -37,7 +37,7 @@ One ticket, played as a run of Encounters ending in a Boss Fight.
 _Avoid_: Ticket (outside a Quest Source), task, mission
 
 **Quest Source**:
-Where Quests come from: a Jira project or a folder of local ticket files.
+Where Quests come from: a Jira project or a repo's GitHub Issues.
 _Avoid_: Tracker, backlog, provider
 
 **Quest Board**:
