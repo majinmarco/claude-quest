@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Encounter, GameState, Player, Quest, Vitals } from '../types'
+import type { Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
 
-export type { Encounter, GameState, Player, Quest, Vitals } from '../types'
+export type { Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
 
 export type GameEvent =
   | { type: 'FILE_READ'; path: string }
@@ -40,6 +40,22 @@ export const manaLevel = (mana: number | null): ManaLevel => {
 
   return mana < MANA_WARNING ? 'filling' : 'warning'
 }
+
+/**
+ * The XP a Quest rewards, by its difficulty alone: it doubles with each step.
+ * A ticket that names no size is Unrated and rewards as Easy, so an unsized
+ * ticket is still worth taking but never worth more than a sized one.
+ */
+const QUEST_XP: Record<Difficulty, number> = {
+  Trivial: 25,
+  Easy: 50,
+  Medium: 100,
+  Hard: 200,
+  Epic: 400,
+  Unrated: 50,
+}
+
+export const questXp = (difficulty: Difficulty): number => QUEST_XP[difficulty]
 
 /** XP needed to clear a level: 100 at level 1, 200 at level 2, and so on. */
 export const xpToClear = (level: number): number => 100 * level

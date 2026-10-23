@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { manaLevel, newGame, step } from '../src/engine'
+import { manaLevel, newGame, questXp, step } from '../src/engine'
 
 describe('Game Engine: a new Player', () => {
   test('starts at level 1 with no XP, full HP and no Stats', () => {
@@ -203,5 +203,19 @@ describe('Game Engine: Quest start', () => {
       encounters: [{ kind: 'Exploration', target: 'a.ts' }],
     })
     expect(effects).toEqual([])
+  })
+})
+
+describe('Game Engine: Quest rewards', () => {
+  test('the XP reward of a Quest doubles with each step of difficulty', () => {
+    expect(questXp('Trivial')).toBe(25)
+    expect(questXp('Easy')).toBe(50)
+    expect(questXp('Medium')).toBe(100)
+    expect(questXp('Hard')).toBe(200)
+    expect(questXp('Epic')).toBe(400)
+  })
+
+  test('a Quest whose ticket names no size is unrated and rewards as Easy', () => {
+    expect(questXp('Unrated')).toBe(50)
   })
 })

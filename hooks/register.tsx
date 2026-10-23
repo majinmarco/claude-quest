@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import { newGame, step } from '../src/engine'
 import type { Effect, GameEvent } from '../src/engine'
+import { githubIssues } from '../src/github-issues'
 import { drawHud } from '../src/hud'
 import {
   loadPlayer,
@@ -10,11 +11,64 @@ import {
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
+import { drawQuestBoard, noFilters } from '../src/quest-board'
+import type { QuestBoardActions } from '../src/quest-board'
 import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
+import type { QuestBoard } from '../types'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
+
+/** The Quest Board: the Quests last listed, and the Player's filters. */
+const board = atom({ plugin: 'quest-mod', key: 'board' } as const, {
+  listing: { state: 'loading' },
+  filters: noFilters(),
+} satisfies QuestBoard)
+
+const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
+
+/** The command a Quest card fills the prompt with; the Player sends it. */
+const IMPLEMENT = '/mattpocock-skills:implement'
+
+/** Lists the repo's open Quests again, from its GitHub Issues. */
+async function listQuests($: EngineInterface): Promise<void> {
+  await update($, board, (current): QuestBoard => ({ ...current, listing: { state: 'loading' } }))
+
+  const listed = await githubIssues(argv => $.process.run(argv)).list()
+
+  await update($, board, (current): QuestBoard => ({
+    ...current,
+    listing: listed.ok
+      ? { state: 'listed', quests: listed.value }
+      : { state: 'unavailable', problem: listed.problem },
+  }))
+}
+
+/** What the Quest Board's buttons do. */
+const boardActions = ($: EngineInterface): QuestBoardActions => ({
+  pick: quest => {
+    // Filled, never sent: the Player sends it, and command.run starts the
+    // Quest as for one they typed.
+    const command = `${IMPLEMENT} ${quest.ticket}`
+    const unfilled = () => $.ui.toast(`Could not fill the prompt: run ${command} yourself.`)
+    void $.prompt
+      .fill({ text: command })
+      .then(filled => (filled.isFilled ? undefined : unfilled()), unfilled)
+  },
+  filterStatus: status => {
+    void update($, board, current => ({ ...current, filters: { ...current.filters, status } }))
+  },
+  filterDifficulty: difficulty => {
+    void update($, board, current => ({
+      ...current,
+      filters: { ...current.filters, difficulty },
+    }))
+  },
+  refresh: () => {
+    void listQuests($)
+  },
+})
 
 /** Steps the session's game by one event, keeps the Player, plays the effects. */
 async function play($: EngineInterface, event: GameEvent): Promise<void> {
@@ -67,6 +121,11 @@ export const register: Register = on => {
     const player = kept?.player ?? (await loadPlayer($))
     await update($, game, current => ({ ...newGame(player), ...current }))
 
+    // The command is a convenience: the game plays without it.
+    await $.command
+      .register({ name: 'quest-board', description: 'Open the Quest Board: this repo\'s open Quests' })
+      .catch(() => undefined)
+
     const started = await next(e)
 
     // Vitals read from the start, not only after the first turn; a failed
@@ -93,6 +152,17 @@ export const register: Register = on => {
     // stands.
     .catch(($, e, next) => next(e))
 
+  on('command.run', { command: 'quest-board' }, async $ => {
+    const opened = await $.ui.open(QUEST_BOARD)
+    await listQuests($)
+
+    return {
+      text: opened.isPlaced
+        ? 'Quest Board opened.'
+        : 'Quest Board opened: it shows once the window is wide enough.',
+    }
+  })
+
   on('command.run', async ($, e, next) => {
     // The Quest starts before the command runs: `next(e)` may not resolve
     // until the run is under way, and its Encounters belong to the Quest.
@@ -114,6 +184,10 @@ export const register: Register = on => {
   })
     // Vitals are a reading: a failed one leaves the last on the HUD.
     .catch(($, e, next) => next(e))
+
+  on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) =>
+    drawQuestBoard($, e, await read($, board), boardActions($)),
+  )
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, game)

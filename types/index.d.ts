@@ -62,8 +62,51 @@ export type Region = {
   quests: QuestRecord[]
 }
 
+/** One of the six Stats, by its key in `Stats`. */
+export type StatName = keyof Stats
+
+/**
+ * How hard a Quest is, read only from its ticket (story points, a size
+ * label), never from the Player. `Unrated` when the ticket names neither.
+ */
+export type Difficulty = 'Trivial' | 'Easy' | 'Medium' | 'Hard' | 'Epic' | 'Unrated'
+
+/** One Quest on the Quest Board, as its Quest Source lists it. */
+export type QuestCard = {
+  /** The ticket's reference as its Quest Source writes it: `#4`, `ABC-123`. */
+  ticket: string
+  title: string
+  /** The ticket's status, as its Quest Source names it (`ready-for-agent`, `open`). */
+  status: string
+  difficulty: Difficulty
+  /** The Stats the Quest calls on, as guidance; never empty. */
+  recommendedStats: StatName[]
+  /** Where the ticket lives, for the Player to open; absent when unknown. */
+  url?: string
+}
+
+/** Why a Quest Source could not list its Quests. */
+export type QuestSourceProblem = {
+  /**
+   * `missing`: the tool it calls is not installed; `unauthenticated`: it is
+   * not signed in; `unreachable`: any other failure, told in `message`.
+   */
+  kind: 'missing' | 'unauthenticated' | 'unreachable'
+  message: string
+}
+
+/** What the Quest Board shows: its Quests as last listed, and its filters. */
+export type QuestBoard = {
+  listing:
+    | { state: 'loading' }
+    | { state: 'listed'; quests: QuestCard[] }
+    | { state: 'unavailable'; problem: QuestSourceProblem }
+  /** null shows every status, or every difficulty. */
+  filters: { status: string | null; difficulty: Difficulty | null }
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'quest-mod': { game: GameState | null }
+    'quest-mod': { game: GameState | null; board: QuestBoard }
   }
 }
