@@ -112,16 +112,17 @@ const TEST_FOLDERS = new Set(['tests', 'test', '__tests__', 'spec'])
  * (`*.test.*`, `*.spec.*`, `test_*.py`, `*_test.go`), or lying under a
  * `tests/`, `test/`, `__tests__/` or `spec/` folder of the project. Only the
  * folders below the root count, so a project kept in `~/test/` is not all
- * tests; a relative path is taken from the root. Without a root, or outside
- * the project, only the name counts.
+ * tests; a relative path (as git names a change) is taken from the root.
+ * Outside the project, or for an absolute path with no root, only the name
+ * counts.
  */
-export const isTestFile = (path: string, root: string | null): boolean => {
+export const isTestFile = (path: string, root: string | null = null): boolean => {
   const segments = slashed(path).split('/').filter(Boolean)
   if (TEST_FILE_NAME.test(segments.at(-1) ?? '')) {
     return true
   }
   if (root === null) {
-    return false
+    return !slashed(path).startsWith('/') && segments.slice(0, -1).some(folder => TEST_FOLDERS.has(folder))
   }
 
   const base = resolve('/', slashed(root))
@@ -135,8 +136,9 @@ export const isTestFile = (path: string, root: string | null): boolean => {
 }
 
 /**
- * The TEST_FILE_EDITED a game event plays beside it, at `at`: a FILE_EDIT of
- * a test file (isTestFile) arms a Prophecy; any other event, none.
+ * The TEST_FILE_EDITED a game event plays after it, at `at`: a FILE_EDIT of a
+ * test file (isTestFile), from any source, arms a Prophecy; any other event,
+ * none.
  */
 export const testFileEditedOf = (event: GameEvent, root: string | null, at: number): GameEvent | null =>
   event.type === 'FILE_EDIT' && isTestFile(event.path, root) ? { type: 'TEST_FILE_EDITED', path: event.path, at } : null

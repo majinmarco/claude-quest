@@ -673,8 +673,25 @@ const prophecyCallOf = (args: string): ProphecyCall | undefined =>
 /** What the session is told, once, when Haiku turns out unavailable. */
 const HAIKU_UNAVAILABLE_TEXT = "Questions are off: Haiku isn't available on this account"
 
-/** Steps the session's game by one event, keeps the Player, plays the effects. */
+/**
+ * Steps the session's game by one event, keeps the Player, plays the effects.
+ * A FILE_EDIT of a test file, from whatever saw the change (a Write, Edit or
+ * NotebookEdit; a change read from git), arms a Prophecy after it.
+ */
 async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
+  await playOne($, event, rules)
+
+  if (event.type === 'FILE_EDIT') {
+    const root = await $.session.root().catch(() => null)
+    const tested = testFileEditedOf(event, root, await $.clock.now())
+    if (tested !== null) {
+      await playOne($, tested, rules)
+    }
+  }
+}
+
+/** Steps the session's game by one event, keeps the Player, plays the effects. */
+async function playOne($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
   const effects = await stepGame($, event, rules)
 
   const saved = await read($, game)
@@ -878,11 +895,6 @@ export const register: Register = (on, options) => {
 
     if (event !== null) {
       await play($, event, rules)
-      // A test file written or edited arms a Prophecy for the next Check.
-      const tested = testFileEditedOf(event, root, await $.clock.now())
-      if (tested !== null) {
-        await play($, tested, rules)
-      }
     }
 
     // A Bash call may run a check and commit too (`npm test && git commit`).

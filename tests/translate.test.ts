@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { SessionUsage } from 'claude-code'
 
-import { isTestFile, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import { isTestFile, testFileEditedOf, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import * as commits from './fixtures/git-commits'
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
 import * as bash from './fixtures/bash-calls'
@@ -766,8 +766,20 @@ describe('Event translator: which files are test files', () => {
     expect(isTestFile('C:\\work\\vault\\src\\a.ts', 'C:\\work\\vault')).toBe(false)
   })
 
-  test('without a root, only a file named as a test is one', () => {
+  test('without a root, a relative path (as git names a change) is read from the project; an absolute one by its name alone', () => {
+    expect(isTestFile('tests/economy.ts')).toBe(true)
+    expect(isTestFile('packages/api/__tests__/a.js')).toBe(true)
+    expect(isTestFile('src/engine.ts')).toBe(false)
     expect(isTestFile('/work/x/src/a.test.ts', null)).toBe(true)
     expect(isTestFile('/work/x/tests/a.ts', null)).toBe(false)
+  })
+
+  test('a FILE_EDIT of a test file, from any source, is followed by the TEST_FILE_EDITED that arms a Prophecy', () => {
+    const edit = (path: string) =>
+      ({ type: 'FILE_EDIT', path, module: null, isNewFile: false, linesBefore: 3, linesAdded: 1, linesRemoved: 0, diff: '' }) as const
+
+    expect(testFileEditedOf(edit('tests/vault.test.ts'), null, 7)).toEqual({ type: 'TEST_FILE_EDITED', path: 'tests/vault.test.ts', at: 7 })
+    expect(testFileEditedOf(edit(`${ROOT}/src/engine.ts`), ROOT, 7)).toBeNull()
+    expect(testFileEditedOf({ type: 'FILE_READ', path: 'tests/a.test.ts', module: null }, ROOT, 7)).toBeNull()
   })
 })
