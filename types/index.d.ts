@@ -259,6 +259,11 @@ export type Quest = {
   summary?: string
   /** Whether the ticket's Quest Source found it; absent until looked up. */
   verified?: TicketVerified
+  /**
+   * The Modules discovered during the Quest, counted: the third, sixth and
+   * ninth want a Scouting. Absent until the first.
+   */
+  modulesDiscovered?: number
 }
 
 /**
@@ -362,6 +367,11 @@ export type Question = QuestionContent & {
    * asked; read it through npcOf (src/engine.ts), which takes either.
    */
   npc: 'Sage' | 'Boss' | Npc
+  /**
+   * The Modules a right answer charts: a Scouting's, the three it asks
+   * about. Absent for every other Question.
+   */
+  modules?: string[]
   /** When it joined the Question Queue, in ms since the epoch. */
   queuedAt: number
   /**
@@ -455,6 +465,22 @@ export type GameState = {
    * next Check settles it. Null or absent when none is armed.
    */
   prophecy?: Prophecy | null
+  /**
+   * The files read lately in the project's Modules, the latest
+   * MAX_RECENT_READS, each once, oldest first: what a Scouting is shown.
+   * A search's folder may be among them. Absent until the first.
+   */
+  recentReads?: { path: string; module: string }[]
+  /** The Modules discovered this session outside any Quest: every fifth wants a Scouting. */
+  modulesDiscoveredOutsideQuest?: number
+  /** The Scoutings wanted this session outside any Quest, two at most. */
+  scoutingsOutsideQuest?: number
+  /**
+   * The Modules of this Region the Player has charted (a Scouting about them
+   * answered right), in the order charted. Seeded at session start from the
+   * Player's `$.store` key `charted:<root>`; absent until known.
+   */
+  chartedModules?: string[]
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */

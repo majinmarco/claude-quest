@@ -475,6 +475,28 @@ export const SPRITES = {
       '.aaagggghggahaa.',
     ],
   },
+  /** Tile 99 of the sheet. */
+  cartographer: {
+    palette: ["#3f2631","#763b36","#f7c282","#bd6c4a","#262b44","#eaa56c","#e19a65","#9b4ca3","#d176d0"],
+    rows: [
+      '................',
+      '....aaaaaaaa....',
+      '...aaaaaaaaaa...',
+      '..aaabcdddbaaa..',
+      '..aadcdcddddaa..',
+      '.aaaddcdddddaaa.',
+      '.aabdddddccdbaa.',
+      '.aadddecccecdaa.',
+      '.aaddcecccecfaa.',
+      '.aaddcccgcccdaa.',
+      '.aadddcccccbdaa.',
+      'aaacddggggbhcaaa',
+      'aacccdhhihhcccaa',
+      'aaccadiidiiaccaa',
+      'aaaaahhhhhhaaaaa',
+      '.aaahhhhihhaaaa.',
+    ],
+  },
   /** Tile 110 of the sheet. */
   boss: {
     palette: ["#3f2631","#e84537","#ff706d","#763b36","#f7c282","#bd6c4a"],

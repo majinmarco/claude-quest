@@ -20,12 +20,14 @@ import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, Npc, Proph
 import { badgesText, drawHud } from '../src/hud'
 import type { HudActions } from '../src/hud'
 import {
+  loadCharted,
   loadDiscovered,
   loadPlayer,
   loadPlayerMigrated,
   migratePlayer,
   pruneStaleQuests,
   readRegionFile,
+  recordModulesCharted,
   recordModulesDiscovered,
   recordsOf,
   recordQuestAbandoned,
@@ -60,6 +62,17 @@ import type { RegionEntry } from '../src/region-registry'
 import { answerText, choiceOf, drawSage, NO_QUESTION, NPC_NAMES, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
+import {
+  cartographerText,
+  chartedModulesOf,
+  generateScouting,
+  MAX_SCOUTING_FILES,
+  outlinedFilesOf,
+  outlinesOf,
+  relativeTo,
+  scoutingKeyOf,
+} from '../src/scouting'
+import type { ScoutingInput } from '../src/scouting'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
@@ -334,10 +347,18 @@ async function queueQuestion(
   key: string,
   rules: Rules,
   npc: Npc = 'sage',
+  modules?: string[],
 ): Promise<boolean> {
   const effects = await play(
     $,
-    { type: 'QUESTION_READY', question, key, at: await $.clock.now(), ...(npc === 'sage' ? {} : { npc }) },
+    {
+      type: 'QUESTION_READY',
+      question,
+      key,
+      at: await $.clock.now(),
+      ...(npc === 'sage' ? {} : { npc }),
+      ...(modules === undefined ? {} : { modules }),
+    },
     rules,
   )
   await showIfInView($, rules)
@@ -426,6 +447,106 @@ async function makeBriefing(
   if ((await isActive()) && (await queueQuestion($, generated.question, key, rules, 'quest-giver'))) {
     $.ui.toast(briefingLine(generated.briefing))
   }
+}
+
+/** The biggest file whose outline a Scouting reads: anything larger is no source file. */
+const MAX_OUTLINED_BYTES = 512 * 1024
+
+/**
+ * What the Cartographer is shown of a Scouting the Game Engine wants: of the
+ * paths read, the files (a searched folder is none), the latest
+ * MAX_SCOUTING_FILES, relative to the project's root; and the outlines of a
+ * few of them, read with `$.fs.read`. A file that cannot be read is left out.
+ */
+async function scoutingInputOf(
+  $: EngineInterface,
+  { modules, files }: Extract<Effect, { type: 'SCOUTING_WANTED' }>,
+): Promise<ScoutingInput> {
+  const root = await $.session.root().catch(() => null)
+  const found: { path: string; size: number }[] = []
+  for (const path of files) {
+    const stat = await $.fs.stat(path).catch(() => null)
+    if (stat?.kind === 'file') {
+      found.push({ path, size: stat.size })
+    }
+  }
+  const kept = found.slice(-MAX_SCOUTING_FILES)
+  const shown = new Map(kept.map(file => [relativeTo(root, file.path), file]))
+
+  const read: { path: string; text: string }[] = []
+  for (const path of outlinedFilesOf([...shown.keys()])) {
+    const file = shown.get(path)
+    if (file !== undefined && file.size <= MAX_OUTLINED_BYTES) {
+      const text = await $.fs.read(file.path).catch(() => null)
+      if (typeof text === 'string') {
+        read.push({ path, text })
+      }
+    }
+  }
+
+  return { modules, files: [...shown.keys()], outlines: outlinesOf(read) }
+}
+
+/**
+ * The Scoutings being made, by their cache key: the same Modules read the
+ * same way meanwhile wait on the one call. The module's own, as sageInFlight is.
+ */
+const scoutingInFlight = new Map<string, Promise<void>>()
+
+/**
+ * The Cartographer's Scouting of the Modules just discovered: from the cache
+ * when the same Modules were outlined the same way before, at no cost; else,
+ * while the Sage's budget lasts (the ticket's in a Quest, the session's
+ * outside), Haiku makes it and its contract is checked. It joins the
+ * Question Queue as the Cartographer's, told in a toast, with the Modules a
+ * right answer charts. Started unawaited after the read that discovered the
+ * third Module; one that could not be made, or was over budget, is skipped,
+ * logged to the debug log alone. No file read in them asks nothing.
+ */
+async function askScouting(
+  $: EngineInterface,
+  wanted: Extract<Effect, { type: 'SCOUTING_WANTED' }>,
+  rules: Rules,
+): Promise<void> {
+  const input = await scoutingInputOf($, wanted)
+  if (input.files.length === 0) {
+    $.ui.log('The Cartographer skipped a Scouting: no file read in the Modules.', { to: 'debug' })
+    return
+  }
+
+  const key = await scoutingKeyOf(input)
+  const making = scoutingInFlight.get(key)
+  if (making !== undefined) {
+    return making
+  }
+
+  const made = makeScouting($, input, key, rules).finally(() => scoutingInFlight.delete(key))
+  scoutingInFlight.set(key, made)
+
+  return made
+}
+
+async function makeScouting($: EngineInterface, input: ScoutingInput, key: string, rules: Rules): Promise<void> {
+  const cached = cachedQuestion(await read($, questionCache), key)
+  if (cached !== undefined) {
+    await queueQuestion($, cached, key, rules, 'cartographer', input.modules)
+    return
+  }
+
+  const granted = await spendHaikuCall($, 'sage', rules, key)
+  if (granted === null) {
+    return
+  }
+
+  const generated = await generateScouting(input, haikuModel($))
+  if (!generated.ok) {
+    $.ui.log(`The Cartographer skipped a Scouting (${generated.reason}): ${generated.detail}`, { to: 'debug' })
+    await noteModelFailure($, 'sage', granted, generated.failure, rules)
+    return
+  }
+
+  await update($, questionCache, cache => remember(cache, key, generated.question))
+  await queueQuestion($, generated.question, key, rules, 'cartographer', input.modules)
 }
 
 /**
@@ -983,6 +1104,19 @@ async function playOne($: EngineInterface, event: GameEvent, rules: Rules, agent
       // Never awaited: the lookup that found the ticket returns at once.
       void askBriefing($, effect, rules).catch(() => undefined)
     }
+    if (effect.type === 'SCOUTING_WANTED') {
+      // Never awaited: the read that discovered the Module returns at once.
+      void askScouting($, effect, rules).catch(() => undefined)
+    }
+    if (effect.type === 'MODULES_CHARTED' && saved !== null) {
+      $.ui.toast(`Charted: ${effect.modules.join(', ')} · /badges`)
+      // The session's whole list goes to the Player's for this project, as
+      // the discovered Modules do.
+      void $.session
+        .root()
+        .then(root => recordModulesCharted($, root, saved.chartedModules ?? []))
+        .catch(() => undefined)
+    }
     if (effect.type === 'BATTLE_WON') {
       const xp = effects.find(gained => gained.type === 'XP_GAINED' && gained.stat === 'strength')
       $.ui.toast(
@@ -1176,6 +1310,7 @@ export const register: Register = (on, options) => {
     // The modules the Player explored in this project in earlier sessions
     // are no first visit (seeded once from an older mod's Region file).
     const discovered = root === null ? [] : await loadDiscovered($, root).catch(() => [])
+    const charted = root === null ? [] : await loadCharted($, root).catch(() => [])
     // Quests earlier sessions left active for over a week were abandoned.
     if (root !== null) {
       await pruneStaleQuests($).catch(() => undefined)
@@ -1210,6 +1345,7 @@ export const register: Register = (on, options) => {
         visitedModules: [
           ...new Set([...discovered, ...resumed.visitedModules.map(moduleOfFolder).filter(module => module !== null)]),
         ],
+        chartedModules: [...new Set([...charted, ...(resumed.chartedModules ?? [])])],
       }
     })
 
@@ -1542,9 +1678,11 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'badges' }, async $ => {
-    const player = (await read($, game))?.player ?? (await loadPlayer($))
+    const current = await read($, game)
+    const player = current?.player ?? (await loadPlayer($))
+    const charted = current === null ? [] : chartedModulesOf(current)
 
-    return { text: badgesText(player) }
+    return { text: `${badgesText(player)}\n${cartographerText(player, charted)}` }
   })
 
   on('command.run', { command: 'overview' }, async $ => {

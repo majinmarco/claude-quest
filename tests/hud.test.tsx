@@ -533,6 +533,8 @@ describe('HUD: the Player\'s progress', () => {
         'Trophies (1)',
         '  vault: #12',
         'Quests closed 2 · Bosses won 1 · Boss streak 1 · Modules discovered 9',
+        'Cartographer: 9/25 Modules discovered',
+        "  Charted here: none yet. Answer the Cartographer's Scouting right to chart its Modules.",
       ].join('\n'),
     )
   })
