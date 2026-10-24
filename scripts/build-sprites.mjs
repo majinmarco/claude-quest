@@ -1,6 +1,6 @@
 // Builds src/sprites.ts, the sprites the mod draws as pixel data, from the
 // bundled Kenney tilesheets (CC0; see assets/CREDITS.md): Tiny Dungeon for the
-// Scene, UI Pack – Pixel Adventure for the Quest Board's scrolls:
+// Scene and the HUD's portraits, UI Pack – Pixel Adventure for the scrolls:
 //
 //   node scripts/build-sprites.mjs
 //
@@ -55,6 +55,10 @@ const SPRITES = {
   staff: { sheet: 'dungeon', index: 129 },
   sage: { sheet: 'dungeon', index: 84 },
   boss: { sheet: 'dungeon', index: 110 },
+  // The HUD's portraits by Title; before a Title it is the hero tile, a plain adventurer.
+  scholar: { sheet: 'dungeon', index: 111 },
+  pathfinder: { sheet: 'dungeon', index: 112 },
+  warrior: { sheet: 'dungeon', index: 87 },
   // A scroll's roller lies across the card: the rod's tiles turned on their
   // side, the 10 rows the rod fills kept. The cap's rounded end is on the left.
   rodCap: { sheet: 'ui', index: 115, how: 'turned on its side, rows 3-12', shape: rows => crop(0, 3, 16, 10)(transpose(rows)) },

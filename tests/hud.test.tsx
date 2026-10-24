@@ -20,6 +20,9 @@ const HUD = {
 
 const SURFACES = ['terminal', 'desktop'] as const
 
+/** The text band on every surface: the desktop's pixel strip has its own tests (hud-strip.test.tsx). */
+const TEXT_HUD = { options: { hudStyle: 'text' } }
+
 const START = { cwd: '/work', surface: 'desktop', isInteractive: true } as const
 
 /** Answers the mod's `$.store` from a Map the test can read afterwards. */
@@ -51,7 +54,7 @@ const LEVEL_3 = {
 }
 
 describe('HUD', () => {
-  test('a new Player is kept on first load and shows level 1 and no XP', async ($, on) => {
+  test('a new Player is kept on first load and shows level 1 and no XP', TEXT_HUD, async ($, on) => {
     const kept = keptStore(on)
     on('session.start', (_, e) => ({ cwd: e.cwd }))
     await $.session.start(START)
@@ -67,7 +70,7 @@ describe('HUD', () => {
     }
   })
 
-  test('a Read fires, and the HUD shows the XP gain and the Exploration', async ($, on) => {
+  test('a Read fires, and the HUD shows the XP gain and the Exploration', TEXT_HUD, async ($, on) => {
     const kept = keptStore(on)
     on('tool.call', () => read.result)
     on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -144,7 +147,7 @@ const measurement = (percent: number, usd: number): SessionMeasureInput => ({
 })
 
 describe('HUD: session vitals', () => {
-  test('before any measurement, a fresh session shows Mana with no reading', async ($, on) => {
+  test('before any measurement, a fresh session shows Mana with no reading', TEXT_HUD, async ($, on) => {
     keptStore(on)
     measuring(on)
     on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -158,7 +161,7 @@ describe('HUD: session vitals', () => {
     }
   })
 
-  test('a resumed session shows its Mana from the start', async ($, on) => {
+  test('a resumed session shows its Mana from the start', TEXT_HUD, async ($, on) => {
     keptStore(on)
     measuring(on, { window: 200_000, percent: 63 })
     on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -171,7 +174,7 @@ describe('HUD: session vitals', () => {
     }
   })
 
-  test('a measurement shows Mana, the model and the spend', async ($, on) => {
+  test('a measurement shows Mana, the model and the spend', TEXT_HUD, async ($, on) => {
     keptStore(on)
     measuring(on)
     on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -195,7 +198,7 @@ describe('HUD: session vitals', () => {
     }
   })
 
-  test('Mana turns yellow as it fills', async ($, on) => {
+  test('Mana turns yellow as it fills', TEXT_HUD, async ($, on) => {
     keptStore(on)
     measuring(on)
     on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -213,7 +216,7 @@ describe('HUD: session vitals', () => {
     }
   })
 
-  test('Mana past 80% turns red and warns before compaction, once', async ($, on) => {
+  test('Mana past 80% turns red and warns before compaction, once', TEXT_HUD, async ($, on) => {
     const toasts: string[] = []
     keptStore(on)
     measuring(on)
@@ -279,7 +282,7 @@ const implement = (
   })
 
 describe('Quests', () => {
-  test('/implement #4 starts a Quest the HUD shows', async ($, on) => {
+  test('/implement #4 starts a Quest the HUD shows', TEXT_HUD, async ($, on) => {
     keptStore(on)
     projectFiles(on)
     on('command.run', () => ({}))
@@ -479,7 +482,7 @@ const SCHOLAR = {
 }
 
 describe('HUD: the Player\'s progress', () => {
-  test('the HUD shows the title, Exhausted at 0 HP, the Badge count and the Stats, dim', async ($, on) => {
+  test('the HUD shows the title, Exhausted at 0 HP, the Badge count and the Stats, dim', TEXT_HUD, async ($, on) => {
     keptStore(on, { player: SCHOLAR })
     on('session.start', (_, e) => ({ cwd: e.cwd }))
     await $.session.start(START)
@@ -637,7 +640,7 @@ const hudRows = async ($: Engine, surface: 'terminal' | 'desktop', bodyColumns: 
 }
 
 describe('HUD: laid out by the band\'s width', () => {
-  test('the worst case fits 80 columns in three rows, every part kept, the Quest\'s title shortened', async ($, on) => {
+  test('the worst case fits 80 columns in three rows, every part kept, the Quest\'s title shortened', TEXT_HUD, async ($, on) => {
     keptGame(on, WORST_CASE)
 
     for (const surface of SURFACES) {
@@ -680,7 +683,7 @@ describe('HUD: laid out by the band\'s width', () => {
     expect(shown).not.toContain('INT 120 · WIS 45 · STR 30')
   })
 
-  test('a wide band shows every part, the Quest\'s title whole up to its cut', async ($, on) => {
+  test('a wide band shows every part, the Quest\'s title whole up to its cut', TEXT_HUD, async ($, on) => {
     keptGame(on, WORST_CASE)
 
     const shown = (await hudRows($, 'desktop', 200)).flatMap(row => row.texts)

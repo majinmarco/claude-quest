@@ -36,7 +36,7 @@ import type { ResolvedQuestSource } from '../src/quest-source-setting'
 import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
-import { autoOpenSceneOf, rulesOf } from '../src/settings'
+import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard, QuestCard, QuestSourceSetting, XpPool } from '../types'
@@ -744,6 +744,7 @@ export const register: Register = (on, options) => {
   // register runs again with the new values.
   const rules = rulesOf(options)
   const autoOpenScene = autoOpenSceneOf(options)
+  const hudStyle = hudStyleOf(options)
 
   on('session.start', async ($, e, next) => {
     // After a reload of the mod the session's game is still in $.state; one
@@ -1068,6 +1069,6 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    return drawHud($, e, current)
+    return drawHud($, e, current, hudStyle)
   })
 }
