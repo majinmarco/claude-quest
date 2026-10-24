@@ -20,22 +20,22 @@ import {
   loadPlayerMigrated,
   migratePlayer,
   pruneStaleQuests,
-  readRegionFile,
   recordModulesDiscovered,
   recordQuestAbandoned,
   recordQuestClosed,
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
-import { drawQuestBoard, implementCommandOf, isImplementDraft, noFilters, PREFERRED_IMPLEMENT } from '../src/quest-board'
+import { drawQuestBoard, noFilters } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
 import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
-import { resolveQuestSource } from '../src/quest-source-setting'
-import type { ResolvedQuestSource } from '../src/quest-source-setting'
+import { regionQuestSource } from '../src/quest-source-setting'
+import { openRegionMap, REGION_MAP, renderRegionMap } from '../src/region-map'
 import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
+import { takeQuest } from '../src/take-quest'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
@@ -458,23 +458,6 @@ const withTicketCalls = (state: GameState): GameState => {
   }
 }
 
-/**
- * The Quest Source the Region chose in its Region file; when it chose none,
- * the repo's GitHub Issues, or none when the project is no git repo with a
- * remote. A file that is not JSON may hold a choice gone wrong, so the board
- * says so rather than guess. `$.process` runs only where Claude Code runs
- * commands (the CLI): elsewhere its rejection is told as such by the gh
- * adapter, never as gh missing.
- */
-async function regionQuestSource($: EngineInterface): Promise<ResolvedQuestSource> {
-  const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
-
-  return resolveQuestSource(region, () => $.session.repo(), {
-    run: argv => $.process.run(argv),
-    call: (server, tool, args) => $.mcp.call(server, tool, args),
-  })
-}
-
 /** The Quest Source as the Player knows it, for a toast: `GitHub Issues`, `Jira project CPI`. */
 const sourceName = (setting: QuestSourceSetting | undefined): string =>
   setting?.kind === 'jira' ? `Jira project ${setting.project}` : 'GitHub Issues'
@@ -496,45 +479,10 @@ async function listQuests($: EngineInterface): Promise<void> {
   }))
 }
 
-/**
- * Puts the implement command for `quest` in the prompt box, for the Player
- * to send: whichever implement command the session has (mattpocock-skills'
- * first). A draft the Player is writing is never written over: only an empty
- * one, or one that is itself an implement command, is replaced.
- */
-async function pickQuest($: EngineInterface, quest: QuestCard): Promise<void> {
-  // Commands that cannot be listed: the usual one is tried.
-  const names = await $.command.list().then(
-    commands => commands.map(command => command.name),
-    () => [PREFERRED_IMPLEMENT],
-  )
-  const implement = implementCommandOf(names)
-  if (implement === undefined) {
-    $.ui.toast(
-      `No implement command in this session: install one, such as ${PREFERRED_IMPLEMENT}, to start Quests from the board.`,
-    )
-    return
-  }
-
-  const command = `/${implement} ${quest.ticket}`
-  const draft = await $.prompt.read().then(box => box.text, () => '')
-  if (draft.trim() !== '' && !isImplementDraft(draft)) {
-    $.ui.toast(`Draft kept: clear it and pick again, or run ${command}`)
-    return
-  }
-
-  // Filled, never sent: the Player sends it, and command.run starts the
-  // Quest as for one they typed.
-  const unfilled = () => $.ui.toast(`Could not fill the prompt: run ${command} yourself.`)
-  await $.prompt
-    .fill({ text: command })
-    .then(filled => (filled.isFilled ? undefined : unfilled()), unfilled)
-}
-
 /** What the Quest Board's buttons do. */
 const boardActions = ($: EngineInterface): QuestBoardActions => ({
   pick: quest => {
-    void pickQuest($, quest).catch(() => undefined)
+    void takeQuest($, quest).catch(() => undefined)
   },
   // A filter changed shows its first page.
   filterStatus: status => {
@@ -795,6 +743,9 @@ export const register: Register = (on, options) => {
       .register({ name: 'scene', description: 'Open the Scene: the current Encounter, played' })
       .catch(() => undefined)
     await $.command
+      .register({ name: 'map', description: 'Open the Region map: this Region\'s Dungeons, the Wilds and its Modules' })
+      .catch(() => undefined)
+    await $.command
       .register({
         name: 'sage',
         description: 'Answer the Sage\'s Questions; /sage A-D answers the first one',
@@ -868,6 +819,18 @@ export const register: Register = (on, options) => {
       text: opened.isPlaced
         ? 'Quest Board opened.'
         : 'Quest Board opened: it shows once the window is wide enough.',
+    }
+  })
+
+  on('command.run', { command: 'map' }, async $ => {
+    await openRegionMap($, { kind: 'live' })
+    const opened = (await $.ui.panes().catch(() => [])).find(pane => pane.id === REGION_MAP.id)
+
+    return {
+      text:
+        opened === undefined || opened.isPlaced
+          ? 'Region map opened.'
+          : 'Region map opened: it shows once the window is wide enough.',
     }
   })
 
@@ -1027,6 +990,10 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) =>
     drawQuestBoard($, e, await read($, board), boardActions($), (await read($, game))?.player ?? null),
+  )
+
+  on('ui.render', { component: 'Pane', requestId: REGION_MAP.id }, async ($, e) =>
+    renderRegionMap($, e, (await read($, game))?.visitedModules ?? []),
   )
 
   // The Scene draws what the game already holds: it never runs in a tool

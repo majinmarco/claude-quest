@@ -27,6 +27,10 @@ export type ContractTicket = {
   triage?: string
   /** The ticket's description, as the Quest Source writes it. */
   description?: string
+  /** The epic the ticket belongs to, by its name, as the Quest Source groups tickets (a milestone, a parent). */
+  epic?: string
+  /** Whether the ticket is closed (done); open when absent. */
+  closed?: boolean
 }
 
 /** A way the tool behind a Quest Source can fail, named as the problem it is. */
@@ -76,6 +80,40 @@ export function questSourceContract(harness: ContractHarness): void {
       expect(quests.map(quest => [quest.ticket, quest.title])).toEqual([
         [ticket(5), 'Quest Board from GitHub Issues'],
         [ticket(6), 'Quest Board from Jira'],
+      ])
+    })
+
+    test('a ticket in an epic carries its Dungeon, by a key and the epic\'s name; one in none carries none', async () => {
+      const [billing, alsoBilling, loose, search] = await listed([
+        { n: 5, title: 'Five', epic: 'Billing' },
+        { n: 6, title: 'Six', epic: 'Billing' },
+        { n: 7, title: 'Seven' },
+        { n: 8, title: 'Eight', epic: 'Search' },
+      ])
+
+      expect(billing?.dungeon?.name).toBe('Billing')
+      expect(billing?.dungeon?.key.length).toBeGreaterThan(0)
+      expect(alsoBilling?.dungeon).toEqual(billing?.dungeon)
+      expect(loose?.dungeon).toBeUndefined()
+      expect(search?.dungeon?.name).toBe('Search')
+      expect(search?.dungeon?.key).not.toBe(billing?.dungeon?.key)
+    })
+
+    test('lists the closed tickets apart from the open ones, each with its Dungeon', async () => {
+      const world = {
+        tickets: [
+          { n: 5, title: 'Five', epic: 'Billing', closed: true },
+          { n: 6, title: 'Six', epic: 'Billing' },
+          { n: 7, title: 'Seven', closed: true },
+        ],
+      }
+      const open = await source(world).list()
+      const closed = await source(world).listClosed()
+
+      expect(open.ok && open.value.map(quest => quest.ticket)).toEqual([ticket(6)])
+      expect(closed.ok && closed.value.map(quest => [quest.ticket, quest.dungeon?.name])).toEqual([
+        [ticket(5), 'Billing'],
+        [ticket(7), undefined],
       ])
     })
 
@@ -163,8 +201,10 @@ export function questSourceContract(harness: ContractHarness): void {
         const quests = source({ failure })
         const list = await quests.list()
         const get = await quests.get(ticket(5))
+        const closed = await quests.listClosed()
 
         expect(list).toMatchObject({ ok: false, problem: { kind: failure } })
+        expect(closed).toMatchObject({ ok: false, problem: { kind: failure } })
         expect(get).toMatchObject({ ok: false, problem: { kind: failure } })
         if (!list.ok) {
           expect(list.problem.message.length).toBeGreaterThan(0)

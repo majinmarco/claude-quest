@@ -1,5 +1,5 @@
 // The Quest Board pane: the current Region's open Quests as cards, with
-// filters by status (and tag) and difficulty, under a header of the Player's
+// filters by status (and tag, and Dungeon) and difficulty, under a header of the Player's
 // trophies and Badges, six cards a page. Each card is a scroll: pixel art
 // where the surface draws SVG (src/scroll-art.ts), a scroll framed in text in
 // the terminal; rolled, or unrolled to show the whole card. Under each, Take
@@ -86,11 +86,12 @@ const describeCard = (quest: QuestCard): string =>
     quest.recommendedStats.map(stat => STAT_ABBREVIATION[stat]).join(' '),
     quest.status,
     ...tagsOf(quest).map(tag => `#${tag}`),
+    ...(quest.dungeon === undefined ? [] : [`Dungeon: ${quest.dungeon.name}`]),
   ].join(' · ')
 
-/** Whether the Quest has `value` as its status or one of its tags. */
+/** Whether the Quest has `value` as its status, one of its tags, or its Dungeon's name. */
 const hasStatus = (quest: QuestCard, value: string): boolean =>
-  quest.status === value || (quest.tags ?? []).includes(value)
+  quest.status === value || (quest.tags ?? []).includes(value) || quest.dungeon?.name === value
 
 /** What to do about each kind of problem, one line under its message. */
 const PROBLEM_HINT: Record<QuestSourceProblem['kind'], string> = {
@@ -244,9 +245,13 @@ export function drawQuestBoard(
     )
   }
 
-  // A status filter steps through every status and tag; a filter with
-  // fewer than two values to pick from is no choice, and is not shown.
-  const statuses = distinct(quests.flatMap(quest => [quest.status, ...(quest.tags ?? [])]))
+  // A status filter steps through every status and tag, then every
+  // Dungeon; a filter with fewer than two values to pick from is no choice,
+  // and is not shown.
+  const statuses = distinct([
+    ...quests.flatMap(quest => [quest.status, ...(quest.tags ?? [])]),
+    ...quests.flatMap(quest => (quest.dungeon === undefined ? [] : [quest.dungeon.name])),
+  ])
   const difficulties = DIFFICULTIES.filter(difficulty =>
     quests.some(quest => quest.difficulty === difficulty),
   )

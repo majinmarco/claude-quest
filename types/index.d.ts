@@ -500,6 +500,12 @@ export type QuestCard = {
    * beside its status; absent or empty when it has none.
    */
   tags?: string[]
+  /**
+   * The Dungeon the Quest is in: its epic (a GitHub milestone, a Jira
+   * parent), by a key stable for the epic (the milestone's number, the
+   * parent's issue key) and its name; absent for a Quest of the Wilds.
+   */
+  dungeon?: { key: string; name: string }
 }
 
 /**
@@ -550,6 +556,53 @@ export type QuestBoard = {
   page?: number
 }
 
+/**
+ * A Region of the registry, as the Region map keeps it to draw another
+ * Region from its Snapshot: the shape of RegionEntry in
+ * src/region-registry.ts (this contract imports nothing).
+ */
+export type RegionMapEntry = {
+  id: string
+  root: string
+  remote: string | null
+  firstPlayedAt: string
+  lastPlayedAt: string
+  snapshot?: {
+    takenAt: string
+    dungeons: { key: string; name: string; total: number; cleared: number }[]
+    wilds: { total: number; cleared: number }
+    modules: { discovered: number; total: number }
+  }
+}
+
+/** A listing of tickets for the Region map: loading, listed, or why it could not be. */
+export type RegionMapListing =
+  | { state: 'loading' }
+  | { state: 'listed'; quests: QuestCard[] }
+  | { state: 'unavailable'; problem: QuestSourceProblem }
+
+/**
+ * The Region map pane: which Region it draws (the current project, or
+ * another from its Snapshot), the view and the place in it, and what it read
+ * of the current project. See src/region-map.tsx.
+ */
+export type RegionMapState = {
+  target: { kind: 'live' } | { kind: 'snapshot'; entry: RegionMapEntry }
+  view: 'overworld' | 'dungeon' | 'modules'
+  /** The site entered last: a Dungeon's key, or '' for the Wilds; null before any. */
+  site: string | null
+  /** The Floor shown, from 0. */
+  floor: number
+  /** The Room selected, by its place on the Floor (from 0); null when none. */
+  selected: number | null
+  /** The current project as read when the pane opened: its root, id (folder name), remote, history and Modules on disk. */
+  project: { root: string; id: string; remote: string | null; history: QuestRecord[]; folders: string[] } | null
+  /** Its open tickets, read each time the pane opens. */
+  open: RegionMapListing
+  /** Its closed tickets, by project root: read once a session per Region (again only after a failure). */
+  closed: Record<string, RegionMapListing>
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'quest-mod': {
@@ -559,6 +612,8 @@ declare module 'claude-code' {
       questionCache: { key: string; question: QuestionContent }[]
       /** Whether the Scene opened itself this session: once at most. */
       sceneOpened: boolean
+      /** The Region map pane: see src/region-map.tsx. */
+      regionMap: RegionMapState
     }
   }
 }

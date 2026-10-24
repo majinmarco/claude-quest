@@ -2,6 +2,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { McpToolResult, On, PromptFillInput, ProcessRunResult } from 'claude-code'
 
+import { takeQuestContract } from './take-quest-contract'
+
 const BOARD = {
   plugin: 'quest-mod',
   component: 'Pane',
@@ -801,6 +803,42 @@ describe('Quest Board: hints, tags and the header', () => {
     await ui.unmount()
   })
 
+  test('a card in a Dungeon shows it as a tag, and the status filter steps through Dungeon names too', async ($, on) => {
+    engine(on)
+    const billing = { number: 2, title: 'Billing', description: '', dueOn: null }
+    gh(on, () =>
+      ran(
+        0,
+        JSON.stringify([
+          { ...issue(5, 'Five', ['ready-for-agent']), milestone: billing },
+          { ...issue(6, 'Six', ['ready-for-agent']), milestone: { ...billing, number: 3, title: 'Search' } },
+          { ...issue(7, 'Seven', ['ready-for-agent']), milestone: null },
+        ]),
+      ),
+    )
+    await $.session.start(START)
+    await questBoard($)
+
+    const desktop = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    expect((await artOf(desktop, '#5'))?.alt).toBe('#5 Five · Unrated · Boss: +80 XP · INT · ready-for-agent · Dungeon: Billing')
+    expect((await artOf(desktop, '#7'))?.alt).toBe('#7 Seven · Unrated · Boss: +80 XP · INT · ready-for-agent')
+    await desktop.unmount()
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    await ui.press({ key: 'scroll:#5' })
+    expect((await texts(ui)).some(text => /^│ Dungeon: Billing +│$/.test(text))).toBe(true)
+    const filter = async () => (await ui.find({ type: 'Button', key: 'filter-status' }))?.text
+    await ui.press({ key: 'filter-status' })
+    expect(await filter()).toBe('Status: ready-for-agent')
+    await ui.press({ key: 'filter-status' })
+    expect(await filter()).toBe('Status: Billing')
+    expect(await cards(ui)).toEqual(['quest:#5'])
+    await ui.press({ key: 'filter-status' })
+    expect(await filter()).toBe('Status: Search')
+    expect(await cards(ui)).toEqual(['quest:#6'])
+    await ui.unmount()
+  })
+
   test('a listing as long as the cap says there may be more: 200+', async ($, on) => {
     engine(on)
     const many = Array.from({ length: 200 }, (_, at) => issue(at + 1, `Quest ${at + 1}`, ['size: S']))
@@ -841,78 +879,15 @@ describe('Quest Board: hints, tags and the header', () => {
   })
 })
 
-describe('Quest Board: picking a Quest', () => {
-  test('the card fills whichever implement command the session has', async ($, on) => {
-    const { filled, settle } = engine(on, {}, { commands: ['acme:implement', 'implement'] })
-    gh(on)
-    await $.session.start(START)
-    await questBoard($)
-
+// Picking a Quest: the contract every view that starts one keeps.
+takeQuestContract({
+  name: 'Quest Board',
+  open: questBoard,
+  take: async $ => {
     const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
     await ui.press({ key: 'quest:#5' })
-    await settle()
     await ui.unmount()
-
-    expect(filled.map(fill => fill.text)).toEqual(['/acme:implement #5'])
-  })
-
-  test('mattpocock-skills:implement is preferred, and a bare implement is the last choice', async ($, on) => {
-    const { filled, settle } = engine(on, {}, { commands: ['implement', 'acme:implement', 'mattpocock-skills:implement'] })
-    gh(on)
-    await $.session.start(START)
-    await questBoard($)
-
-    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
-    await ui.press({ key: 'quest:#5' })
-    await settle()
-    await ui.unmount()
-
-    expect(filled.map(fill => fill.text)).toEqual(['/mattpocock-skills:implement #5'])
-  })
-
-  test('with no implement command, the card fills nothing and says so', async ($, on) => {
-    const { filled, toasts, settle } = engine(on, {}, { commands: ['mattpocock-skills:triage'] })
-    gh(on)
-    await $.session.start(START)
-    await questBoard($)
-
-    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
-    await ui.press({ key: 'quest:#5' })
-    await settle()
-    await ui.unmount()
-
-    expect(filled).toEqual([])
-    expect(toasts).toContain('No implement command in this session: install one, such as mattpocock-skills:implement, to start Quests from the board.')
-  })
-
-  test('a draft the Player is writing is kept, and a toast says how to start the Quest', async ($, on) => {
-    const { filled, toasts, settle } = engine(on, {}, { draft: 'why does the build fail on' })
-    gh(on)
-    await $.session.start(START)
-    await questBoard($)
-
-    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
-    await ui.press({ key: 'quest:#5' })
-    await settle()
-    await ui.unmount()
-
-    expect(filled).toEqual([])
-    expect(toasts).toContain('Draft kept: clear it and pick again, or run /mattpocock-skills:implement #5')
-  })
-
-  test('a draft that is itself an implement command is replaced', async ($, on) => {
-    const { filled, settle } = engine(on, {}, { draft: '/mattpocock-skills:implement #6' })
-    gh(on)
-    await $.session.start(START)
-    await questBoard($)
-
-    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
-    await ui.press({ key: 'quest:#5' })
-    await settle()
-    await ui.unmount()
-
-    expect(filled.map(fill => [fill.text, fill.mode])).toEqual([['/mattpocock-skills:implement #5', 'replace']])
-  })
+  },
 })
 
 describe('Quest Board: the started Quest\'s ticket is looked up', () => {

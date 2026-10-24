@@ -39,11 +39,11 @@ One project's area of the World, shaped by that project's spec and named after i
 _Avoid_: Level, zone, project map
 
 **Region map**:
-The pane that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second view of the same pane. From it a Quest is started the way the Quest Board starts one. It never opens itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
+The pane (`/map`) that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second view of the same pane. From it a Quest is started the way the Quest Board starts one. It never opens itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
 _Avoid_: Minimap, level select
 
 **Dungeon**:
-One epic within a Region (a Jira ticket's parent, a GitHub milestone), drawn as Floors of Rooms; cleared when all its Quests are done.
+One epic within a Region (a Jira ticket's parent, never a subtask's; a GitHub milestone), drawn as Floors of Rooms; cleared when all its Quests are done, and then it flies a banner.
 _Avoid_: Epic (outside the Jira adapter), area
 
 **Wilds**:
@@ -93,11 +93,11 @@ The view listing the available Quests of the current Region, from which the Play
 _Avoid_: Ticket list, backlog view
 
 **Scroll**:
-A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: a `?` alone, no gems); unrolled, the title whole (up to three lines), the Quest reward, recommended Stats, status and tags. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
+A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: a `?` alone, no gems); unrolled, the title whole (up to three lines), the Quest reward, recommended Stats, status, tags and Dungeon. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
 _Avoid_: Card art, tile
 
 **Tag**:
-A ticket's triage label (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), shown on its Quest card beside its status; the Quest Board's status filter steps through statuses and tags alike. A GitHub issue, which has no status of its own, takes its first as its status.
+A ticket's triage label (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), shown on its Quest card beside its status; the Quest Board's status filter steps through statuses and tags alike, and the Quests' Dungeons after them. A GitHub issue, which has no status of its own, takes its first as its status.
 _Avoid_: Label (outside a Quest Source)
 
 **Ticket lookup**:

@@ -16,6 +16,11 @@ export type QuestSource = {
   list: () => Promise<Sourced<QuestCard[]>>
   /** One Quest by its ticket reference, with its description; null when the reference names none. */
   get: (ticket: string) => Promise<Sourced<TicketDetails | null>>
+  /**
+   * The current Region's closed (done) tickets, as cards, newest first, up
+   * to LISTING_CAP: what the Region map lights as cleared Rooms.
+   */
+  listClosed: () => Promise<Sourced<QuestCard[]>>
 }
 
 /**

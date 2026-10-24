@@ -14,23 +14,25 @@ import {
   TRIAGE,
   triageTagsOf,
 } from './quest-source'
-import type { QuestCard, QuestSource, QuestSourceProblem, TicketDetails } from './quest-source'
+import type { QuestCard, QuestSource, QuestSourceProblem, Sourced, TicketDetails } from './quest-source'
 
 /** Runs a command by argv, as `$.process.run` does; rejects when it cannot start. */
 export type RunCommand = (argv: readonly string[]) => Promise<ProcessRunResult>
 
-/** An issue as `gh --json number,title,labels,url,state` writes it. */
+/** An issue as `gh --json number,title,labels,url,state,milestone` writes it. */
 type GhIssue = {
   number: number
   title: string
   labels?: { name: string }[]
   url?: string
   state?: string
+  /** Its milestone, the Dungeon it is in; null when it has none. */
+  milestone?: { number?: unknown; title?: unknown } | null
   /** Only asked for when one issue is got. */
   body?: string
 }
 
-const FIELDS = 'number,title,labels,url,state'
+const FIELDS = 'number,title,labels,url,state,milestone'
 
 /** The most issues one listing reads; gh's own default is 30. */
 const LIMIT = String(LISTING_CAP)
@@ -42,6 +44,7 @@ const asQuest = (issue: GhIssue): QuestCard => {
   const triage = labels.find(label => TRIAGE.has(label))
   const closed = issue.state?.toUpperCase() === 'CLOSED'
   const tags = triageTagsOf(labels)
+  const dungeon = dungeonOf(issue.milestone)
 
   return {
     ticket: `#${issue.number}`,
@@ -51,8 +54,15 @@ const asQuest = (issue: GhIssue): QuestCard => {
     recommendedStats: statsOf(labels),
     ...(issue.url === undefined ? {} : { url: issue.url }),
     ...(tags.length === 0 ? {} : { tags }),
+    ...(dungeon === undefined ? {} : { dungeon }),
   }
 }
+
+/** A milestone as a Dungeon: keyed by its number, which a rename keeps; none without a number and a title. */
+const dungeonOf = (milestone: GhIssue['milestone']): QuestCard['dungeon'] =>
+  typeof milestone?.number === 'number' && typeof milestone.title === 'string'
+    ? { key: String(milestone.number), name: milestone.title }
+    : undefined
 
 const asDetails = (issue: GhIssue): TicketDetails => {
   const summary = plainTextOf(issue.body)
@@ -153,30 +163,26 @@ const isIssue = (value: unknown): value is GhIssue =>
 // `#5`, `5`, or the issue's URL: what /implement reads as a GitHub issue.
 const GITHUB_REF = /^#?(\d+)$|^https?:\/\/\S*\/issues\/(\d+)\/?$/
 
-export const githubIssues = (run: RunCommand): QuestSource => ({
-  list: async () => {
-    const answered = await runGh(run, [
-      'issue',
-      'list',
-      '--state',
-      'open',
-      '--limit',
-      LIMIT,
-      '--json',
-      FIELDS,
-    ])
-    if (!answered.ok) {
-      return { ok: false, problem: answered.problem }
+/** The repo's issues in one state, up to the cap, as cards. */
+const listIssues = async (run: RunCommand, state: 'open' | 'closed'): Promise<Sourced<QuestCard[]>> => {
+  const answered = await runGh(run, ['issue', 'list', '--state', state, '--limit', LIMIT, '--json', FIELDS])
+  if (!answered.ok) {
+    return { ok: false, problem: answered.problem }
+  }
+  if (!Array.isArray(answered.value)) {
+    return {
+      ok: false,
+      problem: { kind: 'unreachable', message: 'gh answered with something other than a list.' },
     }
-    if (!Array.isArray(answered.value)) {
-      return {
-        ok: false,
-        problem: { kind: 'unreachable', message: 'gh answered with something other than a list.' },
-      }
-    }
+  }
 
-    return { ok: true, value: answered.value.filter(isIssue).map(asQuest) }
-  },
+  return { ok: true, value: answered.value.filter(isIssue).map(asQuest) }
+}
+
+export const githubIssues = (run: RunCommand): QuestSource => ({
+  list: () => listIssues(run, 'open'),
+
+  listClosed: () => listIssues(run, 'closed'),
 
   get: async ticket => {
     const ref = GITHUB_REF.exec(ticket.trim())
