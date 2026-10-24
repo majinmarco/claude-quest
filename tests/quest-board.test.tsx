@@ -50,6 +50,10 @@ const ISSUES = [
 const gh = (on: On, answer: () => ProcessRunResult = () => ran(0, JSON.stringify(ISSUES))) => {
   const runs: string[][] = []
   on('process.run', (_, e) => {
+    // Crafting from the diff asks git about the working tree: no repo to it here.
+    if (e.argv[0] === 'git') {
+      return { value: ran(128, '', 'fatal: not a git repository\n') }
+    }
     runs.push([...e.argv])
     if (e.argv[2] === 'view') {
       const found = ISSUES.find(one => String(one.number) === e.argv[3])

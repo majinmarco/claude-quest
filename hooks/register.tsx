@@ -1,6 +1,7 @@
 import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
+import { translateBashReads } from '../src/bash-reads'
 import { bossAnswerText, bossOutcomeText, bossQuestionText, bossStartText, drawBoss, NO_BOSS } from '../src/boss'
 import type { BossActions } from '../src/boss'
 import { briefingKeyOf, briefingLine, generateBriefing } from '../src/briefing'
@@ -12,6 +13,8 @@ import {
   REVIEW_QUESTION_COUNT,
 } from '../src/content-generator'
 import type { Model, ModelFailure, QuestionInput, TicketContext } from '../src/content-generator'
+import { changesSince, noteChanged, takeSnapshot } from '../src/diff-crafting'
+import type { Git, ReadFile, Snapshot } from '../src/diff-crafting'
 import { callName, isExhausted, isUnderWay, newGame, PROPHECY_CALLS, questProgressOf, step, summonedChanges } from '../src/engine'
 import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, Npc, ProphecyCall, QuestionContent, Rules } from '../src/engine'
 import { badgesText, drawHud } from '../src/hud'
@@ -32,6 +35,8 @@ import {
 } from '../src/persistence'
 import { drawOverview, emptyOverview, OVERVIEW } from '../src/overview'
 import type { OverviewActions, OverviewState } from '../src/overview'
+import { backText, comeBack, emptyParty, setOut, stillOut, tally } from '../src/party'
+import type { Party } from '../src/party'
 import { drawQuestBoard, implementCommandOf, isImplementDraft, noFilters, PREFERRED_IMPLEMENT } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
 import {
@@ -107,6 +112,8 @@ const sceneOpened = atom({ plugin: 'quest-mod', key: 'sceneOpened' } as const, f
  * Quest's close and /overview), the session's root, the page of Islands.
  */
 const overview = atom({ plugin: 'quest-mod', key: 'overview' } as const, emptyOverview() satisfies OverviewState)
+/** The party: the companions (subagents) out during a Quest, and the Scene's beat of one setting out. */
+const party = atom({ plugin: 'quest-mod', key: 'party' } as const, emptyParty() as Party)
 
 const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 
@@ -908,15 +915,17 @@ const HAIKU_UNAVAILABLE_TEXT = "Questions are off: Haiku isn't available on this
  * effects; a FILE_EDIT of a test file, from whatever saw the change (a Write,
  * Edit or NotebookEdit; a change read from git), then plays the
  * TEST_FILE_EDITED that arms a Prophecy, its effects returned too.
+ * `agentId` is the loop the event happened in (a subagent's; absent on the
+ * main loop): its companion counts the Encounters it played.
  */
-async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<Effect[]> {
-  const effects = await playOne($, event, rules)
+async function play($: EngineInterface, event: GameEvent, rules: Rules, agentId?: string): Promise<Effect[]> {
+  const effects = await playOne($, event, rules, agentId)
 
   if (event.type === 'FILE_EDIT') {
     const root = await $.session.root().catch(() => null)
     const tested = testFileEditedOf(event, root, await $.clock.now())
     if (tested !== null) {
-      return [...effects, ...(await playOne($, tested, rules))]
+      return [...effects, ...(await playOne($, tested, rules, agentId))]
     }
   }
 
@@ -924,8 +933,12 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
 }
 
 /** Steps the session's game by one event, keeps the Player, plays the effects, and returns them. */
-async function playOne($: EngineInterface, event: GameEvent, rules: Rules): Promise<Effect[]> {
+async function playOne($: EngineInterface, event: GameEvent, rules: Rules, agentId?: string): Promise<Effect[]> {
   const effects = await stepGame($, event, rules)
+
+  if (effects.some(effect => effect.type === 'ENCOUNTER_STARTED' || effect.type === 'ENCOUNTER_UPDATED' || effect.type === 'BATTLE_WON')) {
+    await update($, party, current => tally(current, agentId, effects))
+  }
 
   const saved = await read($, game)
   if (saved !== null) {
@@ -1036,6 +1049,104 @@ async function measure($: EngineInterface, usage: MeasureSeen, rules: Rules): Pr
   await play($, translateMeasure(usage, await $.session.model()), rules)
 }
 
+/** How long one git run of the diff path may take: a stuck one gives up, and plays nothing. */
+const GIT_TIMEOUT_MS = 5000
+
+/** The Bash-triggered checks of the working tree come at most this often, in ms; `turn.complete` always checks. */
+export const BASH_CHECK_MS = 15_000
+
+/** A command that may commit: the working tree is checked before it runs, as the commit would hide its changes. */
+const MAY_COMMIT = /\bgit\b[^;&|\n]*\bcommit\b/
+
+/** git in the project's root, through `$.process` (CLI only: elsewhere it rejects, and the diff path is off). */
+const gitOf =
+  ($: EngineInterface, root: string): Git =>
+  async (args, stdin) =>
+    $.process.run(['git', ...args], { cwd: root, timeoutMs: GIT_TIMEOUT_MS, ...(stdin === undefined ? {} : { stdin }) })
+
+/** A file of the project, by its path relative to the root. */
+const readerOf =
+  ($: EngineInterface, root: string): ReadFile =>
+  async path =>
+    $.fs.read(`${root.replace(/[\\/]+$/, '')}/${path}`)
+
+/** The agent statuses of a companion still out. */
+const STILL_RUNNING = new Set(['pending', 'running', 'waiting'])
+
+/**
+ * Crafting from the diff (src/diff-crafting.ts): the session's snapshot of
+ * the working tree (null: the diff path off), when a Bash call last checked
+ * it, and the steps on it, run in turn, so a check never sees a change a
+ * Write is still being played for, and two checks never play one change
+ * twice. The module's own: session.start takes the snapshot again.
+ */
+let snapshot: Snapshot | null = null
+let lastBashCheck = Number.NEGATIVE_INFINITY
+let diffTurn: Promise<void> = Promise.resolve()
+
+/** Runs `work` after every step on the snapshot before it; a failure plays nothing more. */
+function inDiffTurn<T>(work: () => Promise<T>): Promise<T> {
+  const done = diffTurn.then(work)
+  diffTurn = done.then(
+    () => undefined,
+    () => undefined,
+  )
+
+  return done
+}
+
+/** The snapshot the session starts from; none (the diff path off) outside a git repo, or without git. */
+function startDiff($: EngineInterface, root: string | null): Promise<void> {
+  lastBashCheck = Number.NEGATIVE_INFINITY
+
+  return inDiffTurn(async () => {
+    snapshot = root === null ? null : await takeSnapshot(gitOf($, root), readerOf($, root))
+  }).catch(() => undefined)
+}
+
+/** Plays what changed in the working tree since the last check, in `agentId`'s loop: at every turn's end, and before a commit. */
+function checkDiff($: EngineInterface, root: string | null, agentId: string | undefined, rules: Rules): Promise<void> {
+  return inDiffTurn(async () => {
+    if (snapshot === null || root === null) {
+      return
+    }
+    for (const edit of await changesSince(snapshot, gitOf($, root), readerOf($, root), root)) {
+      await play($, edit, rules, agentId)
+    }
+  }).catch(() => undefined)
+}
+
+/** As checkDiff, after a Bash call that may have changed files: at most every BASH_CHECK_MS. */
+async function checkDiffAfterBash($: EngineInterface, root: string | null, agentId: string | undefined, rules: Rules): Promise<void> {
+  // The snapshot itself is read in turn: the first may still be being taken.
+  const now = await $.clock.now()
+  if (now - lastBashCheck < BASH_CHECK_MS) {
+    return
+  }
+  lastBashCheck = now
+  await checkDiff($, root, agentId, rules)
+}
+
+/**
+ * Plays a tool's FILE_EDIT, then takes its file into the snapshot, so the
+ * diff path never plays that change again. Called in the diff's turn.
+ */
+async function playFileEdit(
+  $: EngineInterface,
+  edit: Extract<GameEvent, { type: 'FILE_EDIT' }>,
+  root: string | null,
+  agentId: string | undefined,
+  rules: Rules,
+): Promise<void> {
+  await play($, edit, rules, agentId)
+  if (snapshot !== null && root !== null) {
+    await noteChanged(snapshot, gitOf($, root), readerOf($, root), root, edit.path)
+  }
+}
+
+/** The tools that change a file and hand over its change: played from their record, never from the diff. */
+const FILE_CHANGE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
+
 export const register: Register = (on, options) => {
   // The Player's settings, from /config: a change there reloads the mod, and
   // register runs again with the new values.
@@ -1077,6 +1188,16 @@ export const register: Register = (on, options) => {
         .then(regions => showRegions($, regions))
         .catch(() => undefined)
     }
+    // The working tree as it is now: work done before is never played. Not
+    // awaited: the checks wait their turn behind it.
+    void startDiff($, root)
+    // A companion whose agent no longer runs (killed, its session ended)
+    // quietly leaves the party.
+    const running = await Promise.resolve()
+      .then(() => $.agent.list())
+      .then(agents => new Set(agents.filter(agent => STILL_RUNNING.has(agent.status)).map(agent => agent.id)))
+      .catch(() => new Set<string>())
+    await update($, party, current => stillOut(current, running))
     await update($, game, current => {
       const resumed = withTicketCalls({ ...newGame(player), ...current })
 
@@ -1160,32 +1281,104 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
+    const { agentId } = e
     // A Check about to run: no Prophecy is called from now, with its output
     // in sight.
     const starting = translateCheckStart(e)
     if (starting !== null) {
-      await play($, starting, rules)
+      await play($, starting, rules, agentId)
     }
 
-    const outcome = await next(e)
-    // Without the root, the read still explores, but discovers no Module.
+    // Without the root, a read still explores, but discovers no Module.
     const root = await $.session.root().catch(() => null)
+
+    // A file-changing tool runs in the diff's turn, from the call to its
+    // change noted: no check (another loop's) sees the change in between.
+    if (FILE_CHANGE_TOOLS.has(e.tool)) {
+      return inDiffTurn(async () => {
+        const changed = await next(e)
+        const edit = translateToolCall(e, changed, root)
+        if (edit?.type === 'FILE_EDIT') {
+          await playFileEdit($, edit, root, agentId, rules).catch(() => undefined)
+        }
+
+        return changed
+      })
+    }
+
+    // A commit hides what it commits from the diff: what changed is played first.
+    if (e.tool === 'Bash' && typeof e.command === 'string' && MAY_COMMIT.test(e.command)) {
+      await checkDiff($, root, agentId, rules)
+    }
+    const outcome = await next(e)
     const event = translateToolCall(e, outcome, root)
 
     if (event !== null) {
-      await play($, event, rules)
+      await play($, event, rules, agentId)
+    }
+
+    // A Bash call that is no Check may read the code, or change it (a
+    // heredoc, a script): its reads explore, and the working tree is checked.
+    if (e.tool === 'Bash' && event === null) {
+      const bash = translateBashReads(e, outcome, root)
+      for (const read of bash.reads) {
+        await play($, read, rules, agentId)
+      }
+      if (!bash.isReadOnly && outcome.deny === undefined) {
+        await checkDiffAfterBash($, root, agentId, rules)
+      }
     }
 
     // A Bash call may run a check and commit too (`npm test && git commit`).
     const commit = translateCommit(e, outcome)
     if (commit !== null) {
-      await play($, commit, rules)
+      await play($, commit, rules, agentId)
     }
 
     return outcome
   })
     // The game never blocks a tool call: on a failure the call's own result
     // stands.
+    .catch(($, e, next) => next(e))
+
+  // Every turn's end, the main loop's and each subagent's, checks the
+  // working tree; a subagent's brings its companion back, with what its
+  // loop played. Nothing pays for the return.
+  on('turn.complete', async ($, e, next) => {
+    const ended = await next(e)
+    const { agentId } = e
+    await checkDiff($, await $.session.root().catch(() => null), agentId, rules)
+
+    if (agentId !== undefined) {
+      let back: ReturnType<typeof comeBack>['companion'] = null
+      await update($, party, current => {
+        const returned = comeBack(current, agentId)
+        back = returned.companion
+
+        return returned.party
+      })
+      if (back !== null) {
+        $.ui.toast(backText(back))
+      }
+    }
+
+    return ended
+  })
+    // The game never holds up a turn's end: on a failure its answer stands.
+    .catch(($, e, next) => next(e))
+
+  // A subagent started during a Quest is a companion setting out. Nothing
+  // pays for it: spawning agents is Claude's activity (ADR 0002).
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    const { agentId } = spawned
+    if (spawned.deny === undefined && agentId !== undefined && (await read($, game))?.quest != null) {
+      await update($, party, current => setOut(current, agentId, e.description))
+    }
+
+    return spawned
+  })
+    // The game never blocks a spawn: on a failure it starts as asked.
     .catch(($, e, next) => next(e))
 
   on('command.run', { command: 'quest-board' }, async $ => {
@@ -1462,7 +1655,7 @@ export const register: Register = (on, options) => {
         ? ((await read($, { plugin: 'quest-mod', key: 'briefing', id: quest.ticket }))?.text ?? null)
         : null
 
-    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null, briefing)
+    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null, briefing, (await read($, party)).beat)
   })
 
   on('ui.render', { component: 'Pane', requestId: SAGE.id }, async ($, e) => {
@@ -1524,6 +1717,6 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    return drawHud($, e, current, hudStyle, hudActions($, rules))
+    return drawHud($, e, current, hudStyle, hudActions($, rules), (await read($, party)).companions.length)
   })
 }

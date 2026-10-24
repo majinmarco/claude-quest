@@ -657,6 +657,22 @@ export type RegionEntry = {
 
 /** The Overview pane's state: the registry as last read, the session's root, the page of Islands shown. */
 export type OverviewState = { page: number; regions: Record<string, RegionEntry>; root: string | null }
+/** A companion out with the party: one subagent sent out during a Quest, by its loop's agent id. */
+export type Companion = {
+  agentId: string
+  /** The spawn's short description of its task: `Implement issue #22`. */
+  description: string
+  /** What its loop played so far: reads, Craftings, Battles won. */
+  read: number
+  forged: number
+  battlesWon: number
+}
+
+/** A beat of the party the Scene plays: a companion setting out, until the next Encounter. */
+export type PartyBeat = { kind: 'out'; description: string }
+
+/** The session's party: the companions out, oldest first, and the Scene's beat. */
+export type Party = { companions: Companion[]; beat: PartyBeat | null }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -681,6 +697,8 @@ declare module 'claude-code' {
       briefing: StateFamily<{ text: string }>
       /** The Overview: the registry as last read, the session's root, the page of Islands. */
       overview: OverviewState
+      /** The companions out with the party: see src/party.ts. */
+      party: Party
     }
   }
 }

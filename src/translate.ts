@@ -44,10 +44,10 @@ const resolve = (base: string, path: string): string => {
 }
 
 /** The folder holding `path`. */
-const folderOf = (path: string): string => `${path.replace(/\/+$/, '')}/..`
+export const folderOf = (path: string): string => `${path.replace(/\/+$/, '')}/..`
 
 /** Whether the last segment looks like a file's name: `engine.ts`, not `.claude`. */
-const namesFile = (path: string): boolean => /[^/.][^/]*\.[^/.]+$/.test(path)
+export const namesFile = (path: string): boolean => /[^/.][^/]*\.[^/.]+$/.test(path)
 
 /** How many leading segments of a folder, relative to the root, name its Module. */
 const MODULE_DEPTH = 2
@@ -71,7 +71,7 @@ const slashed = (path: string): string => path.replace(/\\/g, '/').replace(/^([A
  * outside the project, in an ignored root-level folder (`node_modules`,
  * `dist`...), or any folder when the root is not known, is in no Module (null).
  */
-const moduleOf = (folder: string, root: string | null): string | null => {
+export const moduleOf = (folder: string, root: string | null): string | null => {
   if (root === null) {
     return null
   }
@@ -184,8 +184,8 @@ export const translateToolCall = (
   return null
 }
 
-/** One hunk of a Write's or Edit's `structuredPatch`. */
-type Hunk = {
+/** One hunk of a Write's or Edit's `structuredPatch`, or of the working tree's diff. */
+export type Hunk = {
   oldStart: number
   oldLines: number
   newStart: number
@@ -194,7 +194,7 @@ type Hunk = {
 }
 
 /** A text's lines; a last newline ends the last line, it starts no other. */
-const linesOf = (text: string): string[] =>
+export const linesOf = (text: string): string[] =>
   text === '' ? [] : text.replace(/\n$/, '').split('\n')
 
 const isHunk = (value: unknown): value is Hunk =>
@@ -221,7 +221,7 @@ const asDiff = (hunks: Hunk[]) => {
 }
 
 /** All of `text` added, as one hunk: a new file, or one whose old content is unknown. */
-const allAdded = (text: string): Hunk => {
+export const allAdded = (text: string): Hunk => {
   const lines = linesOf(text)
 
   return { oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map(line => `+${line}`) }
@@ -296,6 +296,38 @@ const translateFileChange = (
   if (hunks === null) {
     return null
   }
+
+  return fileEditOf(
+    // An Edit of every occurrence (a rename) is said so: it is never major.
+    { path, isNewFile, linesBefore, hunks, ...(tool === 'Edit' && record.replaceAll === true ? { replaceAll: true } : {}) },
+    root,
+  )
+}
+
+/** A file changed, as whatever saw it tells it: a file-changing tool's record, or the working tree's diff. */
+export type FileChangeSeen = {
+  /** The file's path, absolute. */
+  path: string
+  isNewFile: boolean
+  /** The file's lines before the change; null for a new file, or when not known. */
+  linesBefore: number | null
+  hunks: Hunk[]
+  replaceAll?: true
+  /** `diff`: seen in the working tree's diff, not in a tool's record (Bash, a script, a subagent). */
+  source?: 'diff'
+}
+
+/**
+ * The one way a changed file becomes its FILE_EDIT, whichever path saw it (a
+ * Write, an Edit or a NotebookEdit; the working tree's diff after Bash): its
+ * Module, and its lines counted from its hunks. A change of no line to a
+ * file that was there is no event.
+ */
+export const fileEditOf = (
+  { path, isNewFile, linesBefore, hunks, replaceAll, source }: FileChangeSeen,
+  /** The project's root, absolute; null when it cannot be read. */
+  root: string | null,
+): Extract<GameEvent, { type: 'FILE_EDIT' }> | null => {
   const change = asDiff(hunks)
   if (!isNewFile && change.linesAdded + change.linesRemoved === 0) {
     return null
@@ -308,8 +340,8 @@ const translateFileChange = (
     isNewFile,
     linesBefore,
     ...change,
-    // An Edit of every occurrence (a rename) is said so: it is never major.
-    ...(tool === 'Edit' && record.replaceAll === true ? { replaceAll: true } : {}),
+    ...(replaceAll === true ? { replaceAll: true } : {}),
+    ...(source === undefined ? {} : { source }),
   }
 }
 
@@ -347,7 +379,7 @@ const hunksOf = (
 }
 
 /** A Bash call's output and exit code, or null when it did not run to an exit. */
-const finished = (outcome: ToolCallOutcome): { output: string; exitCode: number } | null => {
+export const finished = (outcome: ToolCallOutcome): { output: string; exitCode: number } | null => {
   // Claude Code 2.1.308 hands a non-zero exit over as an error whose text is
   // `Exit code N`, then stdout and stderr; an error without one (the call was
   // interrupted, or could not run) has no exit to read.

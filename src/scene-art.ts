@@ -336,6 +336,30 @@ export const sceneSvg = (encounter: Encounter | null, width: number): string => 
   )
 }
 
+/**
+ * A companion setting out (a subagent spawned during a Quest), as an SVG
+ * document `width` CSS pixels wide: the hero stays at the corridor's start
+ * while the companion walks off along it and fades from view, over and over.
+ */
+export const departureSvg = (width: number): string => {
+  const height = Math.round((width * HEIGHT) / WIDTH)
+  const companion =
+    `<g transform="translate(${2 * SPRITE_SIZE} ${PATH_Y})">` +
+    `<animateTransform attributeName="transform" type="translate" values="${2 * SPRITE_SIZE} ${PATH_Y};${WIDTH - SPRITE_SIZE} ${PATH_Y}" dur="${WALK}s" repeatCount="indefinite"/>` +
+    `<animate attributeName="opacity" values="1;1;0" keyTimes="0;0.7;1" dur="${WALK}s" repeatCount="indefinite"/>` +
+    `<g>${drawSprite('pathfinder')}<animateTransform attributeName="transform" type="translate" values="0 0;0 -1" calcMode="discrete" dur="0.5s" repeatCount="indefinite"/></g>` +
+    '</g>'
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${width}" height="${height}" shape-rendering="crispEdges">` +
+    backdrop() +
+    banners() +
+    hero(SPRITE_SIZE, SPRITE_SIZE) +
+    companion +
+    '</svg>'
+  )
+}
+
 /** Where the boss stands, in pixels: twice a tile's size, on the floor's right. */
 const BOSS_X = 4 * SPRITE_SIZE + 4
 const BOSS_Y = SPRITE_SIZE + 6

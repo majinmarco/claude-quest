@@ -17,6 +17,8 @@ The vision is in [`docs/vision.md`](docs/vision.md), the words the game uses in 
 | `/prophecy` | Tells the Prophecy armed; `/prophecy red`, `green` or `rout` calls the next Check: one failure, passing, or two or more. The HUD's `1 Red`, `2 Green`, `3 Rout` Buttons (hotkeys 1–3) do the same. A right call pays 10 Dexterity XP (30 a Quest at most); a wrong one costs nothing. See [ADR 0004](docs/adr/0004-prophecy.md). |
 | `/badges` | Your character sheet as text: the Overview's first part. |
 
+The game sees the work whatever tool or agent does it. Reads through Bash (`cat`, `head`, `sed -n`, `grep`, `rg`, `find`...) explore the code as Read and Grep do. Files written by a Bash heredoc, a script or a subagent are seen in git's diff of the working tree (after such a Bash call, before a commit and at every turn's end) and forge like an Edit's, once; outside a git repo only the Edit, Write and NotebookEdit tools' changes are seen, and files `.gitignore` ignores never count. A subagent Claude starts during a Quest is a **companion**: the Scene shows it setting out, the HUD counts the party (`Party: 1 out`), and it comes back with a toast of what its loop did. Companions pay no XP of their own.
+
 A Quest starts when you run `/implement <ticket>` or any plugin's `/<plugin>:implement <ticket>` (for example `/mattpocock-skills:implement #4`, or `ABC-123` for Jira). See [ADR 0001](docs/adr/0001-quest-starts-at-command-run.md).
 
 ## Settings

@@ -94,6 +94,8 @@ export type StripSegment =
   | { kind: 'encounter'; sprite: SpriteName; text: string }
   /** The Prophecy armed: the Player's call, or null while they have not made it. */
   | { kind: 'prophecy'; call: ProphecyCall | null }
+  /** The companions out with the party: a small companion and the count. */
+  | { kind: 'party'; count: number }
   | { kind: 'mana'; mana: number | null; level: ManaLevel }
   | { kind: 'vitals'; text: string }
   | { kind: 'stats'; text: string }
@@ -141,6 +143,8 @@ const labelOf = (segment: StripSegment): string => {
       return String(segment.count)
     case 'questions':
       return `${segment.count} waiting`
+    case 'party':
+      return `${segment.count} out`
     case 'quest':
       return `${segment.ticket} ${segment.title}`.trim()
     case 'boss':
@@ -178,6 +182,7 @@ export const segmentWidth = (segment: StripSegment): number => {
     case 'questions':
     case 'encounter':
     case 'prophecy':
+    case 'party':
       return 18 + label
     default:
       return label
@@ -306,6 +311,10 @@ const draw = (
       sprite('dagger')
 
       return shadowed(lettering, label, x + 18, LINE_Y, segment.call === null ? COLORS.gold : COLORS.dim)
+    case 'party':
+      sprite('pathfinder')
+
+      return shadowed(lettering, label, x + 18, LINE_Y, COLORS.text)
     default:
       return shadowed(lettering, label, x, LINE_Y, COLORS.dim)
   }

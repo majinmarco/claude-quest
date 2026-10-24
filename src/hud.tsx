@@ -14,6 +14,7 @@ import { BADGES, callName, isExhausted, isUnderWay, manaLevel, PROPHECY_CALLS, t
 import type { Encounter, GameState, ManaLevel, Player, ProphecyCall } from './engine'
 import { COMPACTION_WARNING, hudStrip, PIXELS_PER_COLUMN, portraitOf, STILL, STRIP_HEIGHT, stripWidth } from './hud-art'
 import type { StripMotion, StripSegment } from './hud-art'
+import { partyLine } from './party'
 import { MONSTERS } from './scene-art'
 import { sheetText } from './sheet'
 import type { HudStyle } from './settings'
@@ -219,8 +220,8 @@ const questTitles = ({ title }: { title?: string }): string[] => {
   return [...new Set(titles)]
 }
 
-/** The HUD's parts for `state`, in the order they are drawn. */
-const partsOf = ({ player, encounter, vitals, quest, questions, bossFight, prophecy }: GameState): Part[] => {
+/** The HUD's parts for `state`, in the order they are drawn; `partyOut`, the companions out. */
+const partsOf = ({ player, encounter, vitals, quest, questions, bossFight, prophecy }: GameState, partyOut = 0): Part[] => {
   const toClear = xpToClear(player.level)
   const mana = manaLevel(vitals.mana)
   const badges = (player.badges ?? []).length
@@ -290,6 +291,9 @@ const partsOf = ({ player, encounter, vitals, quest, questions, bossFight, proph
           { text: describeEncounter(encounter), dimColor: true },
           { kind: 'encounter', sprite: encounterSprite(encounter), text: describeEncounter(encounter) },
         ),
+    partyOut > 0
+      ? single(6.5, { text: partyLine(partyOut), color: 'cyan' }, { kind: 'party', count: partyOut })
+      : null,
     {
       rank: 8,
       versions: [
@@ -328,6 +332,7 @@ const STRIP_ORDER: StripSegment['kind'][] = [
   'questions',
   'prophecy',
   'encounter',
+  'party',
   'mana',
   'vitals',
   'stats',
@@ -345,8 +350,8 @@ const layOutStrip = (parts: Part[], room: number): StripSegment[] => {
 }
 
 /** The strip's segments for `state` in a band `columns` wide, in the order drawn. */
-export const stripOf = (state: GameState, columns: number): StripSegment[] =>
-  layOutStrip(partsOf(state), columns * PIXELS_PER_COLUMN)
+export const stripOf = (state: GameState, columns: number, partyOut = 0): StripSegment[] =>
+  layOutStrip(partsOf(state, partyOut), columns * PIXELS_PER_COLUMN)
 
 /** What a surface last drew of the Player, to tell a loss of HP or a gain of XP since. */
 type LastDrawn = { level: number; hp: number; totalXp: number; xpShare: number }
@@ -386,7 +391,8 @@ const PROPHECY_BUTTON_COLUMNS = 30
  *
  * Where the surface draws SVG and `hudStyle` is pixel, the same parts are one
  * pixel strip 48 px tall instead, its alt the text's first row, the
- * Prophecy's Buttons beside it: an SVG holds no Button.
+ * Prophecy's Buttons beside it: an SVG holds no Button. `partyOut` is how
+ * many companions are out with the party (`Party: 2 out`).
  */
 export function drawHud(
   $: EngineInterface,
@@ -394,13 +400,14 @@ export function drawHud(
   state: GameState,
   hudStyle: HudStyle = 'pixel',
   actions?: HudActions,
+  partyOut = 0,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Button, Text } = elements
   const columns = Number.isFinite(e.props.bodyColumns) && e.props.bodyColumns > 0 ? e.props.bodyColumns : DEFAULT_COLUMNS
   const maxRows = Number.isFinite(e.props.maxRows) ? Math.max(1, Math.min(MAX_ROWS, e.props.maxRows)) : MAX_ROWS
   const isCalling = actions !== undefined && isAwaitingCall(state)
-  const parts = partsOf(state)
+  const parts = partsOf(state, partyOut)
   const rows = layOut(parts, columns, isCalling ? Math.max(1, maxRows - 1) : maxRows)
   const calls = isCalling
     ? PROPHECY_CALLS.map((call, at) => (
