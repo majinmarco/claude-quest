@@ -152,6 +152,10 @@ _Avoid_: Test suite, job (outside the event translator)
 The pane that plays the current Encounter: animated pixel art where the surface draws it, one line of text in the terminal. It opens itself at most once per session, when a surface that draws its art is there, unless the `autoOpenScene` setting is off; `/scene` opens it any time. The Quest Board never opens itself.
 _Avoid_: Encounter view, animation pane
 
+**Sound cue**:
+The short clip a game event plays (a horn for a Quest started, a growl for a monster spawned, a fanfare for a Boss Fight won), one per event, from the mod's own CC0 sounds, at the `soundVolume` setting (0 is off). Decoration only: a Sound cue never pays, gates or waits for anything, and one that cannot play is skipped. The same cue never plays over itself, a Battle's hits coalesce to one a second, and at most six play in ten seconds, the lowest priority dropped first (the boss, the fanfare, a level-up, a defeat and a Badge never are). Headless, none plays.
+_Avoid_: Sound effect, SFX, jingle (one kind of clip)
+
 **Boss Fight**:
 The code-review challenge that ends a Quest, built from the Quest's actual diff: the first commit Claude makes during a Quest summons it (a commit chained before a command that failed too, read from git's summary line), up to three review Questions about that commit's diff (the Quest's own changes when git cannot show it, unless the commit was read from a failed command). Every Question is asked. The boss has two thirds of them in HP, rounded up (2 HP for 3 Questions): a right answer earns Intelligence XP, uncapped, and hits the boss while it stands; once it has fallen, the Questions left are finishing blows, paid the same. A wrong one costs HP; at 0 HP the Player fights on, Exhausted. When the Questions run out the boss fallen is a win (2 of 3): the Quest reward and a Trophy, and a full heal; the boss standing is a loss; the Player may skip it. A Quest that could have no Boss Fight pays a quarter of its reward. However it ends, the Quest closes, its outcome in the Region file (won, lost, skipped, or unfought when no Boss Fight could be made).
 _Avoid_: Final review, boss battle
