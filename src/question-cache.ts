@@ -22,15 +22,16 @@ export const MAX_CACHED_QUESTIONS = 50
 const hex = (buffer: ArrayBuffer): string =>
   [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('')
 
+/** A SHA-256 of `text`, in hex: what cache keys are made of. */
+export const sha256Of = async (text: string): Promise<string> =>
+  hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
+
 /**
  * The key a change is cached under: a SHA-256 of each file's path and diff,
  * in order. The path counts, since the Question names its file.
  */
-export const cacheKeyOf = async (changes: readonly FileChange[]): Promise<string> => {
-  const text = JSON.stringify(changes.map(({ path, diff }) => [path, diff]))
-
-  return hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
-}
+export const cacheKeyOf = async (changes: readonly FileChange[]): Promise<string> =>
+  sha256Of(JSON.stringify(changes.map(({ path, diff }) => [path, diff])))
 
 /** The Question cached under `key`, if any. */
 export const cachedQuestion = (

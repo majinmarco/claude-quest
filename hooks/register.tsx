@@ -339,6 +339,12 @@ async function makeBriefing(
   key: string,
   rules: Rules,
 ): Promise<void> {
+  // Outside its Quest (closed, or replaced meanwhile) nothing is asked.
+  const isActive = async () => (await read($, game))?.quest?.ticket === ticket
+  if (!(await isActive())) {
+    return
+  }
+
   const cached = cachedQuestion(await read($, questionCache), key)
   if (cached !== undefined) {
     const kept = await read($, { plugin: 'quest-mod', key: 'briefing', id: ticket })
@@ -348,12 +354,13 @@ async function makeBriefing(
     return
   }
 
-  // The call is counted on the active Quest's ticket: this one's, or none.
-  if ((await read($, game))?.quest?.ticket !== ticket) {
-    return
-  }
   const granted = await spendHaikuCall($, 'sage', rules, key)
   if (granted === null) {
+    return
+  }
+  // Counted on another ticket (the Quest replaced as it was asked): given back.
+  if (granted.ticket !== ticket) {
+    await stepGame($, { type: 'HAIKU_CALL_REFUNDED', purpose: 'sage', ticket: granted.ticket }, rules)
     return
   }
 
@@ -367,9 +374,11 @@ async function makeBriefing(
     return
   }
 
+  // Kept whatever happened meanwhile: the call is spent, and the ticket's
+  // next start reuses it. Asked only while its Quest is still the active one.
   await update($, questionCache, cache => remember(cache, key, generated.question))
   await update($, { plugin: 'quest-mod', key: 'briefing', id: ticket }, () => ({ text: generated.briefing }))
-  if (await queueQuestion($, generated.question, key, rules, 'quest-giver')) {
+  if ((await isActive()) && (await queueQuestion($, generated.question, key, rules, 'quest-giver'))) {
     $.ui.toast(briefingLine(generated.briefing))
   }
 }

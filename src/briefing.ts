@@ -12,12 +12,11 @@
 // id: <ticket> }` (a family by ticket: a state key must be a literal), for
 // the Scene and the Quest Log.
 
-import type { Npc, QuestionContent } from '../types'
+import type { QuestionContent } from '../types'
 import { checkQuestionContent, objectIn, TICKET_IS_DATA, ticketText } from './content-generator'
-import type { Model, ModelFailure, ModelReply, SkipReason } from './content-generator'
+import type { Model, ModelFailure, ModelReply, SkipReason, TicketContext } from './content-generator'
 import { TICKET_SOURCE } from './engine'
-
-export type { Npc }
+import { sha256Of } from './question-cache'
 
 /** The most characters a Briefing has: two short lines. */
 export const MAX_BRIEFING_CHARS = 200
@@ -30,7 +29,7 @@ export const MAX_BRIEFING_LINES = 2
  * known, the summary its lookup fetched, and its Dungeon's name when known.
  * All of it written by whoever filed the ticket: data, never instructions.
  */
-export type BriefingInput = { ref: string; title?: string; summary: string; dungeon?: string }
+export type BriefingInput = TicketContext & { summary: string }
 
 export type BriefingGenerated =
   | { ok: true; briefing: string; question: QuestionContent }
@@ -95,17 +94,9 @@ export const validateBriefing = (reply: unknown): BriefingGenerated => {
  * Never throws: a model that throws is a `model-failed` skip.
  */
 export const generateBriefing = async (input: BriefingInput, model: Model): Promise<BriefingGenerated> => {
-  const { ref, title, summary, dungeon } = input
-  const prompt = ticketText({
-    ref,
-    summary,
-    ...(title === undefined ? {} : { title }),
-    ...(dungeon === undefined ? {} : { dungeon }),
-  })
-
   let reply: ModelReply
   try {
-    reply = await model({ system: SYSTEM, prompt })
+    reply = await model({ system: SYSTEM, prompt: ticketText(input) })
   } catch (error) {
     return { ok: false, reason: 'model-failed', detail: String(error) }
   }
@@ -121,9 +112,6 @@ export const generateBriefing = async (input: BriefingInput, model: Model): Prom
   return validateBriefing(parsed)
 }
 
-const hex = (buffer: ArrayBuffer): string =>
-  [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('')
-
 /**
  * The Question cache's key for `ticket`'s Briefing: `briefing:<ticket>:` and
  * a SHA-256 of its summary. The same summary is the same key, so a ticket
@@ -131,7 +119,7 @@ const hex = (buffer: ArrayBuffer): string =>
  * answered-keys guard keeps it from being asked again.
  */
 export const briefingKeyOf = async (ticket: string, summary: string): Promise<string> =>
-  `briefing:${ticket}:${hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(summary)))}`
+  `briefing:${ticket}:${await sha256Of(summary)}`
 
 /** A Briefing as its toast and the Scene's line tell it: its first line, said by the Quest Giver. */
 export const briefingLine = (briefing: string): string => `Quest Giver: ${briefing.split('\n')[0] ?? ''}`

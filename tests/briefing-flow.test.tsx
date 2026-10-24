@@ -162,8 +162,13 @@ const run = ($: Engine, command: string, args = '') =>
   })
 
 /** Starts the Quest of `ticket`, and lets its lookup and any Briefing finish. */
-const startQuest = async ($: Engine, clock: { advance: (ms: number) => Promise<void> }, ticket: string) => {
+const startQuest = async (
+  $: Engine,
+  clock: { advance: (ms: number) => Promise<void>; settle: () => Promise<void> },
+  ticket: string,
+) => {
   await run($, 'mattpocock-skills:implement', ticket)
+  await clock.settle()
   await clock.advance(HAIKU_MS)
 }
 
@@ -225,6 +230,26 @@ describe("The Quest Giver's Briefing", () => {
 
     expect(briefings).toHaveLength(1)
     expect((await run($, 'sage')).text).toContain('no Question for you')
+  })
+
+  test('a Quest replaced while the Briefing is written is not asked it; started again, it is, at no cost', async ($, on) => {
+    const { briefings, toasts, clock } = engine(on)
+    await $.session.start(START)
+    await run($, 'mattpocock-skills:implement', '#19')
+    // The lookup has found #19 and Haiku is writing its Briefing.
+    await clock.settle()
+    await clock.advance(HAIKU_MS / 2)
+    await run($, 'mattpocock-skills:implement', '#20')
+    await clock.advance(HAIKU_MS)
+
+    expect(briefings).toHaveLength(1)
+    expect((await run($, 'sage')).text).toContain('no Question for you')
+    expect(toasts.some(text => text.startsWith('Quest Giver:'))).toBe(false)
+
+    await startQuest($, clock, '#19')
+
+    expect(briefings).toHaveLength(1)
+    expect((await run($, 'sage')).text).toContain('The Quest Giver asks')
   })
 
   test('its Question is paid as a Sage Question: 20 XP to its Stat tag', async ($, on) => {

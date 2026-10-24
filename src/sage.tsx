@@ -9,7 +9,7 @@
 import type { EngineInterface, RenderInput, RenderNode } from 'claude-code'
 
 import type { GameState, Npc, Question, QuestionAnswer } from '../types'
-import { npcOf, QUESTION_XP, statOf, TICKET_SOURCE } from './engine'
+import { isAboutTicket, npcOf, QUESTION_XP, statOf } from './engine'
 import { portraitSvg } from './scene-art'
 import type { SpriteName } from './sprites'
 
@@ -21,22 +21,13 @@ export const NPC_NAMES: Record<Npc, string> = {
 }
 
 /**
- * Each NPC's portrait: the Sage's and the Quest Giver's own tiles; the
+ * Each NPC's portrait tile: the Sage's and the Quest Giver's own; the
  * Cartographer, who has no tile yet, borrows the Sage's.
  */
-export const portraitOf = (npc: Npc): SpriteName => {
-  switch (npc) {
-    case 'sage':
-      return 'sage'
-    case 'quest-giver':
-      return 'questGiver'
-    case 'cartographer':
-      return 'sage'
-  }
-}
+const PORTRAITS: Record<Npc, SpriteName> = { sage: 'sage', 'quest-giver': 'questGiver', cartographer: 'sage' }
 
-/** Whether a Question is about the ticket itself (the Briefing's): no file, no lines. */
-const isAboutTicket = (question: Question): boolean => question.source.path === TICKET_SOURCE
+/** The portrait `npc` is drawn with in the dialogue box. */
+export const portraitOf = (npc: Npc): SpriteName => PORTRAITS[npc]
 
 /** What a Question about the ticket says it points at, in place of a file. */
 const ABOUT_TICKET = "About the Quest's ticket"

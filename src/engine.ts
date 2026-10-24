@@ -957,6 +957,10 @@ export const MAX_SUMMARY_CHARS = 1500
 /** Where a Question about the ticket itself points (the Briefing's): no file, no lines. */
 export const TICKET_SOURCE = '<ticket>'
 
+/** Whether `question` is about the ticket itself (the Briefing's), pointing at no file. */
+export const isAboutTicket = (question: Pick<QuestionContent, 'source'>): boolean =>
+  question.source.path === TICKET_SOURCE
+
 /** Who asks `question`: its Npc, the Sage for one queued before other NPCs asked. */
 export const npcOf = (question: Pick<Question, 'npc'>): Npc =>
   question.npc === 'quest-giver' || question.npc === 'cartographer' ? question.npc : 'sage'
@@ -1233,7 +1237,7 @@ const showQuestion = (
  * points at no lines but asks for the ticket read: it is non-trivial.
  */
 const isHasty = (question: Question, answerMs: number | null, rules: Rules): boolean =>
-  (question.source.path === TICKET_SOURCE || question.source.lines.length >= rules.nonTrivialLines) &&
+  (isAboutTicket(question) || question.source.lines.length >= rules.nonTrivialLines) &&
   (answerMs === null || answerMs < rules.hastyAnswerMs)
 
 // A right answer pays QUESTION_XP to the Question's Stat (Wisdom for a
