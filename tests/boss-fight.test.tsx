@@ -562,7 +562,9 @@ describe('The Boss Fight', () => {
 
     expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('The boss of Quest #12')
     expect((await ui.find({ type: 'Code' }))?.text).toBe('  if (vault.locked) {\n    throw new Error("The vault is locked")')
+    // Headed by its Quest, the Quest Log a press away.
     expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual([
+      'Quest Log',
       'A. It throws',
       'B. It adds the gold anyway',
       'C. It returns the vault unchanged',
@@ -607,7 +609,9 @@ describe('The Boss Fight', () => {
 
     const ui = await $.ui.mount({ ...BOSS, surface: 'desktop' })
     const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
-    expect(texts[0]).toBe('The boss of Quest #12 has fallen')
+    // The Quest's header, then the boss's.
+    expect(texts[0]).toBe('Quest #12')
+    expect(texts[1]).toBe('The boss of Quest #12 has fallen')
     expect(texts.some(text => /\d\/\d HP|Questions$/.test(text))).toBe(false)
     const portrait = await ui.find({ type: 'Svg' })
     expect(portrait?.props.alt).toBe('The boss of Quest #12 has fallen')

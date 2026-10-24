@@ -1,4 +1,4 @@
-import { atom, read, update } from 'claude-code'
+import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import { bossAnswerText, bossOutcomeText, bossQuestionText, bossStartText, drawBoss, NO_BOSS } from '../src/boss'
@@ -12,7 +12,7 @@ import {
   REVIEW_QUESTION_COUNT,
 } from '../src/content-generator'
 import type { Model, ModelFailure, QuestionInput, TicketContext } from '../src/content-generator'
-import { callName, isExhausted, isUnderWay, newGame, PROPHECY_CALLS, step, summonedChanges } from '../src/engine'
+import { callName, isExhausted, isUnderWay, newGame, PROPHECY_CALLS, questProgressOf, step, summonedChanges } from '../src/engine'
 import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, Npc, ProphecyCall, QuestionContent, Rules } from '../src/engine'
 import { badgesText, drawHud } from '../src/hud'
 import type { HudActions } from '../src/hud'
@@ -24,6 +24,7 @@ import {
   pruneStaleQuests,
   readRegionFile,
   recordModulesDiscovered,
+  recordsOf,
   recordQuestAbandoned,
   recordQuestClosed,
   recordQuestStarted,
@@ -31,6 +32,17 @@ import {
 } from '../src/persistence'
 import { drawQuestBoard, implementCommandOf, isImplementDraft, noFilters, PREFERRED_IMPLEMENT } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
+import {
+  drawEmptyQuestLog,
+  drawQuestHeader,
+  drawQuestLog,
+  NO_ACTIVE_QUEST,
+  NOT_A_TICKET,
+  QUEST_LOG,
+  questArgOf,
+  scrollExcerptOf,
+} from '../src/quest-log'
+import type { QuestHeader, QuestLogActions } from '../src/quest-log'
 import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
 import { resolveQuestSource } from '../src/quest-source-setting'
@@ -41,7 +53,8 @@ import { drawScene } from '../src/scene'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
-import type { QuestBoard, QuestCard, QuestSourceSetting, XpPool } from '../types'
+import type { QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketDetails, TicketFetch, XpPool } from '../types'
+import type { Sourced } from '../src/quest-source'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
@@ -67,6 +80,19 @@ const questionCache = atom(
   { plugin: 'quest-mod', key: 'questionCache' } as const,
   [] as QuestionCache,
 )
+
+/** The Quest Log pane: the ticket it shows, and that ticket's Region file history read as it opened. */
+const questLog = atom({ plugin: 'quest-mod', key: 'questLog' } as const, { ticket: null, history: [] } satisfies QuestLog)
+
+/**
+ * A ticket's details as fetched this session (TicketFetch), by its ticket:
+ * fetched once per ticket per session by the Quest Log, the Quest Board's
+ * Unroll or the ticket lookup, whichever comes first, and read by the others.
+ */
+const ticketDetails = { plugin: 'quest-mod', key: 'ticketDetails' } as const
+
+/** The Quest Giver's briefing of a ticket (`{ text }`), which the Briefing (#19) writes and the Quest Log shows. */
+const briefing = { plugin: 'quest-mod', key: 'briefing' } as const
 
 /** Whether the Scene has opened itself this session: it does so once at most. */
 const sceneOpened = atom({ plugin: 'quest-mod', key: 'sceneOpened' } as const, false)
@@ -642,11 +668,87 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
   refresh: () => {
     void listQuests($)
   },
+  // Unrolled, the card shows the start of its description: fetched now, once.
   select: ticket => {
     void update($, board, current => ({ ...current, selected: ticket }))
+    if (ticket !== null) {
+      void fetchTicket($, ticket).catch(() => undefined)
+    }
   },
   page: page => {
     void update($, board, current => ({ ...current, page }))
+  },
+  readMore: ticket => {
+    void openQuestLog($, ticket).catch(() => undefined)
+  },
+})
+
+/**
+ * Fetches `ticket`'s details from the Region's Quest Source into `$.state`,
+ * once per ticket per session: nothing when they are fetched, or being
+ * fetched, already; again when the source could not be reached, or when
+ * `isForced` (the log's Refresh).
+ */
+async function fetchTicket($: EngineInterface, ticket: string, isForced = false): Promise<void> {
+  let isMine = false
+  await update($, memberOf(ticketDetails, { requestId: ticket }), (current): TicketFetch => {
+    isMine = isForced || current === undefined || current.state === 'unavailable'
+
+    return isMine ? { state: 'loading' } : (current ?? { state: 'loading' })
+  })
+  if (!isMine) {
+    return
+  }
+
+  // Any failure, the Quest Source not even resolved included, is told as
+  // unreachable: the ticket never stays `loading` for the session.
+  const got = await regionQuestSource($)
+    .then(({ source }) => source.get(ticket))
+    .catch((error: unknown): Sourced<TicketDetails | null> => ({
+      ok: false,
+      problem: { kind: 'unreachable', message: String(error) },
+    }))
+  await keepTicket($, ticket, got)
+}
+
+/** Keeps what fetching `ticket` found (its details, or why it could not be reached), for the Quest Log and the Quest Board's Scroll. */
+async function keepTicket($: EngineInterface, ticket: string, got: Sourced<TicketDetails | null>): Promise<void> {
+  const fetched: TicketFetch = got.ok ? { state: 'got', details: got.value } : { state: 'unavailable', problem: got.problem }
+  await update($, memberOf(ticketDetails, { requestId: ticket }), (): TicketFetch => fetched)
+}
+
+/**
+ * Opens the Quest Log on `ticket`: its Region file history read now, its
+ * details fetched (once per session). Only the Player opens it: /quest, the
+ * Quest Board's Read more, the Quest Log Buttons of the Sage and Boss panes.
+ */
+async function openQuestLog($: EngineInterface, ticket: string): Promise<{ isPlaced: boolean }> {
+  const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
+  const history = region.ok ? recordsOf(region.value, ticket) : []
+  await update($, questLog, (): QuestLog => ({ ticket, history }))
+  const opened = await $.ui.open(QUEST_LOG)
+  void fetchTicket($, ticket).catch(() => undefined)
+
+  return opened
+}
+
+/** What the Quest Log's buttons do. */
+const questLogActions = ($: EngineInterface, ticket: string): QuestLogActions => ({
+  // The Quest Board's own Take Quest: the same implement command, the same draft guard.
+  take: quest => {
+    void pickQuest($, quest).catch(() => undefined)
+  },
+  refresh: () => {
+    void fetchTicket($, ticket, true).catch(() => undefined)
+  },
+})
+
+/** The Quest header the Sage's and Boss's panes draw for `ticket`, its Quest Log a press away. */
+const questHeaderOf = ($: EngineInterface, ticket: string, title: string | undefined): QuestHeader => ({
+  ticket,
+  ...(title === undefined ? {} : { title }),
+  openLog: () => {
+    void openQuestLog($, ticket).catch(() => undefined)
   },
 })
 
@@ -661,7 +763,13 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
  */
 async function lookUpTicket($: EngineInterface, ticket: string, listed: boolean, rules: Rules): Promise<void> {
   const { source, setting } = await regionQuestSource($)
-  const got = await source.get(ticket)
+  // The Quest Log (or an unrolled Scroll) may have fetched the ticket this
+  // session already: its details are taken rather than asked again. The
+  // lookup's own answer is kept for them in turn, description and all.
+  const kept = await read($, memberOf(ticketDetails, { requestId: ticket }))
+  const got: Awaited<ReturnType<typeof source.get>> =
+    kept?.state === 'got' && kept.details !== null ? { ok: true, value: kept.details } : await source.get(ticket)
+  await keepTicket($, ticket, got)
 
   if (!got.ok) {
     $.ui.log(`Could not look ${ticket} up in its Quest Source: ${got.problem.message}`, { to: 'debug' })
@@ -842,7 +950,7 @@ async function playOne($: EngineInterface, event: GameEvent, rules: Rules): Prom
       await recordQuestAbandoned($, effect.ticket)
     }
     if (effect.type === 'QUEST_STARTED') {
-      $.ui.toast(`Quest started: ${effect.ticket}`)
+      $.ui.toast(`Quest started: ${effect.ticket} · /quest for the brief`)
       await recordQuestStarted($, effect.ticket)
     }
     if (effect.type === 'BOSS_FIGHT_SUMMONED') {
@@ -954,6 +1062,13 @@ export const register: Register = (on, options) => {
       .register({
         name: 'prophecy',
         description: 'Call the armed Prophecy: /prophecy red, green or rout',
+      })
+      .catch(() => undefined)
+    await $.command
+      .register({
+        name: 'quest',
+        description: 'Open the Quest Log: the active Quest\'s ticket, description and progress; /quest #N for any ticket',
+        argumentHint: '[#N | ABC-123]',
       })
       .catch(() => undefined)
     await $.command
@@ -1156,6 +1271,30 @@ export const register: Register = (on, options) => {
     return { text: `You call it: ${callName(call)}. The next Check will tell.` }
   })
 
+  // /quest opens the active Quest's log; /quest #N (or a Jira key) any ticket's.
+  on('command.run', { command: 'quest' }, async ($, e) => {
+    const arg = questArgOf(e.args)
+    if (arg.kind === 'invalid') {
+      return { text: NOT_A_TICKET }
+    }
+
+    const quest = (await read($, game))?.quest ?? null
+    const ticket = arg.kind === 'ticket' ? arg.ticket : quest?.ticket
+    if (ticket === undefined) {
+      return { text: NO_ACTIVE_QUEST }
+    }
+
+    const opened = await openQuestLog($, ticket)
+    const title = quest?.ticket === ticket ? quest.title : (await listedCard($, ticket))?.title
+    const named = `${ticket}${title === undefined ? '' : ` ${title}`}`
+
+    return {
+      text: opened.isPlaced
+        ? `Quest Log opened: ${named}.`
+        : `Quest Log opened: ${named}. It shows once the window is wide enough.`,
+    }
+  })
+
   on('command.run', { command: 'badges' }, async $ => {
     const player = (await read($, game))?.player ?? (await loadPlayer($))
 
@@ -1212,9 +1351,41 @@ export const register: Register = (on, options) => {
     // Vitals are a reading: a failed one leaves the last on the HUD.
     .catch(($, e, next) => next(e))
 
-  on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) =>
-    drawQuestBoard($, e, await read($, board), boardActions($), (await read($, game))?.player ?? null),
-  )
+  on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) => {
+    const shown = await read($, board)
+    // The unrolled card's excerpt of its description, as fetched on Unroll.
+    const excerpt = shown.selected == null ? undefined : scrollExcerptOf(await read($, memberOf(ticketDetails, { requestId: shown.selected })))
+
+    return drawQuestBoard($, e, shown, boardActions($), (await read($, game))?.player ?? null, excerpt)
+  })
+
+  // The Quest Log draws what is already kept: the fetch, the game, the
+  // briefing. It fetches nothing itself, and never opens itself.
+  on('ui.render', { component: 'Pane', requestId: QUEST_LOG.id }, async ($, e) => {
+    const { ticket, history } = await read($, questLog)
+    if (ticket === null) {
+      return drawEmptyQuestLog($, e)
+    }
+
+    const current = await read($, game)
+    const quest = current?.quest?.ticket === ticket ? current.quest : null
+    const briefed = await read($, memberOf(briefing, { requestId: ticket }))
+
+    return drawQuestLog(
+      $,
+      e,
+      {
+        ticket,
+        fetch: await read($, memberOf(ticketDetails, { requestId: ticket })),
+        listed: await listedCard($, ticket),
+        quest,
+        progress: quest === null || current === null ? null : questProgressOf(current),
+        history,
+        briefing: typeof briefed?.text === 'string' && briefed.text.trim() !== '' ? briefed.text : null,
+      },
+      questLogActions($, ticket),
+    )
+  })
 
   // The Scene draws what the game already holds: it never runs in a tool
   // call, so it never slows one.
@@ -1241,18 +1412,32 @@ export const register: Register = (on, options) => {
       })
     }
 
+    const quest = current?.quest ?? null
+
     return drawSage(
       $,
       e,
       { questions: current?.questions ?? [], lastAnswer: current?.lastAnswer ?? null },
       sageActions($, rules),
+      quest === null ? null : drawQuestHeader($, e, questHeaderOf($, quest.ticket, quest.title)),
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: BOSS.id }, async ($, e) => {
     const current = await read($, game)
+    const fight = current?.bossFight ?? null
+    // The Quest the fight ends, or ended: the active one's, else the fight's own ticket.
+    const ticket = fight?.ticket ?? current?.quest?.ticket
+    const title = current?.quest?.ticket === ticket ? current?.quest?.title : undefined
 
-    return drawBoss($, e, current?.bossFight ?? null, bossActions($, rules), current !== null && isExhausted(current.player))
+    return drawBoss(
+      $,
+      e,
+      fight,
+      bossActions($, rules),
+      current !== null && isExhausted(current.player),
+      ticket === undefined ? null : drawQuestHeader($, e, questHeaderOf($, ticket, title)),
+    )
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

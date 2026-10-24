@@ -6,7 +6,7 @@
 // Question shown names who asks it (npcOf), and the box takes that NPC's
 // portrait and name.
 
-import type { EngineInterface, RenderInput, RenderNode } from 'claude-code'
+import type { EngineInterface, RenderChildren, RenderInput, RenderNode } from 'claude-code'
 
 import type { GameState, Npc, Question, QuestionAnswer } from '../types'
 import { isAboutTicket, npcOf, QUESTION_XP, statOf } from './engine'
@@ -104,6 +104,8 @@ export function drawSage(
   e: RenderInput<'Pane'>,
   { questions, lastAnswer }: Pick<GameState, 'questions' | 'lastAnswer'>,
   actions: SageActions,
+  /** The active Quest's one-line header (src/quest-log.tsx drawQuestHeader), above the box; none between Quests. */
+  header: RenderChildren = null,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text, Button, Code } = elements
@@ -152,14 +154,21 @@ export function drawSage(
   // when nobody waits.
   const shown = lastAnswer?.question ?? first
 
-  return drawDialogue($, e, shown === undefined ? 'sage' : npcOf(shown), body)
+  return drawDialogue($, e, shown === undefined ? 'sage' : npcOf(shown), body, header)
 }
 
 /**
  * The dialogue box around `body`, spoken by `npc`: their name above it, and
- * their portrait beside it where the surface draws SVG.
+ * their portrait beside it where the surface draws SVG. `header` (the active
+ * Quest's one-line header) goes above the whole box when there is one.
  */
-export function drawDialogue($: EngineInterface, e: RenderInput<'Pane'>, npc: Npc, body: RenderNode) {
+export function drawDialogue(
+  $: EngineInterface,
+  e: RenderInput<'Pane'>,
+  npc: Npc,
+  body: RenderNode,
+  header: RenderChildren = null,
+) {
   const elements = $.ui.resolve(e)
   const { Box, Text } = elements
   const name = NPC_NAMES[npc]
@@ -173,6 +182,7 @@ export function drawDialogue($: EngineInterface, e: RenderInput<'Pane'>, npc: Np
   if (e.surface === 'terminal' || !('Svg' in elements)) {
     return (
       <Box flexDirection="column" gap={1}>
+        {header}
         {heading}
         {body}
       </Box>
@@ -181,13 +191,22 @@ export function drawDialogue($: EngineInterface, e: RenderInput<'Pane'>, npc: Np
 
   const { Svg } = elements
 
-  return (
+  const box = (
     <Box flexDirection="row" gap={2}>
       <Svg source={portraitSvg(portraitOf(npc), PORTRAIT_WIDTH)} alt={name} />
       <Box flexDirection="column" gap={1}>
         {heading}
         {body}
       </Box>
+    </Box>
+  )
+
+  return header === null ? (
+    box
+  ) : (
+    <Box flexDirection="column" gap={1}>
+      {header}
+      {box}
     </Box>
   )
 }

@@ -134,6 +134,22 @@ export function questSourceContract(harness: ContractHarness): void {
       expect(result.ok && result.value?.summary).toContain('10% off.')
     })
 
+    test("gets a ticket's whole description beside its summary, however long", async () => {
+      const long = `${'The Quest Log shows it all. '.repeat(300)}The end.`
+      const result = await source({ tickets: [{ n: 5, title: 'Five', description: long }] }).get(ticket(5))
+      const details = result.ok ? result.value : null
+
+      expect(details?.description?.startsWith('The Quest Log shows it all.')).toBe(true)
+      expect(details?.description?.endsWith('The end.')).toBe(true)
+      expect(details?.summary?.length ?? 0).toBeLessThan(details?.description?.length ?? 0)
+    })
+
+    test('a ticket with no description gets none', async () => {
+      const result = await source({ tickets: [{ n: 5, title: 'Five' }] }).get(ticket(5))
+
+      expect(result.ok && result.value?.description).toBeFalsy()
+    })
+
     test('gets one Quest by its reference', async () => {
       const result = await source({
         tickets: [

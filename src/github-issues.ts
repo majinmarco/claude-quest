@@ -7,6 +7,7 @@ import type { ProcessRunResult } from 'claude-code'
 import {
   difficultyOf,
   LISTING_CAP,
+  markdownOf,
   plainTextOf,
   pointsFromLabels,
   sizeFromLabels,
@@ -54,10 +55,17 @@ const asQuest = (issue: GhIssue): QuestCard => {
   }
 }
 
+// The body is Markdown, as GitHub writes and draws it: the description keeps
+// it so; the summary, Haiku's, is its plain text.
 const asDetails = (issue: GhIssue): TicketDetails => {
   const summary = plainTextOf(issue.body)
+  const description = markdownOf(issue.body)
 
-  return { ...asQuest(issue), ...(summary === undefined ? {} : { summary }) }
+  return {
+    ...asQuest(issue),
+    ...(summary === undefined ? {} : { summary }),
+    ...(description === undefined ? {} : { description, descriptionFormat: 'markdown' as const }),
+  }
 }
 
 /** The first line gh wrote to say what went wrong. */

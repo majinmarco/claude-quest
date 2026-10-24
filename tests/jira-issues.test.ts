@@ -343,7 +343,10 @@ describe('Jira adapter', () => {
         : answered({})
     const result = await jiraIssues(described, { ...SETTINGS, site: SITE }).get('QUEST-7')
 
-    expect(result).toMatchObject({ ok: true, value: { summary: 'Orders of 10 or more.\nGet 10% off.' } })
+    expect(result).toMatchObject({
+      ok: true,
+      value: { summary: 'Orders of 10 or more.\nGet 10% off.', description: 'Orders of 10 or more.\nGet 10% off.', descriptionFormat: 'text' },
+    })
   })
 
   test('a description the server wrote as HTML is read as its text', async () => {

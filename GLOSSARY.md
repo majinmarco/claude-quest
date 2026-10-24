@@ -85,15 +85,15 @@ Where Quests come from: a Jira project or a repo's GitHub Issues, as the Region 
 _Avoid_: Tracker, backlog, provider
 
 **Quest Log**:
-The pane (`/quest`, `/quest <ticket>`) showing all the game knows of one Quest: its Scroll unrolled at full width, its ticket's whole description, the Quest Giver's briefing, and, for the Quest under way, its progress (Encounters, Questions, the Boss, XP earned by XP pool against each cap). It never opens itself.
+The pane (`/quest` for the Quest under way, `/quest #N` or `/quest ABC-123` for any ticket) showing all the game knows of one Quest: its Scroll unrolled at full width with the ticket's link, its ticket's whole description (a GitHub issue's as Markdown, a Jira one's as plain text; cut at 8000 characters), the Quest Giver's Briefing once there is one, and, for the Quest under way, its progress (when it started and was taken up again, Encounters, Questions right and wrong, the Boss, XP earned by XP pool against each cap); for a Quest not under way, Take Quest while its ticket is open and its runs in the Region file. A ticket is fetched once per session, shared with the Ticket lookup. It never opens itself: `/quest`, the Quest Board's Read more and the Quest Log Button heading the Sage's and the boss's panes open it.
 _Avoid_: Ticket view, details pane
 
 **Quest Board**:
-The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, each a Scroll, six to a page, under a red ribbon and a header of the Player's trophies and Badges. Take Quest on a card fills the prompt with the session's implement command in one click, never over a draft the Player is writing; Unroll beside it opens the Scroll. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
+The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, each a Scroll, six to a page, under a red ribbon and a header of the Player's trophies and Badges. Take Quest on a card fills the prompt with the session's implement command in one click, never over a draft the Player is writing; Unroll beside it opens the Scroll, and Read more its Quest Log. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
 _Avoid_: Ticket list, backlog view
 
 **Scroll**:
-A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: a `?` alone, no gems); unrolled, the title whole (up to three lines), the Quest reward, recommended Stats, status and tags. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
+A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: a `?` alone, no gems); unrolled, the title whole (up to three lines), the first 300 characters of its description as plain text, the Quest reward, recommended Stats, status and tags. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
 _Avoid_: Card art, tile
 
 **Tag**:
@@ -101,7 +101,7 @@ A ticket's triage label (`needs-triage`, `needs-info`, `ready-for-agent`, `ready
 _Avoid_: Label (outside a Quest Source)
 
 **Ticket lookup**:
-After a Quest starts, its ticket is looked up in the Quest Source, unawaited: its title (shown on the HUD), its description as plain text for Haiku, its difficulty when it started Unrated, and whether it was found. A ticket not found runs Unrated and pays no Quest reward (said in a toast); a Quest Source that cannot be reached leaves the Quest and its reward as they were (tried again when the ticket is started again).
+After a Quest starts, its ticket is looked up in the Quest Source, unawaited (or taken from the Quest Log's fetch of it this session): its title (shown on the HUD), its description as plain text for Haiku and whole for the Quest Log, its difficulty when it started Unrated, and whether it was found. A ticket not found runs Unrated and pays no Quest reward (said in a toast); a Quest Source that cannot be reached leaves the Quest and its reward as they were (tried again when the ticket is started again).
 _Avoid_: Sync
 
 **Region file**:

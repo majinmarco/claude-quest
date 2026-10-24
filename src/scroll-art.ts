@@ -239,10 +239,10 @@ const glyphPath = (rows: readonly string[]): string =>
     })
     .join('')
 
-/** A roller across the card at `y`: the rod's rounded caps, its body between. */
-const roller = (canvas: Canvas, y: number): void => {
+/** A roller across a card `width` pixels wide at `y`: the rod's rounded caps, its body between. */
+const roller = (canvas: Canvas, y: number, width: number = WIDTH): void => {
   const left = 2
-  const right = WIDTH - 2
+  const right = width - 2
   // The cap's first two columns are clear: its rounded end starts on the third.
   canvas.sprite(SPRITES.rodCap, left - 2, y)
   for (let x = left + 12; x < right - 12; x += 16) {
@@ -261,12 +261,18 @@ const GEMS_RIGHT = RIGHT - 2
  * The difficulty at the card's right: five gems filled by difficulty, their
  * right end at GEMS_RIGHT; Unrated, a `?` alone in their place.
  */
-const difficultyMark = (canvas: Canvas, lettering: Lettering, difficulty: Difficulty, y: number): string => {
+const difficultyMark = (
+  canvas: Canvas,
+  lettering: Lettering,
+  difficulty: Difficulty,
+  y: number,
+  gemsRight: number = GEMS_RIGHT,
+): string => {
   if (difficulty === 'Unrated') {
-    return lettering.text('?', GEMS_RIGHT - pixelWidth('?'), y + 1, TICKET)
+    return lettering.text('?', gemsRight - pixelWidth('?'), y + 1, TICKET)
   }
   for (let at = 0; at < 5; at++) {
-    canvas.sprite(at < PIPS[difficulty] ? SPRITES.gem : SPRITES.gemEmpty, GEMS_RIGHT - (5 - at) * GEM, y)
+    canvas.sprite(at < PIPS[difficulty] ? SPRITES.gem : SPRITES.gemEmpty, gemsRight - (5 - at) * GEM, y)
   }
 
   return ''
@@ -275,16 +281,16 @@ const difficultyMark = (canvas: Canvas, lettering: Lettering, difficulty: Diffic
 /** How wide the difficulty is drawn: the five gems, or an Unrated `?`. */
 const difficultyWidth = (difficulty: Difficulty): number => (difficulty === 'Unrated' ? pixelWidth('?') : 5 * GEM)
 
-/** The paper between `top` and `bottom`, its edges shaded. */
-const paper = (canvas: Canvas, top: number, bottom: number): void => {
-  canvas.rect(LEFT, top, RIGHT - LEFT, bottom - top, PAPER)
+/** The paper between `top` and `bottom`, its edges shaded; its right edge at `right`. */
+const paper = (canvas: Canvas, top: number, bottom: number, right: number = RIGHT): void => {
+  canvas.rect(LEFT, top, right - LEFT, bottom - top, PAPER)
   canvas.rect(LEFT, top, 1, bottom - top, EDGE)
-  canvas.rect(RIGHT - 1, top, 1, bottom - top, EDGE_DARK)
+  canvas.rect(right - 1, top, 1, bottom - top, EDGE_DARK)
 }
 
-/** The art as an SVG document, `height` pixels tall, drawn at twice its size. */
-const svgOf = (height: number, body: string): string =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${height}" width="${WIDTH * SCALE}" height="${height * SCALE}" shape-rendering="crispEdges">${body}</svg>`
+/** The art as an SVG document, `width` by `height` pixels, drawn at twice its size. */
+const svgOf = (height: number, body: string, width: number = WIDTH): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width * SCALE}" height="${height * SCALE}" shape-rendering="crispEdges">${body}</svg>`
 
 /**
  * What an unrolled card says under its title, a line each: its difficulty
@@ -302,7 +308,8 @@ export const cardDetails = (card: QuestCard, xp: number): string[] => {
 }
 
 /** The pixels left for a card's head line, 3 before its gems (or an Unrated `?`). */
-const headRoom = (difficulty: Difficulty): number => GEMS_RIGHT - difficultyWidth(difficulty) - 3 - TEXT_X
+const headRoom = (difficulty: Difficulty, gemsRight: number = GEMS_RIGHT): number =>
+  gemsRight - difficultyWidth(difficulty) - 3 - TEXT_X
 
 /** A rolled card: a strip between two rollers. */
 const rolledCard = (card: QuestCard): string => {
@@ -324,61 +331,105 @@ const rolledCard = (card: QuestCard): string => {
   return svgOf(ROLLED_HEIGHT, lettering.defs() + canvas.svg() + text)
 }
 
+/**
+ * How an unrolled card is drawn: `width` pixels across (192, the board's),
+ * its title in up to `titleLines` lines, an `excerpt` of its description
+ * under the title (up to `excerptLines` lines), `extra` lines after its
+ * details, and whether it unrolls as it is first drawn.
+ */
+type UnrolledOptions = {
+  width?: number
+  titleLines?: number
+  excerpt?: string
+  excerptLines?: number
+  extra?: readonly string[]
+  isAnimated?: boolean
+}
+
 /** An unrolled card: the whole card, unrolling once. */
-const unrolledCard = (card: QuestCard, xp: number): string => {
+const unrolledCard = (
+  card: QuestCard,
+  xp: number,
+  { width = WIDTH, titleLines = 3, excerpt, excerptLines = 9, extra = [], isAnimated = true }: UnrolledOptions = {},
+): string => {
   const canvas = new Canvas()
   const lettering = new Lettering()
+  const right = width - 6
+  const textWidth = right - LEFT - 6
+  const gemsRight = right - 2
   const headY = 12
-  const title = wrapPixelText(card.title, TEXT_WIDTH, 3)
-  const details = cardDetails(card, xp).map(line => truncate(line, TEXT_WIDTH))
+  const title = wrapPixelText(card.title, textWidth, titleLines)
+  const excerptRows = excerpt === undefined || excerpt === '' ? [] : wrapPixelText(excerpt, textWidth, excerptLines)
+  const details = [...cardDetails(card, xp), ...extra].map(line => truncate(line, textWidth))
   const titleY = headY + 12
-  const divider = titleY + title.length * LINE + 2
+  const excerptY = titleY + title.length * LINE + (excerptRows.length === 0 ? 0 : 3)
+  const divider = excerptY + excerptRows.length * LINE + 2
   const detailsY = divider + 5
   const paperBottom = detailsY + details.length * LINE + 4
   const height = paperBottom + ROLLER
 
-  paper(canvas, 8, paperBottom)
-  for (let x = TEXT_X; x < TEXT_X + TEXT_WIDTH; x += 3) {
+  paper(canvas, 8, paperBottom, right)
+  for (let x = TEXT_X; x < TEXT_X + textWidth; x += 3) {
     canvas.set(x, divider, EDGE)
   }
-  roller(canvas, 0)
-  const mark = difficultyMark(canvas, lettering, card.difficulty, headY - 1)
-  const room = headRoom(card.difficulty)
+  roller(canvas, 0, width)
+  const mark = difficultyMark(canvas, lettering, card.difficulty, headY - 1, gemsRight)
+  const room = headRoom(card.difficulty, gemsRight)
   const text =
     lettering.text(truncate(`Quest ${card.ticket}`, room), TEXT_X, headY, TICKET) +
     mark +
     title.map((line, at) => lettering.text(line, TEXT_X, titleY + at * LINE, INK)).join('') +
+    excerptRows.map((line, at) => lettering.text(line, TEXT_X, excerptY + at * LINE, EDGE_DARK)).join('') +
     details.map((line, at) => lettering.text(line, TEXT_X, detailsY + at * LINE, at === 0 ? TICKET : INK)).join('')
 
   const bottom = new Canvas()
-  roller(bottom, 0)
+  roller(bottom, 0, width)
+  const rest = paperBottom - 2
+
+  if (!isAnimated) {
+    return svgOf(height, lettering.defs() + canvas.svg() + text + `<g transform="translate(0 ${rest})">${bottom.svg()}</g>`, width)
+  }
 
   // The paper unrolls: a clip growing in steps from a rolled card's height,
   // the bottom roller going down with it. The resting values are the open
   // card's, so a viewer without SMIL draws it open.
-  const rest = paperBottom - 2
   const from = ROLLED_HEIGHT - ROLLER
   const steps = Array.from({ length: UNROLL_STEPS + 1 }, (_, at) => Math.round(from + ((rest - from) * at) / UNROLL_STEPS))
   const timing = `calcMode="discrete" dur="${UNROLL_SECONDS}s" fill="freeze"`
   const body =
-    `<clipPath id="unroll"><rect width="${WIDTH}" height="${rest + 2}">` +
+    `<clipPath id="unroll"><rect width="${width}" height="${rest + 2}">` +
     `<animate attributeName="height" values="${steps.map(y => y + 2).join(';')}" ${timing}/></rect></clipPath>` +
     `<g clip-path="url(#unroll)">${canvas.svg()}${text}</g>` +
     `<g transform="translate(0 ${rest})">${bottom.svg()}` +
     `<animateTransform attributeName="transform" type="translate" values="${steps.map(y => `0 ${y}`).join(';')}" ${timing}/></g>`
 
-  return svgOf(height, lettering.defs() + body)
+  return svgOf(height, lettering.defs() + body, width)
 }
 
 /**
  * A Quest card as a scroll, an SVG document 384 CSS pixels wide. Rolled: its
  * ticket and title on one strip, the title cut to fit, and its difficulty as
  * five gems (Unrated: a `?` alone). Unrolled: `Quest #6` and the
- * gems, the title in up to three lines, then its difficulty and Quest reward
- * (`xp`), Stats, status and tags; it unrolls once as it is first drawn.
+ * gems, the title in up to three lines, the `excerpt` of its description
+ * when given, then its difficulty and Quest reward (`xp`), Stats, status and
+ * tags; it unrolls once as it is first drawn.
  */
-export const scrollCardSvg = (card: QuestCard, { unrolled, xp }: { unrolled: boolean; xp: number }): string =>
-  unrolled ? unrolledCard(card, xp) : rolledCard(card)
+export const scrollCardSvg = (
+  card: QuestCard,
+  { unrolled, xp, excerpt }: { unrolled: boolean; xp: number; excerpt?: string },
+): string => (unrolled ? unrolledCard(card, xp, excerpt === undefined ? {} : { excerpt }) : rolledCard(card))
+
+/** The Quest Log's Scroll, in its own pixels across: 320, drawn 640 CSS pixels wide. */
+export const LOG_SCROLL_WIDTH = 320
+
+/**
+ * The Quest Log's Scroll: the card unrolled at full width, LOG_SCROLL_WIDTH
+ * pixels across, its title whole (up to six lines), then its difficulty and
+ * Quest reward, Stats, status, tags and `extra` lines (its Dungeon, when
+ * known). Drawn open, with no unroll: the log redraws as the Quest goes on.
+ */
+export const questLogScrollSvg = (card: QuestCard, { xp, extra = [] }: { xp: number; extra?: readonly string[] }): string =>
+  unrolledCard(card, xp, { width: LOG_SCROLL_WIDTH, titleLines: 6, extra, isAnimated: false })
 
 /** The board's header: a red ribbon, `label` across its middle. */
 export const boardHeaderSvg = (label: string): string => {

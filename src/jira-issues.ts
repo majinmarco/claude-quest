@@ -14,6 +14,7 @@ import {
   sizeFromLabels,
   statsOf,
   triageTagsOf,
+  wholePlainTextOf,
 } from './quest-source'
 import type { QuestCard, QuestSource, QuestSourceProblem, Sourced, TicketDetails } from './quest-source'
 import type { JiraSettings } from '../types'
@@ -92,10 +93,17 @@ const asQuest = (issue: JiraIssue, field: string | undefined): QuestCard => {
   }
 }
 
+// The description as plain text, whole (ADF flattened, HTML's tags taken
+// out): the Quest Log's; the summary, Haiku's, is its start.
 const asDetails = (issue: JiraIssue, field: string | undefined): TicketDetails => {
   const summary = plainTextOf(issue.fields?.description)
+  const description = wholePlainTextOf(issue.fields?.description)
 
-  return { ...asQuest(issue, field), ...(summary === undefined ? {} : { summary }) }
+  return {
+    ...asQuest(issue, field),
+    ...(summary === undefined ? {} : { summary }),
+    ...(description === undefined ? {} : { description, descriptionFormat: 'text' as const }),
+  }
 }
 
 /** What a call answered: its JSON, or why it failed and Jira's status code. */
