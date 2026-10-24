@@ -13,6 +13,7 @@ type GhIssue = {
   url: string
   state?: 'OPEN' | 'CLOSED'
   body?: string
+  milestone?: { number: number; title: string; description: string; dueOn: string | null } | null
 }
 
 const ran = (exitCode: number, stdout: string, stderr = ''): ProcessRunResult => ({
@@ -55,9 +56,10 @@ const fakeGh = (issues: GhIssue[]) => {
       Object.fromEntries(fields.map(field => [field, issue[field as keyof GhIssue]]))
 
     if (verb === 'list') {
-      const open = issues.filter(issue => issue.state !== 'CLOSED')
+      const state = rest[rest.indexOf('--state') + 1]
+      const shown = issues.filter(issue => (issue.state === 'CLOSED') === (state === 'closed'))
 
-      return ran(0, JSON.stringify(open.map(pick)))
+      return ran(0, JSON.stringify(shown.map(pick)))
     }
 
     if (verb === 'view') {
@@ -88,6 +90,16 @@ const asIssue = (ticket: ContractTicket): GhIssue => ({
     ...(ticket.triage === undefined ? [] : [ticket.triage]),
   ].map(name => ({ name })),
   ...(ticket.description === undefined ? {} : { body: ticket.description }),
+  ...(ticket.closed === true ? { state: 'CLOSED' as const } : {}),
+  milestone: ticket.epic === undefined ? null : milestoneOf(ticket.epic),
+})
+
+/** A milestone named `title`, its number made from its name, as gh writes one. */
+const milestoneOf = (title: string) => ({
+  number: ([...title].reduce((sum, letter) => sum * 31 + letter.charCodeAt(0), 7) % 997) + 1,
+  title,
+  description: '',
+  dueOn: null,
 })
 
 const failing = (failure: Extract<ContractWorld, { failure: unknown }>['failure']) =>
@@ -137,6 +149,19 @@ describe('GitHub Issues adapter', () => {
 
     expect(gh.calls).toHaveLength(1)
     expect(gh.calls[0]?.slice(0, 5)).toEqual(['gh', 'issue', 'list', '--state', 'open'])
+  })
+
+  test('asks gh for the milestone in both listings and in a lookup, and lists closed issues by state', async () => {
+    const gh = fakeGh([issue([])])
+    const source = githubIssues(gh.run)
+    await source.list()
+    await source.listClosed()
+    await source.get('#7')
+
+    for (const argv of gh.calls) {
+      expect(argv[argv.indexOf('--json') + 1]?.split(',')).toContain('milestone')
+    }
+    expect(gh.calls[1]?.slice(0, 7)).toEqual(['gh', 'issue', 'list', '--state', 'closed', '--limit', '200'])
   })
 
   test('carries the issue URL', async () => {

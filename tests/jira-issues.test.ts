@@ -20,6 +20,8 @@ type JiraIssue = {
     description?: string
     /** Custom fields by their label on the site, as the Atlassian MCP maps them. */
     customFields?: Record<string, { id: string; value: unknown }>
+    /** The issue's parent: an epic, or a story for a subtask. */
+    parent?: { id: string; key: string; fields: { summary: string; issuetype: { name: string; subtask: boolean } } }
   }
 }
 
@@ -63,7 +65,8 @@ const fakeAtlassian = (issues: JiraIssue[], { pageSize = 100 } = {}) => {
     }
 
     if (tool === 'searchJiraIssuesUsingJql') {
-      const open = issues.filter(issue => issue.fields.status.statusCategory.key !== 'done')
+      const isDone = /statusCategory = Done/.test(String(args.jql))
+      const open = issues.filter(issue => (issue.fields.status.statusCategory.key === 'done') === isDone)
       const from = Number(args.nextPageToken ?? 0)
       const page = open.slice(from, from + pageSize)
       const hasNextPage = from + pageSize < open.length
@@ -105,13 +108,27 @@ const asIssue = (ticket: ContractTicket): JiraIssue => ({
       ...(ticket.triage === undefined ? [] : [ticket.triage]),
     ],
     issuetype: { name: ticket.kind === undefined ? 'Task' : KIND_TYPE[ticket.kind] },
-    status: { name: ticket.status ?? 'To Do', statusCategory: { key: 'new' } },
+    status: ticket.closed === true
+      ? { name: 'Done', statusCategory: { key: 'done' } }
+      : { name: ticket.status ?? 'To Do', statusCategory: { key: 'new' } },
+    ...(ticket.epic === undefined ? {} : { parent: epicOf(ticket.epic) }),
     ...(ticket.description === undefined ? {} : { description: ticket.description }),
     ...(ticket.points === undefined
       ? {}
       : { customFields: { 'Story point estimate': { id: POINTS_FIELD, value: ticket.points } } }),
   },
 })
+
+/** An epic named `summary` as an issue's parent, its key made from its name. */
+const epicOf = (summary: string) => {
+  const n = ([...summary].reduce((sum, letter) => sum * 31 + letter.charCodeAt(0), 7) % 997) + 1
+
+  return {
+    id: String(20000 + n),
+    key: `QUEST-${1000 + n}`,
+    fields: { summary, issuetype: { name: 'Epic', subtask: false } },
+  }
+}
 
 const SETTINGS: JiraSettings = { project: 'QUEST', storyPointsField: POINTS_FIELD }
 
@@ -204,6 +221,28 @@ describe('Jira adapter', () => {
     expect(atlassian.calls[1]?.args.jql).toBe(jql)
   })
 
+  test("a subtask's parent is its story, not an epic: the subtask is in the Wilds", async () => {
+    const story = { id: '1', key: 'QUEST-3', fields: { summary: 'A story', issuetype: { name: 'Story', subtask: false } } }
+    const [subtask] = await listed([issue({ issuetype: { name: 'Sub-task', subtask: true } as { name: string }, parent: story })])
+
+    expect(subtask?.dungeon).toBeUndefined()
+  })
+
+  test('an epic with no summary is named by its key', async () => {
+    const epic = { id: '1', key: 'QUEST-2', fields: { summary: '', issuetype: { name: 'Epic', subtask: false } } }
+    const [quest] = await listed([issue({ parent: epic })])
+
+    expect(quest?.dungeon).toEqual({ key: 'QUEST-2', name: 'QUEST-2' })
+  })
+
+  test("the closed listing asks for the project's done issues, whatever the JQL set", async () => {
+    const atlassian = fakeAtlassian([issue()])
+    await jiraIssues(atlassian.call, { ...SETTINGS, site: SITE, jql: 'project = QUEST AND sprint in openSprints()' }).listClosed()
+
+    expect(atlassian.calls[0]?.args.jql).toBe('project = "QUEST" AND statusCategory = Done ORDER BY updated DESC')
+    expect(atlassian.calls[0]?.args.fields).toContain('parent')
+  })
+
   test('carries the issue key, its browse URL and its status', async () => {
     const [quest] = await listed([issue()])
 
@@ -221,7 +260,7 @@ describe('Jira adapter', () => {
     const result = await jiraIssues(atlassian.call, { project: 'QUEST' }).list()
 
     expect(result).toMatchObject({ ok: true, value: [{ difficulty: 'Unrated' }] })
-    expect(atlassian.calls[1]?.args.fields).toEqual(['summary', 'status', 'labels', 'issuetype'])
+    expect(atlassian.calls[1]?.args.fields).toEqual(['summary', 'status', 'labels', 'issuetype', 'parent'])
   })
 
   test('story points set by the field id win over a points label', async () => {

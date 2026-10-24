@@ -294,7 +294,8 @@ const svgOf = (height: number, body: string, width: number = WIDTH): string =>
 
 /**
  * What an unrolled card says under its title, a line each: its difficulty
- * and Quest reward (`xp`), Stats, status, and tags beside the status.
+ * and Quest reward (`xp`), Stats, status, tags beside the status, and the
+ * Dungeon it is in.
  */
 export const cardDetails = (card: QuestCard, xp: number): string[] => {
   const tags = tagsOf(card)
@@ -304,6 +305,7 @@ export const cardDetails = (card: QuestCard, xp: number): string[] => {
     `Stats: ${card.recommendedStats.map(stat => STAT_ABBREVIATION[stat]).join(' ')}`,
     `Status: ${card.status}`,
     ...(tags.length === 0 ? [] : [`Tags: ${tags.map(tag => `#${tag}`).join(' ')}`]),
+    ...(card.dungeon === undefined ? [] : [`Dungeon: ${card.dungeon.name}`]),
   ]
 }
 

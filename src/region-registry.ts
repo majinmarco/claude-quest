@@ -255,11 +255,12 @@ export const remoteNameOf = (remote: string | null): string | null => {
 
 /**
  * What a Quest cleared, from its Quest card as the board listed it: its
- * Dungeon's key (`card.dungeon`, a key or `{ key }`), or the Wilds when the
- * card says it has none (null); null when the card says nothing of Dungeons.
+ * Dungeon's key (`card.dungeon`, `{ key, name }` as the Quest Sources write
+ * it, or a key), or the Wilds when the card has none (the sources leave
+ * `dungeon` out then); null when there is no card.
  */
 export const clearedOf = (card: unknown): Cleared | null => {
-  if (!isRecord(card) || !('dungeon' in card)) {
+  if (!isRecord(card)) {
     return null
   }
 

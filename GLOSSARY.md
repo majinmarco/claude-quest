@@ -39,16 +39,20 @@ One project's area of the World, shaped by that project's spec and named after i
 _Avoid_: Level, zone, project map
 
 **Region map**:
-The pane that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second view of the same pane. From it a Quest is started the way the Quest Board starts one. It never opens itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
+The pane (`/map`) that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second view of the same pane. From it a Quest is started the way the Quest Board starts one. It never opens itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
 _Avoid_: Minimap, level select
 
+**Overworld**:
+The Region map's first view: the Region's open land with a gate per Dungeon, a camp for the Wilds and Fog past the last of them, laid out from the Region's id and its Dungeons' keys so it is the same for every Player and every session. Choosing a gate or the camp opens its Floors.
+_Avoid_: World (that's every Region), level select
+
 **Dungeon**:
-One epic within a Region (a Jira ticket's parent, a GitHub milestone), drawn as Floors of Rooms; cleared when all its Quests are done.
+One epic within a Region (a Jira ticket's parent, never a subtask's; a GitHub milestone), drawn as Floors of Rooms; cleared when all its Quests are done, and then it flies a banner.
 _Avoid_: Epic (outside the Jira adapter), area
 
 **Wilds**:
 The part of a Region holding the Quests that belong to no Dungeon, drawn as camps on open land, and all of a Region whose Quest Source knows no epics. Its camps are Rooms in all but name.
-_Avoid_: Backlog, unassigned, overworld
+_Avoid_: Backlog, unassigned, overworld (that is the whole Region's view)
 
 **Room**:
 One Quest as a Dungeon draws it: dark when its ticket is still open, lit when cleared (its ticket closed in the Quest Source, or its Quest won here), showing its difficulty as the Scroll does. Choosing an open Room starts its Quest as Take Quest does.
@@ -93,11 +97,11 @@ The view listing the available Quests of the current Region, from which the Play
 _Avoid_: Ticket list, backlog view
 
 **Scroll**:
-A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: a `?` alone, no gems); unrolled, the title whole (up to three lines), the first 300 characters of its description as plain text, the Quest reward, recommended Stats, status and tags. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
+A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: a `?` alone, no gems); unrolled, the title whole (up to three lines), the first 300 characters of its description as plain text, the Quest reward, recommended Stats, status, tags and Dungeon. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
 _Avoid_: Card art, tile
 
 **Tag**:
-A ticket's triage label (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), shown on its Quest card beside its status; the Quest Board's status filter steps through statuses and tags alike. A GitHub issue, which has no status of its own, takes its first as its status.
+A ticket's triage label (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), shown on its Quest card beside its status; the Quest Board's status filter steps through statuses and tags alike, and the Quests' Dungeons after them. A GitHub issue, which has no status of its own, takes its first as its status.
 _Avoid_: Label (outside a Quest Source)
 
 **Ticket lookup**:

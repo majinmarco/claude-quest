@@ -25,6 +25,20 @@ as the board's header, and the gold and grey gems (76, 53) as the difficulty
 pips; the HUD's Quest banner stands the rod's tiles upright as its rollers. `scripts/build-sprites.mjs` bakes them into `src/sprites.ts` beside
 the Tiny Dungeon tiles.
 
+## Kenney: Tiny Town 1.1
+
+- Folder: `kenney-tiny-town/` (the packed tilesheet, `tilemap_packed.png` (SHA-256 `3a54d99ecde790d4fdea207a3644cf130fc56fa838f1beb1507c185a95b8e902`), 12 tiles a row, with the pack's own `License.txt` and `Tilesheet.txt`, whose 1 px spacing is the unpacked sheet's)
+- Author: Kenney (www.kenney.nl)
+- Source: https://kenney.nl/assets/tiny-town, downloaded 2026-10-24 as `kenney_tiny-town.zip` (SHA-256 `9768692dccff1d706408a5aedd6ca4f6cd1409506cbc84cb2f862919764be977`)
+- Licence: Creative Commons Zero (CC0 1.0), http://creativecommons.org/publicdomain/zero/1.0/, as the pack's `License.txt` states. Crediting is not required; we credit Kenney anyway.
+
+The Region map's overworld draws its land from a few of its tiles: grass (0,
+1, 2), trees and growth (28, 27, 5, 29), the dirt road (25), a Dungeon's
+gate in castle wall (111, 112, 123, 124), and a camp of the Wilds (107, 106,
+83), whose signpost the Module view uses too. `scripts/build-sprites.mjs` bakes them into `src/sprites.ts` beside
+the Tiny Dungeon tiles, whose wall, banner and floors (40, 29, 48, 49) draw
+the Rooms of a Dungeon.
+
 ## Kenney: Kenney Fonts (Kenney Mini)
 
 - Folder: `kenney-fonts/` (`Kenney Mini.ttf` alone, with the package's own `License.txt`)

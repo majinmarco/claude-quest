@@ -229,7 +229,8 @@ export function drawQuestLog($: EngineInterface, e: RenderInput<'Pane'>, model: 
   const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
   const { ticket, fetch, quest, progress, history, briefing, dungeon } = model
   const card = cardOf(model)
-  const extra = dungeon === undefined ? [] : [`Dungeon: ${dungeon}`]
+  // A card that carries its Dungeon already says it among its details.
+  const extra = dungeon === undefined || card?.dungeon !== undefined ? [] : [`Dungeon: ${dungeon}`]
   const isActive = quest !== null && quest.ticket === ticket
 
   const heading = (text: string) => (

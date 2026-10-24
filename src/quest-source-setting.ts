@@ -5,13 +5,13 @@
 // the project is a git repo with a remote (the common case), and has none
 // otherwise: the Quest Board then says how to set Jira.
 
-import type { SessionRepo } from 'claude-code'
+import type { EngineInterface, SessionRepo } from 'claude-code'
 
 import { githubIssues } from './github-issues'
 import type { RunCommand } from './github-issues'
 import { jiraIssues } from './jira-issues'
 import type { CallTool } from './jira-issues'
-import { REGION_FILE } from './persistence'
+import { readRegionFile, REGION_FILE } from './persistence'
 import type { QuestSource, QuestSourceProblem, Sourced } from './quest-source'
 import type { QuestSourceSetting } from '../types'
 
@@ -78,6 +78,7 @@ export const questSourceFor = (setting: QuestSourceSetting, tools: QuestSourceTo
 export const unavailable = (problem: QuestSourceProblem): QuestSource => ({
   list: async () => ({ ok: false, problem }),
   get: async () => ({ ok: false, problem }),
+  listClosed: async () => ({ ok: false, problem }),
 })
 
 /** What the Region file held when read: its JSON, or why it could not be read as JSON. */
@@ -133,4 +134,21 @@ export const resolveQuestSource = async (
   }
 
   return { source: questSourceFor(setting.value, tools), setting: setting.value }
+}
+
+/**
+ * The Quest Source the Region chose in its Region file; when it chose none,
+ * the repo's GitHub Issues, or none when the project is no git repo with a
+ * remote. A file that is not JSON may hold a choice gone wrong, so the board
+ * says so rather than guess. `$.process` runs only where Claude Code runs
+ * commands (the CLI): elsewhere its rejection is told as such by the gh
+ * adapter, never as gh missing.
+ */
+export async function regionQuestSource($: EngineInterface): Promise<ResolvedQuestSource> {
+  const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
+
+  return resolveQuestSource(region, () => $.session.repo(), {
+    run: argv => $.process.run(argv),
+    call: (server, tool, args) => $.mcp.call(server, tool, args),
+  })
 }
