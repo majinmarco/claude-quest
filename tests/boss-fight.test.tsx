@@ -138,6 +138,11 @@ const engine = (
     if (e.argv[0] === 'gh') {
       return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    // Crafting from the diff asks git about the working tree: no repo to
+    // it here, so only the Boss Fight's `git show` is answered.
+    if (e.argv[0] === 'git' && e.argv[1] !== 'show') {
+      return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     runs.push({ argv: [...e.argv], cwd: e.init?.cwd })
 
     return {

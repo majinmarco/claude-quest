@@ -32,6 +32,11 @@ export type GameEvent =
        * across the file): never a major edit, however many lines it touched.
        */
       replaceAll?: boolean
+      /**
+       * `diff`: seen in the working tree's diff rather than in a tool's record
+       * (a Bash heredoc, a script, a subagent's edit); played the same.
+       */
+      source?: 'diff'
     }
   | {
       type: 'SESSION_MEASURED'

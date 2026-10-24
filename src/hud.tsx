@@ -12,6 +12,7 @@ import { BADGES, isExhausted, isUnderWay, manaLevel, titleOf, xpToClear } from '
 import type { Encounter, GameState, ManaLevel, Player } from './engine'
 import { COMPACTION_WARNING, hudStrip, PIXELS_PER_COLUMN, portraitOf, STILL, STRIP_HEIGHT, stripWidth } from './hud-art'
 import type { StripMotion, StripSegment } from './hud-art'
+import { partyLine } from './party'
 import { MONSTERS } from './scene-art'
 import type { HudStyle } from './settings'
 import type { SpriteName } from './sprites'
@@ -224,8 +225,8 @@ const questTitles = ({ title }: { title?: string }): string[] => {
   return [...new Set(titles)]
 }
 
-/** The HUD's parts for `state`, in the order they are drawn. */
-const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: GameState): Part[] => {
+/** The HUD's parts for `state`, in the order they are drawn; `partyOut`, the companions out. */
+const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: GameState, partyOut = 0): Part[] => {
   const toClear = xpToClear(player.level)
   const mana = manaLevel(vitals.mana)
   const badges = (player.badges ?? []).length
@@ -284,6 +285,9 @@ const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: Gam
           { text: describeEncounter(encounter), dimColor: true },
           { kind: 'encounter', sprite: encounterSprite(encounter), text: describeEncounter(encounter) },
         ),
+    partyOut > 0
+      ? single(6.5, { text: partyLine(partyOut), color: 'cyan' }, { kind: 'party', count: partyOut })
+      : null,
     {
       rank: 7,
       versions: [
@@ -321,6 +325,7 @@ const STRIP_ORDER: StripSegment['kind'][] = [
   'boss',
   'questions',
   'encounter',
+  'party',
   'mana',
   'vitals',
   'stats',
@@ -338,8 +343,8 @@ const layOutStrip = (parts: Part[], room: number): StripSegment[] => {
 }
 
 /** The strip's segments for `state` in a band `columns` wide, in the order drawn. */
-export const stripOf = (state: GameState, columns: number): StripSegment[] =>
-  layOutStrip(partsOf(state), columns * PIXELS_PER_COLUMN)
+export const stripOf = (state: GameState, columns: number, partyOut = 0): StripSegment[] =>
+  layOutStrip(partsOf(state, partyOut), columns * PIXELS_PER_COLUMN)
 
 /** What a surface last drew of the Player, to tell a loss of HP or a gain of XP since. */
 type LastDrawn = { level: number; hp: number; totalXp: number; xpShare: number }
@@ -367,14 +372,15 @@ const lastDrawn = new Map<string, LastDrawn>()
  * model and spend, Mana, the Encounter, the Questions waiting, the boss.
  *
  * Where the surface draws SVG and `hudStyle` is pixel, the same parts are one
- * pixel strip 48 px tall instead, its alt the text's first row.
+ * pixel strip 48 px tall instead, its alt the text's first row. `partyOut`
+ * is how many companions are out with the party (`Party: 2 out`).
  */
-export function drawHud($: EngineInterface, e: RenderInput<'AbovePrompt'>, state: GameState, hudStyle: HudStyle = 'pixel') {
+export function drawHud($: EngineInterface, e: RenderInput<'AbovePrompt'>, state: GameState, hudStyle: HudStyle = 'pixel', partyOut = 0) {
   const elements = $.ui.resolve(e)
   const { Box, Text } = elements
   const columns = Number.isFinite(e.props.bodyColumns) && e.props.bodyColumns > 0 ? e.props.bodyColumns : DEFAULT_COLUMNS
   const maxRows = Number.isFinite(e.props.maxRows) ? Math.max(1, Math.min(MAX_ROWS, e.props.maxRows)) : MAX_ROWS
-  const parts = partsOf(state)
+  const parts = partsOf(state, partyOut)
   const rows = layOut(parts, columns, maxRows)
 
   // The terminal's table lists Svg too, as a fragment: it draws no SVG.

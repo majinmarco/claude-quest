@@ -550,6 +550,23 @@ export type QuestBoard = {
   page?: number
 }
 
+/** A companion out with the party: one subagent sent out during a Quest, by its loop's agent id. */
+export type Companion = {
+  agentId: string
+  /** The spawn's short description of its task: `Implement issue #22`. */
+  description: string
+  /** What its loop played so far: reads, Craftings, Battles won. */
+  read: number
+  forged: number
+  battlesWon: number
+}
+
+/** A beat of the party the Scene plays: a companion setting out, until the next Encounter. */
+export type PartyBeat = { kind: 'out'; description: string }
+
+/** The session's party: the companions out, oldest first, and the Scene's beat. */
+export type Party = { companions: Companion[]; beat: PartyBeat | null }
+
 declare module 'claude-code' {
   interface PluginState {
     'quest-mod': {
@@ -559,6 +576,8 @@ declare module 'claude-code' {
       questionCache: { key: string; question: QuestionContent }[]
       /** Whether the Scene opened itself this session: once at most. */
       sceneOpened: boolean
+      /** The companions out with the party: see src/party.ts. */
+      party: Party
     }
   }
 }

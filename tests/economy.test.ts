@@ -4,8 +4,9 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { earnedBadges, newGame, newPlayer, step, titleOf, xpToClear } from '../src/engine'
+import { CRAFTING_XP, earnedBadges, newGame, newPlayer, POOL_CAPS, step, titleOf, xpToClear } from '../src/engine'
 import type { GameEvent, GameState, Player, QuestionContent } from '../src/engine'
+import { comeBack, emptyParty, setOut, tally } from '../src/party'
 import { migratePlayer } from '../src/persistence'
 
 const play = (state: GameState, ...events: GameEvent[]) =>
@@ -581,5 +582,48 @@ describe('Economy: migrating an older Player', () => {
     const { player } = migratePlayer(old)
 
     expect(migratePlayer(player)).toEqual({ player, levelChange: null })
+  })
+})
+
+describe('Economy: wait-time engagement adds no XP source (#22)', () => {
+  /** A file a Bash heredoc made, as the diff path plays it. */
+  const forgedByBash = (at: number): GameEvent => ({
+    type: 'FILE_EDIT',
+    path: `/work/forge/src/gen-${at}.ts`,
+    module: 'src',
+    isNewFile: true,
+    linesBefore: null,
+    linesAdded: 5,
+    linesRemoved: 0,
+    diff: '@@ -0,0 +1,5 @@\n+a\n+b\n+c\n+d\n+e',
+    source: 'diff',
+  })
+
+  test('Crafting seen in the diff pays from the ambient pool, as an Edit\'s does, and stops when it is full', () => {
+    const quest = play(newGame(), { type: 'QUEST_START', ticket: '#22' }).state
+    const { state, effects } = play(quest, ...Array.from({ length: 20 }, (_, at) => forgedByBash(at)))
+
+    expect(state.quest?.pools).toEqual({ ambient: POOL_CAPS.ambient, battle: 0, sage: 0 })
+    expect(state.player.totalXp).toBe(POOL_CAPS.ambient)
+    expect(effects.filter(effect => effect.type === 'XP_CAPPED')).toEqual([{ type: 'XP_CAPPED', pool: 'ambient' }])
+  })
+
+  test('Bash reads pay from the ambient pool as Read does: the pool is shared, not added to', () => {
+    const quest = play(visited(newGame()), { type: 'QUEST_START', ticket: '#22' }).state
+    const { state } = play(quest, ...reads(40), ...Array.from({ length: 20 }, (_, at) => forgedByBash(at)), ...reads(40))
+
+    expect(state.quest?.pools?.ambient).toBe(POOL_CAPS.ambient)
+    expect(state.player.totalXp).toBe(POOL_CAPS.ambient)
+  })
+
+  test('companions pay nothing: setting out, counting their loop and coming back never touch the Player', () => {
+    let party = setOut(emptyParty(), 'agent-7', 'Implement issue #22')
+    const forged = step(play(newGame(), { type: 'QUEST_START', ticket: '#22' }).state, forgedByBash(0))
+    party = tally(party, 'agent-7', forged.effects)
+    const back = comeBack(party, 'agent-7')
+
+    expect(back.companion).toMatchObject({ forged: 1 })
+    // The party is no part of the game: the only XP was the Crafting's own.
+    expect(forged.state.player.totalXp).toBe(CRAFTING_XP)
   })
 })

@@ -117,12 +117,20 @@ The Encounter a failing Check plays: a monster (a bug for tests, a slime for lin
 _Avoid_: Fight, test encounter
 
 **Crafting**:
-The Encounter a new file of at least 3 lines, or a major edit, plays: the blacksmith forges an item named after the component, the file's name without its extension in words (`order-ledger.ts` forges the Order Ledger; an `index` file is named after its folder). A code-changing Encounter, as a Battle won is.
+The Encounter a new file of at least 3 lines, or a major edit, plays, whatever made it: an Edit, a Write or a NotebookEdit, or a change seen in the working tree's diff (a Bash heredoc, a script, a subagent's edit), checked after a Bash call that may have changed files (at most every 15 seconds), before a commit and at every turn's end. The blacksmith forges an item named after the component, the file's name without its extension in words (`order-ledger.ts` forges the Order Ledger; an `index` file is named after its folder). A code-changing Encounter, as a Battle won is. The diff is git's: outside a git repo only the tools' edits are seen, and a file `.gitignore` ignores never counts. A change is played once, by whichever saw it first.
 _Avoid_: Forging, file encounter
 
 **Major edit**:
-An edit (an Edit, a Write over an existing file, a NotebookEdit) changing at least 10 lines of its diff, a line replaced counted once: the larger of the lines added and the lines removed. A near-complete rewrite is one too: lines added, at least 80% of the file's lines removed, and at least 3 lines changed. An Edit replacing every occurrence (`replace_all`, a rename) never is, though its change is still kept for the Boss Fight and a Battle's fix. A smaller edit plays no Encounter.
+An edit (an Edit, a Write over an existing file, a NotebookEdit, a file changed in the working tree's diff) changing at least 10 lines of its diff, a line replaced counted once: the larger of the lines added and the lines removed. A near-complete rewrite is one too: lines added, at least 80% of the file's lines removed, and at least 3 lines changed. An Edit replacing every occurrence (`replace_all`, a rename) never is, though its change is still kept for the Boss Fight and a Battle's fix. A smaller edit plays no Encounter.
 _Avoid_: Big change, large diff
+
+**Party**:
+The companions out during a Quest, counted on the HUD (`Party: 2 out`; a companion beside the count on the pixel strip). It pays no XP: sending agents out is Claude's activity, and what the companions' loops do (reads, Crafting, Battles) plays and pays as any work does.
+_Avoid_: Team, squad, crew
+
+**Companion**:
+A subagent Claude starts during a Quest (a background or workflow agent too), as the party sees it: it sets out with the task's short description, the Scene showing it walk off, and comes back when its loop's turn ends, told in a toast counting what its loop played (`Implement issue #22: back. 12 read, 3 forged, 1 Battle won`). One whose agent stopped without ending its turn (killed, its session ended) leaves the party quietly at the next session start.
+_Avoid_: Subagent (outside the event translator), helper, minion
 
 **Check**:
 A test run, lint or type-check, read from a Bash command by its runner (vitest, jest, pytest, bun test, tsc, eslint, biome, ruff, or a package's test, lint or typecheck script) and kept as the command to rerun it, launchers, environment and output-only flags (`-q`, `-v`, `--verbose`, `--silent`, `--no-color`, `--color=…`, `--reporter…`) left out, so `vitest run -q` and `vitest run` are one Check. A Battle is against one Check.
