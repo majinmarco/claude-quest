@@ -11,21 +11,21 @@
     "sageCallsPerQuest": {
       "type": "number",
       "title": "Sage calls per Quest",
-      "description": "How many times per Quest the Sage may ask Haiku for a Question. Over budget, Questions are skipped. Sage XP is capped per Quest (200), so raising this adds Questions, not XP.",
+      "description": "How many times the Sage may ask Haiku for a Question per ticket, for the session (starting a ticket again does not refill it). Over budget, Questions are skipped; 0 disables Questions during Quests. Sage XP is capped per Quest (200), so raising this adds Questions, not XP.",
       "default": 10,
       "min": 0
     },
     "bossFightCallsPerQuest": {
       "type": "number",
       "title": "Boss Fight calls per Quest",
-      "description": "How many Haiku calls the Boss Fight may make per Quest, beside the Sage's.",
+      "description": "How many Haiku calls the Boss Fight may make per ticket, for the session, beside the Sage's. 0 disables Boss Fight Questions: Quests close unfought.",
       "default": 3,
       "min": 0
     },
     "sageCallsOutsideQuest": {
       "type": "number",
       "title": "Sage calls outside a Quest",
-      "description": "How many times per session the Sage may ask Haiku for a Question while no Quest is active.",
+      "description": "How many times per session the Sage may ask Haiku for a Question while no Quest is active. 0 disables Questions between Quests.",
       "default": 5,
       "min": 0
     },

@@ -6,6 +6,7 @@ import type { EngineInterface, RenderInput } from 'claude-code'
 
 import { isUnderWay } from './engine'
 import type { BattleEncounter, BossFight, CheckKind, CraftingEncounter, Encounter } from './engine'
+import { bossStartText, questionCountOf } from './boss'
 import { bossSceneSvg, MONSTERS, sceneSvg } from './scene-art'
 
 /** How wide the scene is drawn, in CSS pixels: its 128 pixels at 3x. */
@@ -91,7 +92,10 @@ export const describeBossFight = (fight: BossFight): string => {
       return `A boss approaches Quest ${fight.ticket}: its review Questions are being made`
     case 'fighting':
       if (last === null) {
-        return `The boss of Quest ${fight.ticket} bars the way: ${fight.maxHp} review Questions · ${hp} · /boss`
+        return `The boss of Quest ${fight.ticket} bars the way: ${bossStartText({ hp: fight.hp, questionCount: questionCountOf(fight) })} · /boss`
+      }
+      if (last.isCorrect && fight.hp === 0) {
+        return `The boss of Quest ${fight.ticket} has fallen · finishing blows left: ${fight.questions.length} · /boss`
       }
 
       return last.isCorrect

@@ -85,11 +85,11 @@ The pane that plays the current Encounter: animated pixel art where the surface 
 _Avoid_: Encounter view, animation pane
 
 **Boss Fight**:
-The code-review challenge that ends a Quest, built from the Quest's actual diff: the first commit Claude makes during a Quest summons it, three review Questions about that commit's diff (the Quest's own changes when git cannot show it). The boss has one HP per Question: a right answer hits it and earns Intelligence XP, uncapped, a wrong one costs HP. Every Question right wins the Quest reward and a Trophy, and heals fully; the boss left standing is a loss; the Player may skip it. A Quest that could have no Boss Fight pays a quarter of its reward. However it ends, the Quest closes, its outcome in the Region file (won, lost, skipped, or unfought when no Boss Fight could be made).
+The code-review challenge that ends a Quest, built from the Quest's actual diff: the first commit Claude makes during a Quest summons it (a commit chained before a command that failed too, read from git's summary line), up to three review Questions about that commit's diff (the Quest's own changes when git cannot show it, unless the commit was read from a failed command). Every Question is asked. The boss has two thirds of them in HP, rounded up (2 HP for 3 Questions): a right answer earns Intelligence XP, uncapped, and hits the boss while it stands; once it has fallen, the Questions left are finishing blows, paid the same. A wrong one costs HP; at 0 HP the Player fights on, Exhausted. When the Questions run out the boss fallen is a win (2 of 3): the Quest reward and a Trophy, and a full heal; the boss standing is a loss; the Player may skip it. A Quest that could have no Boss Fight pays a quarter of its reward. However it ends, the Quest closes, its outcome in the Region file (won, lost, skipped, or unfought when no Boss Fight could be made).
 _Avoid_: Final review, boss battle
 
 **Quest reward**:
-The XP a Quest's Boss Fight won pays, by its ticket's difficulty alone (Trivial 40 to Epic 180, Unrated 80), shown on its Quest card; half again when Flawless (every Boss answer right, no wrong Sage answer in the Quest). Paid once per Region and ticket.
+The XP a Quest's Boss Fight won pays, by its ticket's difficulty alone (Trivial 40 to Epic 180, Unrated 80), shown on its Quest card, scaled down when fewer than three Questions could be made; half again when Flawless (every Boss answer right, finishing blows included, and no wrong Sage answer in the Quest). Paid once per Region and ticket.
 _Avoid_: Bounty, Quest XP
 
 **Badge**:
@@ -107,7 +107,7 @@ A persona (Sage, Cartographer, Merchant, Rival, Scribe, Quest Giver) that speaks
 _Avoid_: Character, bot
 
 **Question**:
-A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle). A right answer earns XP to its Stat tag, Wisdom for `wisdom` and Intelligence otherwise (a quarter of it when hasty, half when Exhausted, from the sage XP pool), a wrong one costs HP; both show the explanation. Once answered, a Question about the same change is not asked again that session.
+A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle), with the Quest's ticket title and summary as context. A Question is shown before it is answered: the Sage's pane drawing it, or `/sage`, starts its time, and `/sage A` on a Question never shown shows it instead of answering. A right answer earns XP to its Stat tag, Wisdom for `wisdom` and Intelligence otherwise (a quarter of it when hasty, half when Exhausted, from the sage XP pool), a wrong one costs HP; both show the explanation. A Question about a change already answered, or waiting, that session is not asked again.
 _Avoid_: Quiz, prompt
 
 **Content Generator**:
@@ -115,11 +115,11 @@ What asks Haiku for a Question about a change and checks the reply against the c
 _Avoid_: Question generator, LLM client
 
 **Hasty answer**:
-A right answer given quicker than a non-trivial Question can be read: under 5 seconds from when it was shown, to a Question pointing at 3 source lines or more (both settings). It earns a quarter of the XP. An answer with no time (the Question never shown first) is never hasty.
+A right answer given quicker than a non-trivial Question can be read: under 5 seconds from when it was shown, to a Question pointing at 3 source lines or more (both settings). A right answer to a non-trivial Question never recorded as shown is hasty too. It earns a quarter of the XP.
 _Avoid_: Fast answer, guess
 
 **Haiku budget**:
-How many Haiku calls the game may make: per Quest, 10 for the Sage and 3 for the Boss Fight, each counted apart; between Quests, 5 for the Sage per session. Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing. The limits are settings, in `/config`.
+How many Haiku calls the game may make, per ticket for the session: 10 for the Sage and 3 for the Boss Fight, each counted apart, kept when the Quest closes or another replaces it (starting a ticket again does not refill it) and fresh in a new session; between Quests, 5 for the Sage per session. Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing; a call failing for a passing reason (rate limited, overloaded) is given back. When Haiku is not available on the account, Questions are off for the session, told once. The limits are settings, in `/config`; 0 disables Questions.
 _Avoid_: Quota, rate limit
 
 **Question cache**:

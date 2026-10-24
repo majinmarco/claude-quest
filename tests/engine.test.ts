@@ -315,6 +315,51 @@ describe('Game Engine: Quest start', () => {
   })
 })
 
+describe('Game Engine: Quest details', () => {
+  const questing = step(newGame(), { type: 'QUEST_START', ticket: '#4' }).state
+
+  test('the details of the active Quest\'s ticket are kept on it', () => {
+    const { state, effects } = step(questing, {
+      type: 'QUEST_DETAILS',
+      ticket: '#4',
+      title: 'Bulk discounts',
+      summary: 'Orders of 10 or more get 10% off.',
+      difficulty: 'Medium',
+      verified: 'found',
+    })
+
+    expect(state.quest).toMatchObject({
+      ticket: '#4',
+      title: 'Bulk discounts',
+      summary: 'Orders of 10 or more get 10% off.',
+      difficulty: 'Medium',
+      verified: 'found',
+    })
+    expect(effects).toEqual([])
+  })
+
+  test('details given in parts keep what came before', () => {
+    const titled = step(questing, { type: 'QUEST_DETAILS', ticket: '#4', title: 'Bulk discounts' }).state
+
+    const { state } = step(titled, { type: 'QUEST_DETAILS', ticket: '#4', summary: 'Orders of 10 or more.' })
+
+    expect(state.quest).toMatchObject({ title: 'Bulk discounts', summary: 'Orders of 10 or more.', difficulty: 'Unrated' })
+  })
+
+  test('a summary is kept to 1500 characters', () => {
+    const { state } = step(questing, { type: 'QUEST_DETAILS', ticket: '#4', summary: 'x'.repeat(4000) })
+
+    expect(state.quest?.summary).toHaveLength(1500)
+  })
+
+  test('details of another ticket (a Quest since replaced) change nothing', () => {
+    const { state } = step(questing, { type: 'QUEST_DETAILS', ticket: '#5', title: 'Elsewhere' })
+
+    expect(state).toBe(questing)
+    expect(step(newGame(), { type: 'QUEST_DETAILS', ticket: '#4', title: 'x' }).state.quest).toBeNull()
+  })
+})
+
 describe('Game Engine: Quest rewards', () => {
   test('the Quest reward grows with difficulty, 40 to 180', () => {
     expect(questXp('Trivial')).toBe(40)
@@ -1101,12 +1146,87 @@ describe('Game Engine: the Haiku budget', () => {
     ])
   })
 
-  test('a new Quest starts with its whole budget', () => {
+  test('a Quest for another ticket starts with that ticket\'s whole budget', () => {
     const spent = requests(questing, sage, sage).state
 
     const { effects } = requests(spent, { type: 'QUEST_START', ticket: '#12' }, sage)
 
     expect(effects).toContainEqual({ type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 1, limit: 2 })
+  })
+
+  test('the budget is per ticket for the session: switching away and back does not refill it', () => {
+    const spent = requests(questing, sage, sage, boss).state
+
+    const { effects } = requests(
+      spent,
+      { type: 'QUEST_START', ticket: '#12' },
+      { type: 'QUEST_START', ticket: '#11' },
+      sage,
+      boss,
+    )
+
+    expect(effects.filter(effect => effect.type.startsWith('HAIKU'))).toEqual([
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'sage', used: 2, limit: 2 },
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'boss', used: 1, limit: 1 },
+    ])
+  })
+
+  test('a Quest closed and started again keeps what its ticket spent', () => {
+    const spent = requests(questing, sage, sage).state
+    const closed = requests(spent, { type: 'COMMIT', sha: 'abc1234', cwd: null }, { type: 'BOSS_FIGHT_SKIPPED' }).state
+    expect(closed.quest).toBeNull()
+
+    const { effects } = requests(closed, { type: 'QUEST_START', ticket: '#11' }, sage)
+
+    expect(effects).toContainEqual({ type: 'HAIKU_CALL_REFUSED', purpose: 'sage', used: 2, limit: 2 })
+  })
+
+  test('a refunded call (a transient failure) is given back to the ticket it was spent on', () => {
+    const spent = requests(questing, sage, sage).state
+
+    const { effects } = requests(spent, { type: 'HAIKU_CALL_REFUNDED', purpose: 'sage', ticket: '#11' }, sage)
+
+    expect(effects).toEqual([{ type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 2, limit: 2 }])
+  })
+
+  test('a refund between Quests goes back to the session\'s allowance', () => {
+    const spent = requests(newGame(), sage).state
+
+    const { effects } = requests(spent, { type: 'HAIKU_CALL_REFUNDED', purpose: 'sage', ticket: null }, sage)
+
+    expect(effects).toEqual([{ type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 1, limit: 1 }])
+  })
+
+  test('Haiku unavailable is told once, and every later call is refused for the session', () => {
+    const { state, effects } = requests(questing, { type: 'HAIKU_UNAVAILABLE' }, { type: 'HAIKU_UNAVAILABLE' }, sage, boss)
+
+    expect(state.haikuUnavailable).toBe(true)
+    expect(effects).toEqual([
+      { type: 'HAIKU_UNAVAILABLE' },
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'sage', used: 0, limit: 2, reason: 'unavailable' },
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'boss', used: 0, limit: 1, reason: 'unavailable' },
+    ])
+  })
+
+  test('a Sage call for a change already asked about (answered, or waiting) is refused and spends nothing', () => {
+    const T = Date.UTC(2026, 9, 23, 20, 0)
+    const content: QuestionContent = {
+      prompt: 'Q?',
+      options: ['a', 'b', 'c', 'd'],
+      answer: 0,
+      explanation: 'e',
+      stat: 'intelligence',
+      source: { path: 'a.ts', lines: ['x'] },
+    }
+    const waiting = step(questing, { type: 'QUESTION_READY', question: content, at: T, key: 'change-1' }).state
+
+    const { state, effects } = requests(waiting, { ...sage, key: 'change-1' }, { ...sage, key: 'change-2' })
+
+    expect(effects).toEqual([
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'sage', used: 0, limit: 2, reason: 'asked' },
+      { type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 1, limit: 2 },
+    ])
+    expect(state.haikuCallsByTicket).toEqual({ '#11': { sage: 1, boss: 0 } })
   })
 
   test('outside a Quest the Sage has a small allowance for the session, and the Boss Fight none', () => {
@@ -1170,10 +1290,16 @@ describe('Game Engine: hasty answers', () => {
     expect(state.lastAnswer).toMatchObject({ isHasty: false, xp: 20 })
   })
 
-  test('an answer with no answer time (never shown first) earns full XP: its speed is unknown', () => {
+  test('a right answer with no answer time (never shown first) to a non-trivial Question is hasty', () => {
     const { state } = answeredAfter(null)
 
-    expect(state.lastAnswer).toMatchObject({ answerMs: null, isHasty: false, xp: 20 })
+    expect(state.lastAnswer).toMatchObject({ answerMs: null, isHasty: true, xp: HASTY_ANSWER_XP })
+  })
+
+  test('a right answer with no answer time to a trivial Question earns full XP', () => {
+    const { state } = answeredAfter(null, lines.slice(0, 2))
+
+    expect(state.lastAnswer).toMatchObject({ answerMs: null, isHasty: false, xp: QUESTION_XP })
   })
 
   test('the thresholds are the Player\'s rules', () => {
@@ -1315,11 +1441,11 @@ describe('Game Engine: the Boss Fight', () => {
   ).state
   const fighting = play(summoned, ready()).state
 
-  test('its Questions ready, the fight starts: the boss has one HP per Question', () => {
+  test('its Questions ready, the fight starts: the boss has two HP for three Questions', () => {
     const { state, effects } = play(summoned, ready())
 
-    expect(effects).toEqual([{ type: 'BOSS_FIGHT_STARTED', ticket: '#12', hp: 3 }])
-    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 3, maxHp: 3 })
+    expect(effects).toEqual([{ type: 'BOSS_FIGHT_STARTED', ticket: '#12', hp: 2, questionCount: 3 }])
+    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 2, maxHp: 2, questionCount: 3 })
     expect(state.bossFight?.questions.map(question => [question.id, question.npc, question.prompt])).toEqual([
       ['boss-1', 'Boss', 'Review question 1?'],
       ['boss-2', 'Boss', 'Review question 2?'],
@@ -1334,10 +1460,10 @@ describe('Game Engine: the Boss Fight', () => {
   test(`a right answer hits the boss and earns ${BOSS_ANSWER_XP} Intelligence XP`, () => {
     const { state, effects } = play(fighting, answer(1, 0))
 
-    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 2 })
+    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 1 })
     expect(state.bossFight?.questions.map(question => question.id)).toEqual(['boss-2', 'boss-3'])
     expect(state.bossFight?.lastAnswer).toMatchObject({ isCorrect: true, xp: 30 })
-    expect(effects).toContainEqual({ type: 'BOSS_HIT', hp: 2 })
+    expect(effects).toContainEqual({ type: 'BOSS_HIT', hp: 1 })
     expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 30, stat: 'intelligence' })
     expect(state.player.stats.intelligence).toBe(30)
   })
@@ -1346,7 +1472,7 @@ describe('Game Engine: the Boss Fight', () => {
     const { state, effects } = play(fighting, answer(1, 2))
 
     expect(state.player.hp).toBe(90)
-    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 3 })
+    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 2 })
     expect(state.bossFight?.lastAnswer).toMatchObject({ isCorrect: false, hpLost: 10 })
     expect(effects).toContainEqual({ type: 'HP_LOST', amount: 10 })
     expect(effects.some(effect => effect.type === 'BOSS_HIT')).toBe(false)
@@ -1382,10 +1508,49 @@ describe('Game Engine: the Boss Fight', () => {
     expect(state.player.trophies?.map(trophy => trophy.ticket)).toEqual(['#11', '#12'])
   })
 
-  test('the last Question answered with the boss standing loses: no reward, no trophy, the Quest closes lost', () => {
-    const { state, effects } = play(fighting, answer(1, 0), answer(2, 1), answer(3, 0))
+  test('two of three right win, once every Question is answered: the reward, not Flawless', () => {
+    const { state, effects } = play(fighting, answer(1, 1), answer(2, 0), answer(3, 0))
 
-    expect(state.player).toMatchObject({ hp: 90, xp: 60, stats: { intelligence: 60 } })
+    // 2 right answers (60) and an Unrated Quest's reward (80).
+    expect(state.player).toMatchObject({ hp: 100, totalXp: 140 })
+    expect(state.bossFight).toMatchObject({ status: 'won', hp: 0, reward: 80, flawless: false, trophy: 'Bane of #12' })
+    expect(effects).toContainEqual({ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'won' })
+  })
+
+  test('the boss fallen, the Questions left are finishing blows: still asked, still paid, the fight closes after them', () => {
+    const fallen = play(fighting, answer(1, 0), answer(2, 0))
+    expect(fallen.state.bossFight).toMatchObject({ status: 'fighting', hp: 0 })
+    expect(fallen.state.quest).not.toBeNull()
+
+    const { state, effects } = play(fallen.state, answer(3, 1))
+
+    expect(effects.some(effect => effect.type === 'BOSS_HIT')).toBe(false)
+    expect(state.bossFight).toMatchObject({ status: 'won', flawless: false })
+    expect(state.player.hp).toBe(100)
+  })
+
+  test('a finishing blow right pays its XP and keeps the boss at 0 HP', () => {
+    const { state, effects } = play(fighting, answer(1, 0), answer(2, 0), answer(3, 0))
+
+    expect(effects.filter(effect => effect.type === 'BOSS_HIT')).toEqual([
+      { type: 'BOSS_HIT', hp: 1 },
+      { type: 'BOSS_HIT', hp: 0 },
+    ])
+    expect(state.bossFight).toMatchObject({ hp: 0, flawless: true })
+  })
+
+  test('one Question makes a boss of one HP; two make one of two', () => {
+    const one = play(summoned, { ...ready(), questions: [review(1)] }).state
+    const two = play(summoned, { ...ready(), questions: [review(1), review(2)] }).state
+
+    expect(one.bossFight).toMatchObject({ hp: 1, maxHp: 1, questionCount: 1 })
+    expect(two.bossFight).toMatchObject({ hp: 2, maxHp: 2, questionCount: 2 })
+  })
+
+  test('the Questions run out with the boss standing: lost, no reward, no trophy, the Quest closes lost', () => {
+    const { state, effects } = play(fighting, answer(1, 0), answer(2, 1), answer(3, 2))
+
+    expect(state.player).toMatchObject({ hp: 80, xp: 30, stats: { intelligence: 30 } })
     expect(state.player.trophies).toBeUndefined()
     expect(state.player.badges?.map(badge => badge.id)).toEqual(['first-quest'])
     expect(state.quest).toBeNull()

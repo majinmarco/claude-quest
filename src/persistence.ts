@@ -266,20 +266,37 @@ export async function recordQuestStarted(
   ])
 }
 
+/**
+ * The history with `ticket`'s latest active run ended as `status` at
+ * `endedAt` (an ISO 8601 timestamp; kept on an abandoned run only when it is
+ * added here). With no active run to end (its start never written, or the
+ * file written over since), the run is added, started and ended at
+ * `endedAt`, so every Quest that ended is in the history.
+ */
+const endRun = (
+  quests: QuestRecord[],
+  ticket: string,
+  status: QuestRecord['status'],
+  endedAt: string,
+): QuestRecord[] => {
+  const latest = quests.findLastIndex(quest => quest.ticket === ticket && quest.status === 'active')
+  if (latest === -1) {
+    return [...quests, { ticket, startedAt: endedAt, status, endedAt }]
+  }
+
+  return quests.map((quest, index) =>
+    index !== latest ? quest : status === 'abandoned' ? { ...quest, status } : { ...quest, status, endedAt },
+  )
+}
+
 /** Marks the Quest's latest active run abandoned in the Region's history. */
-export function recordQuestAbandoned(
+export async function recordQuestAbandoned(
   $: EngineInterface,
   ticket: string,
 ): Promise<void> {
-  return changeQuests($, quests => {
-    const latest = quests.findLastIndex(
-      quest => quest.ticket === ticket && quest.status === 'active',
-    )
+  const endedAt = new Date(await $.clock.now()).toISOString()
 
-    return quests.map((quest, index) =>
-      index === latest ? { ...quest, status: 'abandoned' } : quest,
-    )
-  })
+  await changeQuests($, quests => endRun(quests, ticket, 'abandoned', endedAt))
 }
 
 /**
@@ -293,13 +310,5 @@ export async function recordQuestClosed(
 ): Promise<void> {
   const endedAt = new Date(await $.clock.now()).toISOString()
 
-  await changeQuests($, quests => {
-    const latest = quests.findLastIndex(
-      quest => quest.ticket === ticket && quest.status === 'active',
-    )
-
-    return quests.map((quest, index) =>
-      index === latest ? { ...quest, status: outcome, endedAt } : quest,
-    )
-  })
+  await changeQuests($, quests => endRun(quests, ticket, outcome, endedAt))
 }

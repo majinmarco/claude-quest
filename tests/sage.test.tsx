@@ -144,7 +144,7 @@ describe('The Sage', () => {
     await clock.advance(HAIKU_MS)
 
     expect(asked).toHaveLength(1)
-    expect(asked[0]?.model).toBe('claude-haiku-5-5')
+    expect(asked[0]?.model).toBe('haiku')
     expect(asked[0]?.prompt).toContain('user-profile-card.tsx')
 
     expect((await hudQuestions($)).text).toBe('1 Question waiting · /sage')
@@ -294,6 +294,45 @@ describe('The Sage', () => {
       'Right, but hasty: +5 XP (Intelligence). A closer read earns the full 20.\nIt trims the email, then lowercases it.',
     )
     expect(player()).toMatchObject({ stats: { intelligence: 5 } })
+  })
+
+  test('/sage with a letter on a Question never shown shows it and starts its time instead of answering', { options: { nonTrivialLines: 1 } }, async ($, on) => {
+    const { recorded, clock, player } = engine(on)
+    await $.session.start({ ...START, surface: 'terminal' })
+    await $.tool.call(recorded(writeNewFile))
+    await clock.advance(HAIKU_MS)
+
+    const blind = await sage($, 'A')
+
+    expect(blind.text).toMatch(/^Read it first/)
+    expect(blind.text).toContain('What does formatEmail return for " Ada@Example.COM "?')
+    expect(player()).toMatchObject({ stats: { intelligence: 0 } })
+
+    await clock.advance(6000)
+    const answered = await sage($, 'A')
+
+    expect(answered.text).toBe('Right! +20 XP (Intelligence)\nIt trims the email, then lowercases it.')
+  })
+
+  test('the Sage\'s pane drawing a Question starts its time: an answer there is timed', async ($, on) => {
+    const { recorded, clock } = engine(on)
+    const games: { lastAnswer?: { answerMs: number | null } | null }[] = []
+    on('state.set', (_, e, next) => {
+      games.push(e.value as (typeof games)[number])
+
+      return next(e)
+    })
+    await $.session.start(START)
+    await $.tool.call(recorded(writeNewFile))
+    await clock.advance(HAIKU_MS)
+
+    const ui = await $.ui.mount({ ...SAGE, surface: 'desktop' })
+    await clock.advance(0)
+    await clock.advance(7000)
+    await ui.press({ key: 'option:sage-1:0' })
+
+    expect(games.at(-1)?.lastAnswer?.answerMs).toBe(7000)
+    await ui.unmount()
   })
 
   test('with nothing queued /sage says so, and a letter answers nothing', async ($, on) => {

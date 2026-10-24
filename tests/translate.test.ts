@@ -668,6 +668,40 @@ describe('Event translator: git commits', () => {
     expect(translateCommit(changes.writeNewFile.input, changes.writeNewFile.result)).toBeNull()
   })
 
+  test('a commit chained before a command that failed is read from the error\'s text, its diff to come from git alone', () => {
+    expect(translateCommit(commits.commitThenFailingTests.input, commits.commitThenFailingTests.result)).toEqual({
+      type: 'COMMIT',
+      sha: '4c1d2e9',
+      cwd: null,
+      fromError: true,
+    })
+    expect(translateCommit(commits.rootCommitThenFailingTests.input, commits.rootCommitThenFailingTests.result)).toEqual({
+      type: 'COMMIT',
+      sha: '0a1b2c3',
+      cwd: 'vault',
+      fromError: true,
+    })
+  })
+
+  test('an error\'s text is read only for a plain git commit: not an amend, a dry run or a quiet one', () => {
+    const failed = (command: string) => ({ ...commits.commitThenFailingTests.input, command })
+    const { result } = commits.commitThenFailingTests
+
+    expect(translateCommit(commits.amendThenFailingTests.input, commits.amendThenFailingTests.result)).toBeNull()
+    expect(translateCommit(failed('git commit --dry-run -m x && npm test'), result)).toBeNull()
+    expect(translateCommit(failed('git commit -q -m x && npm test'), result)).toBeNull()
+    expect(translateCommit(failed('git commit --quiet -m x && npm test'), result)).toBeNull()
+    expect(translateCommit(failed('git commit -qm x && npm test'), result)).toBeNull()
+    expect(translateCommit(failed('npm test && echo "[main 4c1d2e9] fake"'), result)).toBeNull()
+    // `||` runs what follows only when the commit failed: its output proves nothing.
+    expect(translateCommit(failed('git commit -m x || git log -1 --oneline'), result)).toBeNull()
+    expect(translateCommit(failed('(git commit -m x) && npm test'), result)).toMatchObject({ sha: '4c1d2e9' })
+  })
+
+  test('an error with no git summary line is no commit', () => {
+    expect(translateCommit(commits.commitNothingToCommit.input, commits.commitNothingToCommit.result)).toBeNull()
+  })
+
   test('a commit a hook denied is no commit', () => {
     expect(translateCommit(commits.commitAfterAdd.input, { deny: 'no commits' })).toBeNull()
   })

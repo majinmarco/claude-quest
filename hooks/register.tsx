@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import { bossAnswerText, bossOutcomeText, bossQuestionText, drawBoss, NO_BOSS } from '../src/boss'
+import { bossAnswerText, bossOutcomeText, bossQuestionText, bossStartText, drawBoss, NO_BOSS } from '../src/boss'
 import type { BossActions } from '../src/boss'
 import {
   changesOfGitShow,
@@ -10,9 +10,9 @@ import {
   QUESTION_MODEL,
   REVIEW_QUESTION_COUNT,
 } from '../src/content-generator'
-import type { Model, QuestionInput } from '../src/content-generator'
-import { isUnderWay, newGame, step } from '../src/engine'
-import type { Effect, FileChange, GameEvent, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
+import type { Model, ModelFailure, QuestionInput, TicketContext } from '../src/content-generator'
+import { isExhausted, isUnderWay, newGame, step, summonedChanges } from '../src/engine'
+import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
 import { badgesText, drawHud } from '../src/hud'
 import {
   loadDiscovered,
@@ -38,7 +38,7 @@ import { drawScene } from '../src/scene'
 import { autoOpenSceneOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
-import type { Difficulty, QuestBoard, XpPool } from '../types'
+import type { QuestBoard, QuestCard, XpPool } from '../types'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
@@ -71,67 +71,153 @@ const SAGE = { id: 'sage', title: 'The Sage' } as const
 const BOSS = { id: 'boss', title: 'The Boss' } as const
 
 /**
+ * The API errors that say Haiku cannot be used on this account at all: its
+ * credentials refused, the organization or account not allowed, the model
+ * not found. Any of them stops Questions for the session.
+ */
+const UNAVAILABLE_ERRORS = new Set([
+  'authentication_failed',
+  'oauth_org_not_allowed',
+  'account_on_hold',
+  'billing_error',
+  'model_not_found',
+  'cloud_credential_error',
+])
+
+/** The HTTP statuses that say the same: unauthorised, forbidden, not found. */
+const UNAVAILABLE_STATUSES = new Set([401, 403, 404])
+
+/** The HTTP statuses of a passing failure: rate limited, overloaded. */
+const TRANSIENT_STATUSES = new Set([429, 529])
+
+/**
  * Haiku through the session's own client and credentials (`$.model.complete`):
  * no tools, no history, text back. Low effort keeps a Question cheap and quick;
  * the token cap leaves room for its thinking and the JSON; the time limit
- * keeps a stuck call from hanging on for the rest of the session.
+ * keeps a stuck call from hanging on for the rest of the session. A request
+ * Claude Code refuses to send (the model blocked or unknown), or an API error
+ * of auth, access or a missing model, is `unavailable`; a rate limit, an
+ * overload or no response at all (status null) is `transient`.
  */
 const haikuModel =
   ($: EngineInterface): Model =>
   async ({ system, prompt }) => {
-    const reply = await $.model.complete({
-      model: QUESTION_MODEL,
-      system,
-      prompt,
-      maxTokens: 4096,
-      effort: 'low',
-      timeoutMs: 60_000,
-    })
+    let reply: Awaited<ReturnType<EngineInterface['model']['complete']>>
+    try {
+      reply = await $.model.complete({
+        model: QUESTION_MODEL,
+        system,
+        prompt,
+        maxTokens: 4096,
+        effort: 'low',
+        timeoutMs: 60_000,
+      })
+    } catch (error) {
+      return { ok: false, reason: `refused: ${String(error)}`, failure: 'unavailable' }
+    }
 
-    return reply.isAnswered ? { ok: true, text: reply.text } : { ok: false, reason: reply.reason }
+    if (reply.isAnswered) {
+      return { ok: true, text: reply.text }
+    }
+    if (reply.reason !== 'api-error') {
+      return { ok: false, reason: reply.reason }
+    }
+
+    const { status, error } = reply
+    const failure: ModelFailure | undefined =
+      UNAVAILABLE_ERRORS.has(error) || (status !== null && UNAVAILABLE_STATUSES.has(status))
+        ? 'unavailable'
+        : status === null || TRANSIENT_STATUSES.has(status)
+          ? 'transient'
+          : undefined
+
+    return { ok: false, reason: `api-error ${status ?? 'no response'} ${error}`, ...(failure === undefined ? {} : { failure }) }
   }
 
 /**
- * The active Quest's ticket as the Sage reads it: its reference, and its
- * title when the Quest Board listed it (`#7 Bulk discounts`).
+ * The active Quest's ticket as Haiku is shown it: its reference, and the
+ * title and summary the Quest holds (QUEST_DETAILS); null between Quests.
  */
-async function activeTicket($: EngineInterface): Promise<string | null> {
-  const ticket = (await read($, game))?.quest?.ticket
-  if (ticket === undefined) {
+async function activeTicket($: EngineInterface): Promise<TicketContext | null> {
+  const quest = (await read($, game))?.quest
+  if (quest == null) {
     return null
   }
 
-  const { listing } = await read($, board)
-  const card =
-    listing.state === 'listed' ? listing.quests.find(quest => quest.ticket === ticket) : undefined
-
-  return card === undefined ? ticket : `${ticket} ${card.title}`
+  return {
+    ref: quest.ticket,
+    ...(quest.title === undefined ? {} : { title: quest.title }),
+    ...(quest.summary === undefined ? {} : { summary: quest.summary }),
+  }
 }
+
+/** A Haiku call the Game Engine granted, and the ticket whose budget it counts on. */
+type Granted = { ticket: string | null }
 
 /**
  * Asks the Game Engine for one Haiku call for `purpose`, against the active
- * Quest's budget (the session's allowance between Quests): true when granted,
- * and counted; false when the budget is spent, logged to the debug log alone.
- * The Boss Fight (#12) asks with `'boss'` before each of its calls, while its
+ * Quest's ticket's budget (the session's allowance between Quests): the
+ * grant when given, and counted; null when the budget is spent, logged to the
+ * debug log alone, or when Haiku is unavailable this session.
+ * The Boss Fight asks with `'boss'` before each of its calls, while its
  * Quest is still active: outside a Quest the Boss Fight has no budget.
  */
 async function spendHaikuCall(
   $: EngineInterface,
   purpose: HaikuPurpose,
   rules: Rules,
-): Promise<boolean> {
+  key?: string,
+): Promise<Granted | null> {
   // It changes no Player and plays nothing, so the game is only stepped.
-  const effects = await stepGame($, { type: 'HAIKU_CALL_REQUESTED', purpose }, rules)
+  const { effects, state } = await stepGameTo(
+    $,
+    key === undefined ? { type: 'HAIKU_CALL_REQUESTED', purpose } : { type: 'HAIKU_CALL_REQUESTED', purpose, key },
+    rules,
+  )
   const refused = effects.find(effect => effect.type === 'HAIKU_CALL_REFUSED')
-  if (refused?.type === 'HAIKU_CALL_REFUSED') {
+  if (refused?.type === 'HAIKU_CALL_REFUSED' && refused.reason === undefined) {
     $.ui.log(
       `No Haiku call for the ${purpose === 'sage' ? 'Sage' : 'Boss Fight'}: its budget is spent (${refused.used} of ${refused.limit}).`,
       { to: 'debug' },
     )
   }
+  if (refused?.type === 'HAIKU_CALL_REFUSED' && refused.reason === 'asked') {
+    $.ui.log('The Sage skipped a Question (already asked).', { to: 'debug' })
+  }
+  if (!effects.some(effect => effect.type === 'HAIKU_CALL_GRANTED')) {
+    return null
+  }
 
-  return effects.some(effect => effect.type === 'HAIKU_CALL_GRANTED')
+  // The ticket the call was counted on, from the very step that counted it.
+  return { ticket: state.quest?.ticket ?? null }
 }
+
+/**
+ * What a failed Haiku call means for the session: Haiku unavailable stops
+ * every later call (told once); a passing failure gives the call back to
+ * the budget it was counted on. Any other failure keeps the call spent.
+ */
+async function noteModelFailure(
+  $: EngineInterface,
+  purpose: HaikuPurpose,
+  granted: Granted,
+  failure: ModelFailure | undefined,
+  rules: Rules,
+): Promise<void> {
+  if (failure === 'unavailable') {
+    await play($, { type: 'HAIKU_UNAVAILABLE' }, rules)
+  }
+  if (failure === 'transient') {
+    await stepGame($, { type: 'HAIKU_CALL_REFUNDED', purpose, ticket: granted.ticket }, rules)
+  }
+}
+
+/**
+ * The Sage's Questions being made, by their change's cache key: an identical
+ * change arriving meanwhile waits on the one call rather than making its own.
+ * The module's own, so a reload of the mod forgets it, as it does the calls.
+ */
+const sageInFlight = new Map<string, Promise<void>>()
 
 /**
  * The Sage's one Question about a code-changing Encounter's change: from the
@@ -139,17 +225,35 @@ async function spendHaikuCall(
  * the budget lasts, Haiku makes it and the Content Generator checks it. It
  * joins the Question Queue. Started unawaited after the tool call has
  * returned, so the session never waits on it; a Question that could not be
- * made, or was over budget, is skipped, logged to the debug log alone.
+ * made, or was over budget, is skipped, logged to the debug log alone. A
+ * change already answered this session, or whose Question waits or is being
+ * made, asks nothing.
  */
 async function askSage($: EngineInterface, changes: FileChange[], rules: Rules): Promise<void> {
   const key = await cacheKeyOf(changes)
+  const making = sageInFlight.get(key)
+  if (making !== undefined) {
+    return making
+  }
+
+  const made = makeSageQuestion($, changes, key, rules).finally(() => sageInFlight.delete(key))
+  sageInFlight.set(key, made)
+
+  return made
+}
+
+async function makeSageQuestion($: EngineInterface, changes: FileChange[], key: string, rules: Rules): Promise<void> {
+  // A hit costs nothing; the Game Engine queues it only when not asked already.
   const cached = cachedQuestion(await read($, questionCache), key)
   if (cached !== undefined) {
     await queueQuestion($, cached, key, rules)
     return
   }
 
-  if (!(await spendHaikuCall($, 'sage', rules))) {
+  // A change asked about already (its Question evicted from the cache) is
+  // refused by the Game Engine before any budget is spent.
+  const granted = await spendHaikuCall($, 'sage', rules, key)
+  if (granted === null) {
     return
   }
 
@@ -158,6 +262,7 @@ async function askSage($: EngineInterface, changes: FileChange[], rules: Rules):
 
   if (!generated.ok) {
     $.ui.log(`The Sage skipped a Question (${generated.reason}): ${generated.detail}`, { to: 'debug' })
+    await noteModelFailure($, 'sage', granted, generated.failure, rules)
     return
   }
 
@@ -166,10 +271,9 @@ async function askSage($: EngineInterface, changes: FileChange[], rules: Rules):
 }
 
 /**
- * Queues a Question the Sage made about the change cached under `key`,
- * unless the same one is already waiting (an identical change, cached, made
- * again before it was answered); the Game Engine queues none for a change
- * already answered this session.
+ * Queues a Question the Sage made about the change cached under `key`; the
+ * Game Engine queues none for a change already answered this session, or
+ * whose Question is waiting.
  */
 async function queueQuestion(
   $: EngineInterface,
@@ -177,15 +281,6 @@ async function queueQuestion(
   key: string,
   rules: Rules,
 ): Promise<void> {
-  const waiting = (await read($, game))?.questions ?? []
-  const isWaiting = waiting.some(
-    each => each.prompt === question.prompt && each.source.path === question.source.path,
-  )
-  if (isWaiting) {
-    $.ui.log('The Sage skipped a Question (already-waiting).', { to: 'debug' })
-    return
-  }
-
   await play($, { type: 'QUESTION_READY', question, key, at: await $.clock.now() }, rules)
   await showIfInView($, rules)
 }
@@ -230,7 +325,8 @@ const sageActions = ($: EngineInterface, rules: Rules): SageActions => ({
 /**
  * The diff the Boss Fight reviews: the commit's own, from `git show` where
  * the commit ran; the Quest's changes when git cannot give it (not a repo,
- * git missing, the sha gone, no text change).
+ * git missing, the sha gone, no text change). A commit read from a failed
+ * command's output hands no Quest changes over: its diff is git's or none.
  */
 async function bossFightDiff(
   $: EngineInterface,
@@ -257,9 +353,10 @@ async function summonBossFight(
   rules: Rules,
 ): Promise<void> {
   const changes = await bossFightDiff($, summoned)
-  let ticket: string | null | undefined
+  let ticket: TicketContext | null | undefined
   const questions: QuestionContent[] = []
   let reason = changes.length === 0 ? 'no diff to review' : 'its budget is spent'
+  let retried = false
 
   while (changes.length > 0 && questions.length < REVIEW_QUESTION_COUNT) {
     // Skipped, or its Quest replaced, meanwhile: another Quest's budget is
@@ -268,7 +365,8 @@ async function summonBossFight(
     if (fight?.status !== 'summoned' || fight.ticket !== summoned.ticket) {
       return
     }
-    if (!(await spendHaikuCall($, 'boss', rules))) {
+    const granted = await spendHaikuCall($, 'boss', rules)
+    if (granted === null) {
       break
     }
     ticket ??= await activeTicket($)
@@ -281,6 +379,14 @@ async function summonBossFight(
     } else {
       reason = `${generated.reason}: ${generated.detail}`
       $.ui.log(`The boss skipped its Questions (${reason})`, { to: 'debug' })
+      await noteModelFailure($, 'boss', granted, generated.failure, rules)
+      // Haiku unavailable ends it. A passing failure, given back to the
+      // budget, is tried again once: a second one ends it too, rather
+      // than spend and refund for as long as the rate limit lasts.
+      if (generated.failure === 'unavailable' || (generated.failure === 'transient' && retried)) {
+        break
+      }
+      retried ||= generated.failure === 'transient'
     }
   }
 
@@ -325,6 +431,23 @@ async function openSceneForArt(
   })
   if (!wasOpened) {
     await $.ui.open(SCENE).catch(() => undefined)
+  }
+}
+
+/**
+ * A game kept by an older mod counted the Haiku calls on its active Quest
+ * (`Quest.haikuCalls`): they become that ticket's, unless it has a count.
+ */
+const withTicketCalls = (state: GameState): GameState => {
+  const { quest } = state
+  const older = (quest as { haikuCalls?: { sage?: number; boss?: number } } | null)?.haikuCalls
+  if (quest === null || older === undefined || state.haikuCallsByTicket?.[quest.ticket] !== undefined) {
+    return state
+  }
+
+  return {
+    ...state,
+    haikuCallsByTicket: { ...state.haikuCallsByTicket, [quest.ticket]: { sage: older.sage ?? 0, boss: older.boss ?? 0 } },
   }
 }
 
@@ -397,29 +520,33 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
  * settings), in one update, and returns the effects.
  */
 async function stepGame($: EngineInterface, event: GameEvent, rules: Rules): Promise<Effect[]> {
+  return (await stepGameTo($, event, rules)).effects
+}
+
+/** Steps the session's game as stepGame does, and returns the game it stepped to as well. */
+async function stepGameTo(
+  $: EngineInterface,
+  event: GameEvent,
+  rules: Rules,
+): Promise<{ effects: Effect[]; state: GameState }> {
   // Before session.start has set the game up, start from the kept Player,
   // never a new one that would overwrite it.
   const before = (await read($, game)) ?? newGame(await loadPlayer($))
-  let effects: Effect[] = []
+  let stepped = { effects: [] as Effect[], state: before }
   await update($, game, current => {
-    const stepped = step(current ?? before, event, rules)
-    effects = stepped.effects
+    stepped = step(current ?? before, event, rules)
 
     return stepped.state
   })
 
-  return effects
+  return stepped
 }
 
-/**
- * A Quest's difficulty, as the Quest Board last listed its ticket: Unrated
- * when the board never listed it, so the Quest reward is never lost to it.
- */
-async function listedDifficulty($: EngineInterface, ticket: string): Promise<Difficulty> {
+/** The Quest Board's card for `ticket`, as last listed; undefined when the board never listed it. */
+async function listedCard($: EngineInterface, ticket: string): Promise<QuestCard | undefined> {
   const { listing } = await read($, board)
-  const card = listing.state === 'listed' ? listing.quests.find(quest => quest.ticket === ticket) : undefined
 
-  return card?.difficulty ?? 'Unrated'
+  return listing.state === 'listed' ? listing.quests.find(quest => quest.ticket === ticket) : undefined
 }
 
 /** What a full XP pool's toast says: the Sage still pays (or, once hers is full, the boss). */
@@ -434,6 +561,9 @@ const cappedText = (pool: XpPool, inQuest: boolean): string => {
       return `The Sage's XP is full for ${scope}. ${inQuest ? 'The Boss Fight still pays.' : 'Start a Quest for more: /quest-board'}`
   }
 }
+
+/** What the session is told, once, when Haiku turns out unavailable. */
+const HAIKU_UNAVAILABLE_TEXT = "Questions are off: Haiku isn't available on this account"
 
 /** Steps the session's game by one event, keeps the Player, plays the effects. */
 async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
@@ -468,6 +598,9 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
       // Never awaited: the tool call that changed the code returns at once.
       void askSage($, effect.changes, rules).catch(() => undefined)
     }
+    if (effect.type === 'HAIKU_UNAVAILABLE') {
+      $.ui.toast(HAIKU_UNAVAILABLE_TEXT)
+    }
     if (effect.type === 'QUESTION_QUEUED') {
       $.ui.toast('The Sage has a Question for you: /sage')
     }
@@ -491,7 +624,7 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
       void summonBossFight($, effect, rules).catch(() => undefined)
     }
     if (effect.type === 'BOSS_FIGHT_STARTED') {
-      $.ui.toast(`The boss of Quest ${effect.ticket} bars the way: ${effect.hp} review Questions. /boss`)
+      $.ui.toast(`The boss of Quest ${effect.ticket} bars the way: ${bossStartText(effect)}. /boss`)
     }
     if (effect.type === 'BADGE_EARNED') {
       $.ui.toast(`Badge earned: ${effect.badge.name} · /badges`)
@@ -550,7 +683,7 @@ export const register: Register = (on, options) => {
     // are no first visit (seeded once from an older mod's Region file).
     const discovered = root === null ? [] : await loadDiscovered($, root).catch(() => [])
     await update($, game, current => {
-      const resumed = { ...newGame(player), ...current }
+      const resumed = withTicketCalls({ ...newGame(player), ...current })
 
       return {
         ...resumed,
@@ -598,7 +731,7 @@ export const register: Register = (on, options) => {
       const { ticket, sha, cwd } = resumed.bossFight
       void summonBossFight(
         $,
-        { type: 'BOSS_FIGHT_SUMMONED', ticket, sha, cwd: cwd ?? null, changes: resumed.quest.changes ?? [] },
+        { type: 'BOSS_FIGHT_SUMMONED', ticket, sha, cwd: cwd ?? null, changes: summonedChanges(resumed.quest, resumed.bossFight) },
         rules,
       ).catch(() => undefined)
     }
@@ -675,6 +808,18 @@ export const register: Register = (on, options) => {
       return { text: NO_QUESTION }
     }
 
+    // A letter for a Question the Player was never shown is no answer: it
+    // could not have been read. It is shown instead, and its time starts.
+    if (choice !== undefined && first.shownAt === null) {
+      if (current?.lastAnswer != null) {
+        await play($, { type: 'ANSWER_DISMISSED' }, rules)
+      }
+      await $.ui.open(SAGE).catch(() => undefined)
+      await showFirstQuestion($, rules)
+
+      return { text: `Read it first: no answer was taken.\n${questionText(first, current?.questions.length ?? 1)}` }
+    }
+
     if (choice !== undefined) {
       await answer($, first.id, choice, rules)
       const answered = (await read($, game))?.lastAnswer
@@ -696,7 +841,8 @@ export const register: Register = (on, options) => {
   // the terminal; /boss A to D answers it, /boss skip skips the fight.
   on('command.run', { command: 'boss' }, async ($, e) => {
     const args = e.args.trim()
-    const fight = (await read($, game))?.bossFight ?? null
+    const current = await read($, game)
+    const fight = current?.bossFight ?? null
     await $.ui.open(BOSS).catch(() => undefined)
 
     if (!isUnderWay(fight)) {
@@ -716,14 +862,21 @@ export const register: Register = (on, options) => {
     }
 
     const first = fight.questions[0]
+    const exhausted = isExhausted(current?.player ?? (await loadPlayer($)))
     if (choice === undefined || first === undefined) {
-      return { text: fight.status === 'fighting' ? bossQuestionText(fight) : bossOutcomeText(fight) }
+      return { text: fight.status === 'fighting' ? bossQuestionText(fight, exhausted) : bossOutcomeText(fight) }
     }
 
     await play($, { type: 'BOSS_ANSWERED', id: first.id, choice, at: await $.clock.now() }, rules)
-    const answered = (await read($, game))?.bossFight
+    const after = await read($, game)
+    const answered = after?.bossFight
 
-    return { text: answered == null ? 'The boss did not hear that answer.' : bossAnswerText(answered) }
+    return {
+      text:
+        answered == null
+          ? 'The boss did not hear that answer.'
+          : bossAnswerText(answered, after !== null && isExhausted(after.player)),
+    }
   })
 
   on('command.run', { command: 'badges' }, async $ => {
@@ -744,12 +897,22 @@ export const register: Register = (on, options) => {
     // until the run is under way, and its Encounters belong to the Quest.
     const event = translateCommand(e)
 
-    if (event !== null) {
-      await play(
-        $,
-        event.type === 'QUEST_START' ? { ...event, difficulty: await listedDifficulty($, event.ticket) } : event,
-        rules,
-      )
+    if (event?.type === 'QUEST_START') {
+      // The difficulty is the Quest Board's (Unrated when it never listed
+      // the ticket, so the Quest reward is never lost to it), and so is the
+      // title the Sage and the boss show Haiku. Looking the ticket up in its
+      // Quest Source for the rest comes later (QUEST_DETAILS).
+      const card = await listedCard($, event.ticket)
+      try {
+        await play($, { ...event, difficulty: card?.difficulty ?? 'Unrated' }, rules)
+      } finally {
+        // Kept even when the Region file could not record the start.
+        if (card !== undefined) {
+          await play($, { type: 'QUEST_DETAILS', ticket: event.ticket, title: card.title }, rules)
+        }
+      }
+    } else if (event !== null) {
+      await play($, event, rules)
     }
 
     return next(e)
@@ -779,6 +942,14 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: SAGE.id }, async ($, e) => {
     const current = await read($, game)
+    // Drawing a Question puts it in front of the Player: its time starts.
+    // A drawing may not write, so it is recorded just after; showing a
+    // Question already shown changes nothing.
+    if (current !== null && current.lastAnswer === null && current.questions[0]?.shownAt === null) {
+      $.clock.after(0, () => {
+        void showFirstQuestion($, rules).catch(() => undefined)
+      })
+    }
 
     return drawSage(
       $,
@@ -788,9 +959,11 @@ export const register: Register = (on, options) => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: BOSS.id }, async ($, e) =>
-    drawBoss($, e, (await read($, game))?.bossFight ?? null, bossActions($, rules)),
-  )
+  on('ui.render', { component: 'Pane', requestId: BOSS.id }, async ($, e) => {
+    const current = await read($, game)
+
+    return drawBoss($, e, current?.bossFight ?? null, bossActions($, rules), current !== null && isExhausted(current.player))
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, game)

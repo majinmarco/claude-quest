@@ -253,6 +253,30 @@ describe('Quest Board', () => {
     expect(submitted).toEqual([])
   })
 
+  test('a Quest started for a ticket the board listed takes its title and difficulty', async ($, on) => {
+    engine(on)
+    gh(on)
+    on('command.run', () => ({}))
+    const games: { quest?: { ticket: string; title?: string; difficulty?: string } | null }[] = []
+    on('state.set', (_, e, next) => {
+      games.push(e.value as (typeof games)[number])
+
+      return next(e)
+    })
+    await $.session.start(START)
+    await questBoard($)
+
+    await $.command.run({
+      command: 'mattpocock-skills:implement',
+      args: '#5',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: false, columns: 120 },
+    })
+
+    const quest = games.filter(game => game.quest !== undefined).at(-1)?.quest
+    expect(quest).toMatchObject({ ticket: '#5', title: 'Quest Board from GitHub Issues', difficulty: 'Medium' })
+  })
+
   test('a repo with no open issues shows an empty Quest Board', async ($, on) => {
     engine(on)
     gh(on, () => ran(0, '[]'))

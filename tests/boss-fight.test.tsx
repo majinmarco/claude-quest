@@ -2,8 +2,11 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+import { bossQuestionText, bossVerdictOf } from '../src/boss'
+import { newPlayer } from '../src/engine'
+import type { BossFight, Question } from '../types'
 import { writeNewFile } from './fixtures/file-changes'
-import { commitAfterAdd, commitInFolder, commitNothingToCommit, commitPlain, GIT_SHOW_DEPOSIT } from './fixtures/git-commits'
+import { commitAfterAdd, commitInFolder, commitNothingToCommit, commitPlain, commitThenFailingTests, GIT_SHOW_DEPOSIT } from './fixtures/git-commits'
 
 const ROOT = '/work/vault'
 const REGION = `${ROOT}/.claude/claude-quest.json`
@@ -54,6 +57,15 @@ const review = (n: number) => ({
 
 const THREE = { questions: [review(1), review(2), review(3)] }
 
+/** An API error as `$.model.complete` resolves it. */
+const apiError = (status: number | null, error: string) => ({
+  isAnswered: false,
+  reason: 'api-error',
+  status,
+  error,
+  usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+})
+
 const USAGE = {
   input_tokens: 2000,
   output_tokens: 600,
@@ -78,9 +90,13 @@ const engine = (
     replies = [THREE] as unknown[],
     show = { exitCode: 0, stdout: GIT_SHOW_DEPOSIT },
     losesFirstCall = false,
+    player = undefined as unknown,
   } = {},
 ) => {
   const kept = new Map<string, unknown>()
+  if (player !== undefined) {
+    kept.set('player', player)
+  }
   on('store.get', (_, e) => ({ value: kept.get(e.key) }))
   on('store.set', (_, e) => {
     kept.set(e.key, e.value)
@@ -132,6 +148,9 @@ const engine = (
       return new Promise(() => undefined)
     }
     await clock.sleep(HAIKU_MS)
+    if (typeof reply === 'object' && reply !== null && 'isAnswered' in reply) {
+      return { value: reply as never }
+    }
 
     return { value: { isAnswered: true, text: JSON.stringify(reply), usage: USAGE } }
   })
@@ -158,6 +177,8 @@ const engine = (
     answers,
     player: () => kept.get('player') as Record<string, unknown> | undefined,
     region: () => JSON.parse(files.get(REGION) ?? '{}') as { quests?: Record<string, unknown>[] },
+    /** Writes the Region file by hand, as the Player or another session may. */
+    setRegion: (region: unknown) => files.set(REGION, JSON.stringify(region)),
   }
 }
 
@@ -181,6 +202,47 @@ const hud = async ($: Engine) => {
   return texts
 }
 
+describe('The boss\'s words, Exhausted', () => {
+  const question: Question = {
+    prompt: 'Q?',
+    options: ['It throws', 'It adds the gold anyway', 'It returns the vault unchanged', 'It unlocks it first'],
+    answer: 0,
+    explanation: 'deposit throws.',
+    stat: 'intelligence',
+    source: { path: 'src/vault.ts', lines: ['  if (vault.locked) {'] },
+    id: 'boss-2',
+    npc: 'Boss',
+    queuedAt: 0,
+    shownAt: null,
+  }
+  const fight = (overrides: Partial<BossFight> = {}): BossFight => ({
+    ticket: '#12',
+    sha: '7ab19e4',
+    cwd: null,
+    status: 'fighting',
+    hp: 2,
+    maxHp: 2,
+    questionCount: 3,
+    rightAnswers: 0,
+    questions: [question],
+    lastAnswer: null,
+    ...overrides,
+  })
+  const wrong = (hpLost: number) => ({ question, choice: 1, isCorrect: false, answeredAt: 0, answerMs: null, isHasty: false, xp: 0, hpLost })
+
+  test('a wrong answer that took the last HP: you fight on, exhausted', () => {
+    expect(bossVerdictOf(wrong(10), fight(), true)).toBe('The boss strikes: -10 HP. You fight on, exhausted. The answer was A: It throws')
+  })
+
+  test('Exhausted, a wrong answer costs nothing: you fight on', () => {
+    expect(bossVerdictOf(wrong(0), fight(), true)).toBe('The boss strikes, but you fight on, exhausted: no HP lost. The answer was A: It throws')
+  })
+
+  test('Exhausted, the boss\'s Question says so first, and nothing is blocked', () => {
+    expect(bossQuestionText(fight(), true)).toMatch(/^You fight on, exhausted\.\nThe boss of Quest #12 asks \(1 review Question left, boss 2\/2 HP\): Q\?/)
+  })
+})
+
 describe('The Boss Fight', () => {
   test('the first commit in a Quest summons it from the commit\'s diff, after the tool call has returned', async ($, on) => {
     const { answers, clock, asked, runs, toasts } = engine(on)
@@ -199,9 +261,9 @@ describe('The Boss Fight', () => {
     expect(runs).toEqual([{ argv: ['git', 'show', '--format=', '--no-color', '--no-ext-diff', '7ab19e4'], cwd: undefined }])
     expect(asked).toHaveLength(1)
     expect(asked[0]).toContain('+export function deposit(vault: Vault, amount: number): Vault {')
-    expect(asked[0]).toContain('#12')
-    expect(toasts).toContain('The boss of Quest #12 bars the way: 3 review Questions. /boss')
-    expect(await hud($)).toContain('Boss 3/3 HP · /boss')
+    expect(asked[0]).toContain('Ticket: #12')
+    expect(toasts).toContain('The boss of Quest #12 bars the way: Boss 2 HP · 3 Questions. /boss')
+    expect(await hud($)).toContain('Boss 2/2 HP · /boss')
   })
 
   test('a commit under cd reads its diff in that folder', async ($, on) => {
@@ -251,6 +313,54 @@ describe('The Boss Fight', () => {
     expect(asked.at(-1)).toContain('/work/forge/src/user-profile-card.tsx')
   })
 
+  test('a commit chained before failing tests summons the Boss Fight from git\'s diff of it', async ($, on) => {
+    const { call, asked, runs } = engine(on)
+    await $.session.start(START)
+    await startQuest($)
+
+    await call($, commitThenFailingTests)
+
+    expect(runs).toEqual([{ argv: ['git', 'show', '--format=', '--no-color', '--no-ext-diff', '4c1d2e9'], cwd: undefined }])
+    expect(asked).toHaveLength(1)
+    expect((await run($, 'boss')).text).toMatch(/^The boss of Quest #12 asks/)
+  })
+
+  test('a commit read from a failed command\'s output, git unable to show it, is not reviewed from the Quest\'s changes', async ($, on) => {
+    const { call, asked, region } = engine(on, { show: { exitCode: 128, stdout: '' } })
+    await $.session.start(START)
+    await startQuest($)
+    await call($, writeNewFile)
+    const sage = asked.length
+
+    await call($, commitThenFailingTests)
+
+    expect(asked).toHaveLength(sage)
+    expect(region().quests?.[0]).toMatchObject({ status: 'unfought' })
+  })
+
+  test('a passing Haiku failure is given back and tried again once; the fight starts', async ($, on) => {
+    const { call, asked } = engine(on, { replies: [apiError(529, 'overloaded'), THREE] })
+    await $.session.start(START)
+    await startQuest($)
+
+    await call($, commitAfterAdd)
+
+    expect(asked).toHaveLength(2)
+    expect((await run($, 'boss')).text).toMatch(/^The boss of Quest #12 asks \(3 review Questions left/)
+  })
+
+  test('with Haiku unavailable the Quest closes unfought, told once that Questions are off', async ($, on) => {
+    const { call, asked, toasts, region } = engine(on, { replies: [apiError(403, 'authentication_failed')] })
+    await $.session.start(START)
+    await startQuest($)
+
+    await call($, commitAfterAdd)
+
+    expect(asked).toHaveLength(1)
+    expect(toasts.filter(text => text === "Questions are off: Haiku isn't available on this account")).toHaveLength(1)
+    expect(region().quests?.[0]).toMatchObject({ status: 'unfought' })
+  })
+
   test('Haiku is asked again for the Questions missing, within the Boss Fight\'s budget', async ($, on) => {
     const { call, asked } = engine(on, {
       replies: [{ questions: [review(1)] }, { questions: [review(2)] }, { questions: [review(3)] }],
@@ -262,7 +372,7 @@ describe('The Boss Fight', () => {
 
     expect(asked).toHaveLength(3)
     expect(asked[2]).toContain('What does deposit do with a locked vault? (2)')
-    expect((await run($, 'boss')).text).toContain('(3 review Questions left, boss 3/3 HP)')
+    expect((await run($, 'boss')).text).toContain('(3 review Questions left, boss 2/2 HP)')
   })
 
   test('a Boss Fight skipped while its Questions are made asks Haiku no more', async ($, on) => {
@@ -322,7 +432,7 @@ describe('The Boss Fight', () => {
     const asked = await run($, 'boss')
     expect(asked.text).toBe(
       [
-        'The boss of Quest #12 asks (3 review Questions left, boss 3/3 HP): What does deposit do with a locked vault? (1)',
+        'The boss of Quest #12 asks (3 review Questions left, boss 2/2 HP): What does deposit do with a locked vault? (1)',
         'src/vault.ts:',
         '      if (vault.locked) {',
         '        throw new Error("The vault is locked")',
@@ -336,9 +446,12 @@ describe('The Boss Fight', () => {
 
     await clock.advance(60_000)
     const first = await run($, 'boss', 'A')
-    expect(first.text).toMatch(/^Hit! \+30 XP \(Intelligence\)\. Boss 2\/3 HP\ndeposit throws/)
-    await run($, 'boss', 'a')
+    expect(first.text).toMatch(/^Hit! \+30 XP \(Intelligence\)\. Boss 1\/2 HP\ndeposit throws/)
+    const felled = await run($, 'boss', 'a')
+    expect(felled.text).toMatch(/^Hit! \+30 XP \(Intelligence\)\. The boss falls!\n/)
+    expect(felled.text).toContain('(1 review Question left, the boss has fallen: a finishing blow)')
     const last = await run($, 'boss', 'A')
+    expect(last.text).toMatch(/^A finishing blow! \+30 XP \(Intelligence\)\.\n/)
 
     // An Unrated Quest (the board never listed it) rewards 80, Flawless 40 more.
     expect(last.text).toContain('The boss falls! +120 XP (Intelligence). Flawless! Trophy: Bane of vault#12. Quest #12 closed.')
@@ -364,13 +477,60 @@ describe('The Boss Fight', () => {
 
     const wrong = await run($, 'boss', 'B')
     await run($, 'boss', 'A')
-    const last = await run($, 'boss', 'A')
+    const last = await run($, 'boss', 'C')
 
     expect(wrong.text).toMatch(/^The boss strikes: -10 HP\. The answer was A: It throws/)
-    expect(last.text).toContain('The boss still stands, 1/3 HP: Quest #12 closed without the Boss Fight\'s reward.')
-    expect(player()).toMatchObject({ hp: 90, xp: 60 })
+    expect(last.text).toContain('The boss still stands, 1/2 HP: Quest #12 closed without the Boss Fight\'s reward.')
+    expect(player()).toMatchObject({ hp: 80, xp: 30 })
     expect(player()?.trophies).toBeUndefined()
     expect(region().quests?.[0]).toMatchObject({ status: 'lost' })
+  })
+
+  test('a wrong answer taking the last HP: the Player fights on, exhausted, and the fight goes on', async ($, on) => {
+    // The Quest heals 25: 30 HP, three wrong answers to 0.
+    const { call, player } = engine(on, { player: { ...newPlayer(), hp: 5 } })
+    await $.session.start(START)
+    await startQuest($)
+    await call($, commitAfterAdd)
+
+    await run($, 'boss', 'B')
+    const struck = await run($, 'boss', 'B')
+    expect(player()).toMatchObject({ hp: 10 })
+    expect(struck.text).toContain('(1 review Question left, boss 2/2 HP)')
+    const last = await run($, 'boss', 'B')
+
+    expect(player()).toMatchObject({ hp: 0 })
+    expect(last.text).toMatch(/^The boss strikes: -10 HP\. The answer was A/)
+    expect(last.text).toContain('The boss still stands, 2/2 HP')
+  })
+
+  test('a Quest closed with no active record in the Region file (lost, or written over) is added to it', async ($, on) => {
+    const { call, region, setRegion } = engine(on, { replies: [THREE] })
+    await $.session.start(START)
+    await startQuest($)
+    setRegion({ quests: [{ ticket: '#9', startedAt: '2026-10-01T00:00:00.000Z', status: 'won', endedAt: '2026-10-01T01:00:00.000Z' }] })
+
+    await call($, commitAfterAdd)
+    await run($, 'boss', 'skip')
+
+    expect(region().quests).toEqual([
+      { ticket: '#9', startedAt: '2026-10-01T00:00:00.000Z', status: 'won', endedAt: '2026-10-01T01:00:00.000Z' },
+      { ticket: '#12', startedAt: '2026-10-23T21:00:04.500Z', status: 'skipped', endedAt: '2026-10-23T21:00:04.500Z' },
+    ])
+  })
+
+  test('a Quest abandoned with no active record in the Region file is added to it', async ($, on) => {
+    const { region, setRegion } = engine(on)
+    await $.session.start(START)
+    await startQuest($)
+    setRegion({ quests: [] })
+
+    await run($, 'mattpocock-skills:implement', '#13')
+
+    expect(region().quests).toEqual([
+      { ticket: '#12', startedAt: '2026-10-23T21:00:00.000Z', status: 'abandoned', endedAt: '2026-10-23T21:00:00.000Z' },
+      { ticket: '#13', startedAt: '2026-10-23T21:00:00.000Z', status: 'active' },
+    ])
   })
 
   test('/boss skip closes the Quest without the reward, recorded as skipped', async ($, on) => {
@@ -406,7 +566,7 @@ describe('The Boss Fight', () => {
     ])
 
     await ui.press({ key: 'boss-option:boss-1:0' })
-    expect((await ui.find({ type: 'Text', text: /^Hit!/ }))?.text).toBe('Hit! +30 XP (Intelligence). Boss 2/3 HP')
+    expect((await ui.find({ type: 'Text', text: /^Hit!/ }))?.text).toBe('Hit! +30 XP (Intelligence). Boss 1/2 HP')
     expect(player()).toMatchObject({ xp: 30 })
 
     await ui.press({ key: 'boss-skip' })
@@ -435,12 +595,12 @@ describe('The Boss Fight', () => {
     await run($, 'boss', 'A')
 
     const desktop = await $.ui.mount({ ...SCENE, surface: 'desktop' })
-    expect((await desktop.find({ type: 'Svg' }))?.props.alt).toBe('A hit on the boss of Quest #12 · 2/3 HP · /boss')
+    expect((await desktop.find({ type: 'Svg' }))?.props.alt).toBe('A hit on the boss of Quest #12 · 1/2 HP · /boss')
     await desktop.unmount()
 
     const terminal = await $.ui.mount({ ...SCENE, surface: 'terminal' })
     expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
-    expect((await terminal.find({ type: 'Text' }))?.text).toBe('A hit on the boss of Quest #12 · 2/3 HP · /boss')
+    expect((await terminal.find({ type: 'Text' }))?.text).toBe('A hit on the boss of Quest #12 · 1/2 HP · /boss')
     await terminal.unmount()
 
     await run($, 'boss', 'A')
@@ -464,7 +624,7 @@ describe('The Boss Fight', () => {
     await $.session.start(START)
     await clock.advance(HAIKU_MS)
 
-    expect(await hud($)).toContain('Boss 3/3 HP · /boss')
+    expect(await hud($)).toContain('Boss 2/2 HP · /boss')
   })
 
   test('the Boss Fight survives a reload of the mod', async ($, on) => {
@@ -475,6 +635,6 @@ describe('The Boss Fight', () => {
 
     await $.session.start(START)
 
-    expect(await hud($)).toContain('Boss 3/3 HP · /boss')
+    expect(await hud($)).toContain('Boss 2/2 HP · /boss')
   })
 })

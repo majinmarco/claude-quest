@@ -274,3 +274,58 @@ export const GIT_SHOW_MIXED = "diff --git a/coin.png b/coin.png\ndeleted file mo
 
 /** A later commit: a text file deleted. */
 export const GIT_SHOW_DELETED = "diff --git a/old.txt b/old.txt\ndeleted file mode 100644\nindex 286c5f5..0000000\n--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n"
+
+// Derived, not captured: the Bash calls below were not recorded. They are
+// built from the recorded format above (a failed Bash call is an error whose
+// result is "Error: " and whose text is "Exit code N", then the command's
+// output; git's summary line `[branch sha] subject` as commitAfterAdd printed
+// it), for a commit chained before a command that then failed. A failed call
+// hands no record, so no gitOperation: the sha is only in the text.
+
+/** `git commit && npm test`, the commit made, the tests failing after it. */
+export const commitThenFailingTests = {
+  "input": {
+    "command": "git add -A && git commit -m \"Add withdraw limit\" && npm test",
+    "description": "Commit the withdraw limit and run the tests",
+    "tool": "Bash",
+    "tool_use_id": "toolu_derived_commit_then_failing_tests"
+  },
+  "result": {
+    "ref": 1,
+    "result": "Error: Exit code 1\n[main 4c1d2e9] Add withdraw limit\n 1 file changed, 3 insertions(+)\n\n> vault@1.0.0 test\n> vitest run\n\n FAIL  src/vault.test.ts > withdraw > refuses past the limit\n\n Test Files  1 failed (1)\n      Tests  1 failed | 4 passed (5)",
+    "text": "Exit code 1\n[main 4c1d2e9] Add withdraw limit\n 1 file changed, 3 insertions(+)\n\n> vault@1.0.0 test\n> vitest run\n\n FAIL  src/vault.test.ts > withdraw > refuses past the limit\n\n Test Files  1 failed (1)\n      Tests  1 failed | 4 passed (5)",
+    "isError": true
+  }
+} as const
+
+/** The same, the first commit of a repository: git prints `(root-commit)`, under `cd vault &&`. */
+export const rootCommitThenFailingTests = {
+  "input": {
+    "command": "cd vault && git commit -m \"Start the vault\" && npm test",
+    "description": "Commit and run the tests",
+    "tool": "Bash",
+    "tool_use_id": "toolu_derived_root_commit_then_failing_tests"
+  },
+  "result": {
+    "ref": 1,
+    "result": "Error: Exit code 1\n[main (root-commit) 0a1b2c3] Start the vault\n 2 files changed, 12 insertions(+)\nnpm error Missing script: \"test\"",
+    "text": "Exit code 1\n[main (root-commit) 0a1b2c3] Start the vault\n 2 files changed, 12 insertions(+)\nnpm error Missing script: \"test\"",
+    "isError": true
+  }
+} as const
+
+/** `git commit --amend && npm test`, the tests failing: an amend, no new commit. */
+export const amendThenFailingTests = {
+  "input": {
+    "command": "git commit --amend --no-edit && npm test",
+    "description": "Amend and run the tests",
+    "tool": "Bash",
+    "tool_use_id": "toolu_derived_amend_then_failing_tests"
+  },
+  "result": {
+    "ref": 1,
+    "result": "Error: Exit code 1\n[main 9f8e7d6] Add withdraw limit\n Date: Fri Oct 23 20:47:12 2026 -0400\n 1 file changed, 3 insertions(+)\n\n Test Files  1 failed (1)",
+    "text": "Exit code 1\n[main 9f8e7d6] Add withdraw limit\n Date: Fri Oct 23 20:47:12 2026 -0400\n 1 file changed, 3 insertions(+)\n\n Test Files  1 failed (1)",
+    "isError": true
+  }
+} as const

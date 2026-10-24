@@ -271,6 +271,14 @@ describe('Economy: Questions', () => {
     expect(step(answered, ready('change-2')).state.questions).toHaveLength(1)
   })
 
+  test('a Question for a change whose Question is already waiting is not queued twice', () => {
+    const waiting = play(newGame(), ready('change-1')).state
+    const { state, effects } = step(waiting, ready('change-1', question({ prompt: 'Another wording?' })))
+
+    expect(state.questions).toHaveLength(1)
+    expect(effects).toEqual([])
+  })
+
   test('a wrong Sage answer during a Quest is counted on it', () => {
     const questing = play(newGame(), { type: 'QUEST_START', ticket: '#4' }, ready()).state
 
@@ -352,6 +360,14 @@ describe('Economy: the Boss Fight and the Quest reward', () => {
     expect(effects.map(effect => effect.type)).toContain('TROPHY_EARNED')
   })
 
+  test('a Boss Fight won with a wrong Boss answer pays the Quest reward but is not Flawless', () => {
+    const { state } = play(summon(), bossReady(), bossAnswer(1, 1), bossAnswer(2), bossAnswer(3))
+
+    // 2 × 30 for the answers and 100 for a Medium Quest.
+    expect(state.bossFight).toMatchObject({ status: 'won', reward: 100, flawless: false })
+    expect(state.player.totalXp).toBe(160)
+  })
+
   test('a wrong Sage answer in the Quest spoils Flawless', () => {
     const spoiled = answerFirst(step(summon(), ready()).state, 1).state
     const { state } = win(spoiled)
@@ -375,7 +391,8 @@ describe('Economy: the Boss Fight and the Quest reward', () => {
   })
 
   test('a Boss Fight lost, then won in a rematch, still pays the Quest reward once', () => {
-    const lost = play(summon(), bossReady(), bossAnswer(1, 1), bossAnswer(2), bossAnswer(3)).state
+    const lost = play(summon(), bossReady(), bossAnswer(1, 1), bossAnswer(2, 1), bossAnswer(3)).state
+    expect(lost.bossFight?.status).toBe('lost')
     const { state } = win(summon('Medium', lost))
 
     // The rematch is its own Quest: no wrong answer in it, so Flawless too.
@@ -409,9 +426,9 @@ describe('Economy: the Boss Fight and the Quest reward', () => {
 
   test('a Boss Fight lost pays its right answers, no reward, and resets the streak', () => {
     const streaking = { ...newGame(), region: 'vault', player: { ...newPlayer(), tally: { ...newPlayer().tally, bossStreak: 2 } } }
-    const { state } = play(summon('Medium', streaking), bossReady(), bossAnswer(1), bossAnswer(2, 1), bossAnswer(3))
+    const { state } = play(summon('Medium', streaking), bossReady(), bossAnswer(1), bossAnswer(2, 1), bossAnswer(3, 1))
 
-    expect(state.player.totalXp).toBe(60)
+    expect(state.player.totalXp).toBe(30)
     expect(state.bossFight).toMatchObject({ status: 'lost', reward: 0 })
     expect(state.player.tally).toMatchObject({ bossStreak: 0, questsClosed: 1, regions: ['vault'] })
   })

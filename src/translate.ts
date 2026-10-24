@@ -373,18 +373,67 @@ const commitFolderOf = (command: string): string | null => {
   return folder
 }
 
+/** git's summary line of a commit made: `[main 7ab19e4] subject`, `[main (root-commit) 0a1b2c3] ...`. */
+const COMMIT_SUMMARY = /^\[[^\]]*? ([0-9a-f]{7,40})\] /m
+
+/** The flags that make `git commit` no new commit, or print no summary. */
+const NOT_A_PLAIN_COMMIT = new Set(['--amend', '--dry-run', '--quiet'])
+
+/** A short flag that holds `-q` among others (`-q`, `-qm`, `-aqm`). */
+const QUIET_SHORT_FLAGS = /^-[a-zA-Z]*q[a-zA-Z]*$/
+
+/**
+ * Whether a command runs a plain `git commit` in one of its segments, and
+ * only goes on after it succeeded: a new commit that prints git's summary
+ * line (not an amend, a dry run, a quiet one), with no `||` after it, which
+ * would run what follows only when the commit failed (and could print a
+ * summary line of its own).
+ */
+const runsPlainCommit = (command: string): boolean => {
+  const parts = command.split(/(&&|\|\||[;&|\n])/)
+
+  return parts.some((segment, at) => {
+    const words = segment.trim().replace(/^\(+/, '').trim().split(/\s+/)
+    const isPlain =
+      words[0] === 'git' &&
+      words[1] === 'commit' &&
+      !words.some(word => NOT_A_PLAIN_COMMIT.has(word) || QUIET_SHORT_FLAGS.test(word))
+
+    return isPlain && !parts.slice(at + 1).includes('||')
+  })
+}
+
 // A commit is read from what Claude Code says the Bash call did, not from
 // the command: Claude Code 2.1.308 hands a successful Bash call's record a
 // gitOperation, { commit: { sha, kind, branch } } when it committed. Only a
 // new commit (`committed`) counts: an amend rewrites one already made, a
 // cherry-pick replays another's work. A dry run or a failed commit (an error,
 // `Exit code 1`) hands over no gitOperation, so it is no commit.
+//
+// A commit chained before a command that failed (`git commit && npm test`,
+// the tests failing) made its commit, but the call is an error with no
+// record. When the error's text is an exit (`Exit code N`) and a segment of
+// the command is a plain `git commit`, the sha is read from git's summary
+// line in it; such a commit is marked `fromError`, as its diff must come from
+// git itself (the text could be anything the command printed).
 export const translateCommit = (
   input: ToolCallSeen,
   outcome: ToolCallOutcome,
 ): GameEvent | null => {
-  if (input.tool !== 'Bash' || outcome.deny !== undefined || outcome.isError === true) {
+  if (input.tool !== 'Bash' || outcome.deny !== undefined) {
     return null
+  }
+
+  const cwd = typeof input.command === 'string' ? commitFolderOf(input.command) : null
+
+  if (outcome.isError === true) {
+    const text = outcome.text ?? ''
+    if (typeof input.command !== 'string' || !/^Exit code \d+/.test(text) || !runsPlainCommit(input.command)) {
+      return null
+    }
+    const sha = COMMIT_SUMMARY.exec(text)?.[1]
+
+    return sha === undefined ? null : { type: 'COMMIT', sha, cwd, fromError: true }
   }
 
   const record = outcome.result
@@ -397,11 +446,7 @@ export const translateCommit = (
     return null
   }
 
-  return {
-    type: 'COMMIT',
-    sha: commit.sha,
-    cwd: typeof input.command === 'string' ? commitFolderOf(input.command) : null,
-  }
+  return { type: 'COMMIT', sha: commit.sha, cwd }
 }
 
 /** The part of a `session.measure` input, or of `$.session.usage()`, it reads. */

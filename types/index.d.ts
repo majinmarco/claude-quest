@@ -202,12 +202,6 @@ export type Quest = {
   /** The Encounters played during the Quest, oldest first. */
   encounters: Encounter[]
   /**
-   * The Haiku calls made for the Quest so far, by purpose: the Sage's and the
-   * Boss Fight's, each against its own limit. Absent until the first call,
-   * and in a Quest kept by an older mod.
-   */
-  haikuCalls?: { sage: number; boss: number }
-  /**
    * The changes made during the Quest, the latest few (a FileChange per
    * file-changing tool call): the Boss Fight's diff when git cannot give the
    * commit's. Absent until the first, and in a Quest kept by an older mod.
@@ -219,12 +213,28 @@ export type Quest = {
   pools?: PoolCounters
   /** Wrong Sage answers during the Quest: any one spoils a Flawless win. */
   sageWrong?: number
+  /** The ticket's title, as its Quest Source lists it; absent until known. */
+  title?: string
+  /**
+   * The start of the ticket's description, up to 1500 characters, for Haiku
+   * to read as data; absent until known.
+   */
+  summary?: string
+  /** Whether the ticket's Quest Source found it; absent until looked up. */
+  verified?: TicketVerified
 }
 
 /**
- * How a Quest closed: its Boss Fight `won` (every Question right), `lost`
- * (answered, the boss left standing), `skipped` by the Player, or `unfought`
- * when no Boss Fight could be made (Haiku failed or over budget, no diff).
+ * What looking a ticket up in its Quest Source found: `found`; `not-found`,
+ * no such ticket; `unknown`, the source could not be reached.
+ */
+export type TicketVerified = 'found' | 'not-found' | 'unknown'
+
+/**
+ * How a Quest closed: its Boss Fight `won` (the boss fell: two of three
+ * right), `lost` (every Question answered, the boss left standing),
+ * `skipped` by the Player, or `unfought` when no Boss Fight could be made
+ * (Haiku failed or over budget, no diff).
  */
 export type QuestOutcome = 'won' | 'lost' | 'skipped' | 'unfought'
 
@@ -241,7 +251,10 @@ export type BossFight = {
   /** The folder the commit ran in, as its command moved there; null for the session's. */
   cwd: string | null
   status: 'summoned' | 'fighting' | QuestOutcome
-  /** The boss's HP: one per Question; each right answer is a hit. */
+  /**
+   * The boss's HP: two thirds of its Questions, rounded up; each right answer
+   * while it stands is a hit. A fight kept by an older mod has one per Question.
+   */
   hp: number
   maxHp: number
   /** The Questions not yet answered, in the order they are asked. */
@@ -250,6 +263,13 @@ export type BossFight = {
   lastAnswer: QuestionAnswer | null
   /** How many Questions it started with; absent in one kept by an older mod (maxHp). */
   questionCount?: number
+  /** The right answers given so far; absent in one kept by an older mod (its hits). */
+  rightAnswers?: number
+  /**
+   * The commit was read from a failed command's output (`git commit && npm
+   * test`, the tests failing): its diff is git's or none, never the Quest's.
+   */
+  fromError?: boolean
   /** Once ended, the XP its end paid: the Quest reward (and Flawless bonus), or the unfought share. */
   reward?: number
   /** Won with every answer right and no wrong Sage answer in the Quest. */
@@ -370,6 +390,17 @@ export type GameState = {
   answeredKeys?: string[]
   /** The Region's name: the folder of the session's root; null when not known. */
   region?: string | null
+  /**
+   * The Haiku calls each ticket's Quests made this session, by purpose, each
+   * against its own limit: a ticket started again keeps its count. Kept for
+   * the session only (never in the Region file); absent until the first call.
+   */
+  haikuCallsByTicket?: Record<string, { sage: number; boss: number }>
+  /**
+   * Haiku was found unavailable on this account this session (refused, not
+   * found, not allowed): no more calls are made, Sage or Boss Fight.
+   */
+  haikuUnavailable?: boolean
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */
@@ -382,7 +413,10 @@ export type QuestRecord = {
    * Boss Fight closed it (QuestOutcome) once it did.
    */
   status: 'active' | 'abandoned' | QuestOutcome
-  /** When the Quest closed, as an ISO 8601 timestamp; absent while active or abandoned. */
+  /**
+   * When the Quest closed, as an ISO 8601 timestamp; absent while active, and
+   * on an abandoned run unless its record was only written as it ended.
+   */
   endedAt?: string
 }
 

@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Badge, BadgeId, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
+import type { Badge, BadgeId, Battle, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
 
-export type { Badge, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
+export type { Badge, Battle, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
 
 export type GameEvent =
   /**
@@ -46,6 +46,21 @@ export type GameEvent =
    */
   | { type: 'QUEST_START'; ticket: string; difficulty?: Difficulty }
   /**
+   * What is known of the ticket of Quest `ticket`: its title, a summary of
+   * its description, its difficulty and whether its Quest Source found it.
+   * Kept on the active Quest when it is that ticket's; each field given
+   * replaces the one kept, the others stay. The Sage and the boss show the
+   * title and summary to Haiku, as data.
+   */
+  | {
+      type: 'QUEST_DETAILS'
+      ticket: string
+      title?: string
+      summary?: string
+      difficulty?: Difficulty
+      verified?: TicketVerified
+    }
+  /**
    * A check (a test run, lint or type-check) failed: `failures` is how many
    * its output counts, null when it counts none that can be read.
    */
@@ -76,12 +91,35 @@ export type GameEvent =
    * Haiku is about to be called for `purpose`: granted while its budget lasts
    * (and counted), refused once spent. Ask before each call, never after.
    */
-  | { type: 'HAIKU_CALL_REQUESTED'; purpose: HaikuPurpose }
+  | {
+      type: 'HAIKU_CALL_REQUESTED'
+      purpose: HaikuPurpose
+      /**
+       * The cache key of the change a Sage call would ask about: refused,
+       * spending nothing, when that change was answered this session or its
+       * Question is waiting.
+       */
+      key?: string
+    }
+  /**
+   * A granted call for `purpose` failed for a passing reason (rate limited,
+   * overloaded, no response): it is given back to the budget it was counted
+   * on, `ticket`'s (null: the session's between Quests).
+   */
+  | { type: 'HAIKU_CALL_REFUNDED'; purpose: HaikuPurpose; ticket: string | null }
+  /**
+   * Haiku cannot be reached on this account (the model refused or not
+   * found, the account not allowed): no call is made for the rest of the
+   * session, Sage or Boss Fight.
+   */
+  | { type: 'HAIKU_UNAVAILABLE' }
   /**
    * A git commit was made through Claude's Bash tool: `sha` as git printed
    * it, `cwd` the folder the command moved to first (null: the session's).
+   * `fromError`: read from the output of a command that failed after the
+   * commit, so its diff must come from git, never from the Quest's changes.
    */
-  | { type: 'COMMIT'; sha: string; cwd: string | null }
+  | { type: 'COMMIT'; sha: string; cwd: string | null; fromError?: true }
   /** The Boss Fight of Quest `ticket` has its review Questions, made at `at`. */
   | { type: 'BOSS_FIGHT_READY'; ticket: string; questions: QuestionContent[]; at: number }
   /** No Boss Fight could be made for Quest `ticket`: why, in `reason`. */
@@ -126,8 +164,14 @@ export type Effect =
   | { type: 'QUEST_ABANDONED'; ticket: string }
   /** A Haiku call for `purpose` may go ahead: the `used`th of `limit`. */
   | { type: 'HAIKU_CALL_GRANTED'; purpose: HaikuPurpose; used: number; limit: number }
-  /** The budget for `purpose` is spent (`used` of `limit`): no call is made. */
-  | { type: 'HAIKU_CALL_REFUSED'; purpose: HaikuPurpose; used: number; limit: number }
+  /**
+   * No call is made for `purpose`: its budget is spent (`used` of `limit`);
+   * with `reason` `unavailable`, Haiku is not available this session; with
+   * `asked`, the change was asked about already (isAsked).
+   */
+  | { type: 'HAIKU_CALL_REFUSED'; purpose: HaikuPurpose; used: number; limit: number; reason?: 'unavailable' | 'asked' }
+  /** Haiku was just found unavailable on this account: told once per session. */
+  | { type: 'HAIKU_UNAVAILABLE' }
   /**
    * The active Quest's first commit summoned its Boss Fight: its Questions are
    * to be made from the commit's diff (`sha`, in `cwd`, null for the
@@ -141,9 +185,12 @@ export type Effect =
       cwd: string | null
       changes: FileChange[]
     }
-  /** The Boss Fight's Questions wait: the boss stands with `hp`, one per Question. */
-  | { type: 'BOSS_FIGHT_STARTED'; ticket: string; hp: number }
-  /** A right answer hit the boss: `hp` left. */
+  /**
+   * The Boss Fight's `questionCount` Questions wait: the boss stands with
+   * `hp`, two thirds of them rounded up, so two right of three win.
+   */
+  | { type: 'BOSS_FIGHT_STARTED'; ticket: string; hp: number; questionCount: number }
+  /** A right answer hit the boss, while it stood: `hp` left. */
   | { type: 'BOSS_HIT'; hp: number }
   /** A Badge joined the Player's. */
   | { type: 'BADGE_EARNED'; badge: Badge }
@@ -155,7 +202,7 @@ export type Effect =
 /**
  * What a Haiku call is for: the Sage's Question after a code-changing
  * Encounter, or the Boss Fight's review Questions at a Quest's end. Each has
- * a budget of its own per Quest.
+ * a budget of its own per ticket for the session.
  */
 export type HaikuPurpose = 'sage' | 'boss'
 
@@ -164,9 +211,9 @@ export type HaikuPurpose = 'sage' | 'boss'
  * budget, and when a right answer is too hasty for full XP.
  */
 export type Rules = {
-  /** Haiku calls the Sage may make per Quest. */
+  /** Haiku calls the Sage may make per ticket, for the session (0 disables its Questions). */
   sageCallsPerQuest: number
-  /** Haiku calls the Boss Fight may make per Quest. */
+  /** Haiku calls the Boss Fight may make per ticket, for the session (0: Quests close unfought). */
   bossFightCallsPerQuest: number
   /**
    * Haiku calls the Sage may make outside any Quest, for the whole session:
@@ -430,6 +477,8 @@ export const step = (
       return measure(state, event)
     case 'QUEST_START':
       return startQuest(state, event.ticket, event.difficulty ?? 'Unrated')
+    case 'QUEST_DETAILS':
+      return { state: withDetails(state, event), effects: [] }
     case 'TEST_FAIL':
       return checkFailed(state, event)
     case 'TEST_PASS':
@@ -445,9 +494,15 @@ export const step = (
     case 'ANSWER_DISMISSED':
       return { state: { ...state, lastAnswer: null }, effects: [] }
     case 'HAIKU_CALL_REQUESTED':
-      return requestHaikuCall(state, event.purpose, rules)
+      return requestHaikuCall(state, event.purpose, rules, event.key)
+    case 'HAIKU_CALL_REFUNDED':
+      return { state: countCall(state, event.ticket, event.purpose, -1), effects: [] }
+    case 'HAIKU_UNAVAILABLE':
+      return state.haikuUnavailable === true
+        ? { state, effects: [] }
+        : { state: { ...state, haikuUnavailable: true }, effects: [{ type: 'HAIKU_UNAVAILABLE' }] }
     case 'COMMIT':
-      return summonBoss(state, event.sha, event.cwd)
+      return summonBoss(state, event.sha, event.cwd, event.fromError === true)
     case 'BOSS_FIGHT_READY':
       return startBossFight(state, event)
     case 'BOSS_FIGHT_UNAVAILABLE':
@@ -462,49 +517,80 @@ export const step = (
 /** A purpose's Haiku calls so far, and its limit. */
 type Budget = { used: number; limit: number }
 
-/** The active Quest's budget: the Sage's and the Boss Fight's, each its own. */
-const questBudget = (quest: Quest, rules: Rules): Record<HaikuPurpose, Budget> => ({
-  sage: { used: quest.haikuCalls?.sage ?? 0, limit: rules.sageCallsPerQuest },
-  boss: { used: quest.haikuCalls?.boss ?? 0, limit: rules.bossFightCallsPerQuest },
+/** The Haiku calls a ticket's Quests made this session, by purpose. */
+type TicketCalls = { sage: number; boss: number }
+
+/** What ticket `ticket` spent this session: nothing until its first call. */
+const callsOf = (state: GameState, ticket: string): TicketCalls => ({
+  sage: 0,
+  boss: 0,
+  ...state.haikuCallsByTicket?.[ticket],
 })
 
-/** The session's budget between Quests: the Sage's allowance; no Boss Fight. */
-const outsideQuestBudget = (state: GameState, rules: Rules): Record<HaikuPurpose, Budget> => ({
-  sage: { used: state.sageCallsOutsideQuest ?? 0, limit: rules.sageCallsOutsideQuest },
-  boss: { used: 0, limit: 0 },
-})
+/** The budget of `purpose` now: the active Quest's ticket's, or the session's between Quests. */
+const budgetOf = (state: GameState, purpose: HaikuPurpose, rules: Rules): Budget => {
+  const { quest } = state
+  if (quest === null) {
+    // Between Quests the Sage has its allowance for the session; the Boss
+    // Fight, which ends a Quest, has none.
+    return purpose === 'sage'
+      ? { used: state.sageCallsOutsideQuest ?? 0, limit: rules.sageCallsOutsideQuest }
+      : { used: 0, limit: 0 }
+  }
 
-// Haiku is bounded per Quest: the Sage's calls and the Boss Fight's are
-// counted on the active Quest, each against its own limit, so a new Quest
-// starts with its whole budget. Between Quests the Sage has a small allowance
-// for the session, counted on the game; the Boss Fight, which ends a Quest,
-// has none. A refused call is no failure: what would have used it is skipped.
+  return {
+    used: callsOf(state, quest.ticket)[purpose],
+    limit: purpose === 'sage' ? rules.sageCallsPerQuest : rules.bossFightCallsPerQuest,
+  }
+}
+
+/** The game with `ticket`'s (null: the session's between Quests) count of `purpose` moved by `by`. */
+const countCall = (state: GameState, ticket: string | null, purpose: HaikuPurpose, by: number): GameState => {
+  if (ticket === null) {
+    return purpose === 'sage'
+      ? { ...state, sageCallsOutsideQuest: Math.max(0, (state.sageCallsOutsideQuest ?? 0) + by) }
+      : state
+  }
+
+  const calls = callsOf(state, ticket)
+
+  return {
+    ...state,
+    haikuCallsByTicket: {
+      ...state.haikuCallsByTicket,
+      [ticket]: { ...calls, [purpose]: Math.max(0, calls[purpose] + by) },
+    },
+  }
+}
+
+// Haiku is bounded per ticket for the session: the Sage's calls and the Boss
+// Fight's are counted on the active Quest's ticket, each against its own
+// limit, and the count stays when the Quest closes or another replaces it,
+// so starting a ticket again never refills its budget. A new session starts
+// every ticket afresh. Between Quests the Sage has a small allowance for the
+// session; the Boss Fight, which ends a Quest, has none. Once Haiku is known
+// to be unavailable on this account, every call is refused for the session.
+// A refused call is no failure: what would have used it is skipped.
 const requestHaikuCall = (
   state: GameState,
   purpose: HaikuPurpose,
   rules: Rules,
+  key: string | undefined,
 ): { state: GameState; effects: Effect[] } => {
-  const { quest } = state
-  const { used, limit } =
-    quest !== null ? questBudget(quest, rules)[purpose] : outsideQuestBudget(state, rules)[purpose]
+  const { used, limit } = budgetOf(state, purpose, rules)
 
+  if (state.haikuUnavailable === true) {
+    return { state, effects: [{ type: 'HAIKU_CALL_REFUSED', purpose, used, limit, reason: 'unavailable' }] }
+  }
+  if (key !== undefined && isAsked(state, key)) {
+    return { state, effects: [{ type: 'HAIKU_CALL_REFUSED', purpose, used, limit, reason: 'asked' }] }
+  }
   if (used >= limit) {
     return { state, effects: [{ type: 'HAIKU_CALL_REFUSED', purpose, used, limit }] }
   }
 
-  const spent: GameState =
-    quest !== null
-      ? {
-          ...state,
-          quest: {
-            ...quest,
-            haikuCalls: { sage: 0, boss: 0, ...quest.haikuCalls, [purpose]: used + 1 },
-          },
-        }
-      : { ...state, sageCallsOutsideQuest: used + 1 }
-
   return {
-    state: spent,
+    state: countCall(state, state.quest?.ticket ?? null, purpose, 1),
     effects: [{ type: 'HAIKU_CALL_GRANTED', purpose, used: used + 1, limit }],
   }
 }
@@ -852,6 +938,32 @@ const startQuest = (
   }
 }
 
+/** The most of a ticket's summary a Quest keeps, in characters: what Haiku is shown of it. */
+export const MAX_SUMMARY_CHARS = 1500
+
+// What is known of a ticket arrives after its Quest started (looked up
+// unawaited): it is kept on the Quest if that ticket's Quest is still the
+// active one, and dropped otherwise.
+const withDetails = (state: GameState, details: Extract<GameEvent, { type: 'QUEST_DETAILS' }>): GameState => {
+  const { quest } = state
+  if (quest === null || quest.ticket !== details.ticket) {
+    return state
+  }
+
+  const { title, summary, difficulty, verified } = details
+
+  return {
+    ...state,
+    quest: {
+      ...quest,
+      ...(title === undefined ? {} : { title }),
+      ...(summary === undefined ? {} : { summary: summary.slice(0, MAX_SUMMARY_CHARS) }),
+      ...(difficulty === undefined ? {} : { difficulty }),
+      ...(verified === undefined ? {} : { verified }),
+    },
+  }
+}
+
 /** The game with `battle`'s Encounter played: current, and on the Quest. */
 const playBattle = (
   state: GameState,
@@ -996,17 +1108,25 @@ const checkPassed = (
   }
 }
 
+/**
+ * Whether the change cached under `key` was asked about already this
+ * session: its Question answered, or waiting. It is not asked again.
+ */
+export const isAsked = (state: GameState, key: string): boolean =>
+  (state.answeredKeys ?? []).includes(key) || state.questions.some(waiting => waiting.key === key)
+
 // The Question Queue: Questions wait, oldest first, until the Player answers
 // them; nothing in it ever holds up the session. A Question about a change
 // whose Question was already answered this session (a cache hit, the same
-// diff again) is not queued: an answer known pays once.
+// diff again) is not queued: an answer known pays once. Nor is one about a
+// change whose Question is waiting already: it is asked once.
 const queueQuestion = (
   state: GameState,
   content: QuestionContent,
   at: number,
   key: string | undefined,
 ): { state: GameState; effects: Effect[] } => {
-  if (key !== undefined && (state.answeredKeys ?? []).includes(key)) {
+  if (key !== undefined && isAsked(state, key)) {
     return { state, effects: [] }
   }
 
@@ -1043,16 +1163,15 @@ const showQuestion = (
 })
 
 /**
- * Whether a right answer came too fast for the Question: shown, answered in
- * under `hastyAnswerMs`, and the Question non-trivial (it points at
- * `nonTrivialLines` source lines or more). With no answer time (answered
- * without being shown first, as from a pane the game did not time) its speed
- * is unknown, so it is never hasty.
+ * Whether a right answer came too fast for the Question: the Question
+ * non-trivial (it points at `nonTrivialLines` source lines or more), and
+ * answered in under `hastyAnswerMs` from when it was shown. With no answer
+ * time (never recorded as shown: `/sage A` on a Question never told is shown
+ * instead, and the Sage's pane records what it draws) it could not have been
+ * read, so it is hasty.
  */
 const isHasty = (question: Question, answerMs: number | null, rules: Rules): boolean =>
-  answerMs !== null &&
-  answerMs < rules.hastyAnswerMs &&
-  question.source.lines.length >= rules.nonTrivialLines
+  question.source.lines.length >= rules.nonTrivialLines && (answerMs === null || answerMs < rules.hastyAnswerMs)
 
 // A right answer pays QUESTION_XP to the Question's Stat (Wisdom for a
 // `wisdom` tag, else Intelligence) from the sage pool, HASTY_ANSWER_XP when it
@@ -1138,6 +1257,7 @@ const summonBoss = (
   state: GameState,
   sha: string,
   cwd: string | null,
+  fromError: boolean,
 ): { state: GameState; effects: Effect[] } => {
   const { quest } = state
   if (quest === null || state.bossFight?.ticket === quest.ticket) {
@@ -1153,15 +1273,24 @@ const summonBoss = (
     maxHp: 0,
     questions: [],
     lastAnswer: null,
+    ...(fromError ? { fromError } : {}),
   }
 
   return {
     state: { ...state, bossFight },
     effects: [
-      { type: 'BOSS_FIGHT_SUMMONED', ticket: quest.ticket, sha, cwd, changes: quest.changes ?? [] },
+      { type: 'BOSS_FIGHT_SUMMONED', ticket: quest.ticket, sha, cwd, changes: summonedChanges(state.quest, bossFight) },
     ],
   }
 }
+
+/**
+ * The changes a Boss Fight reviews when git cannot show its commit: the
+ * Quest's own; none for a commit read from a failed command's output, whose
+ * diff is git's or nothing.
+ */
+export const summonedChanges = (quest: Quest | null, bossFight: BossFight): FileChange[] =>
+  bossFight.fromError === true ? [] : (quest?.changes ?? [])
 
 /** Whether a Boss Fight is being summoned or fought: not yet ended. */
 export const isUnderWay = (bossFight: BossFight | null | undefined): bossFight is BossFight =>
@@ -1173,9 +1302,16 @@ const isSummoned = (state: GameState, ticket: string): boolean =>
   state.bossFight.ticket === ticket &&
   state.quest?.ticket === ticket
 
-// The Questions made, the fight starts: the boss has one HP per Question.
-// Questions for a Boss Fight no longer summoned (skipped, or its Quest
-// replaced) start nothing; none at all leave the Quest unfought.
+/**
+ * The boss's HP for `questionCount` Questions: two thirds of them, rounded
+ * up, so two right answers of three fell it (one of one, two of two).
+ */
+export const bossHpOf = (questionCount: number): number => Math.ceil((2 * questionCount) / 3)
+
+// The Questions made, the fight starts: every one is asked, and the boss has
+// bossHpOf them in HP. Questions for a Boss Fight no longer summoned
+// (skipped, or its Quest replaced) start nothing; none at all leave the
+// Quest unfought.
 const startBossFight = (
   state: GameState,
   { ticket, questions, at }: Extract<GameEvent, { type: 'BOSS_FIGHT_READY' }>,
@@ -1194,14 +1330,15 @@ const startBossFight = (
     queuedAt: at,
     shownAt: null,
   }))
-  const hp = asked.length
+  const questionCount = asked.length
+  const hp = bossHpOf(questionCount)
 
   return {
     state: {
       ...state,
-      bossFight: { ...state.bossFight, status: 'fighting', hp, maxHp: hp, questions: asked, questionCount: hp },
+      bossFight: { ...state.bossFight, status: 'fighting', hp, maxHp: hp, questions: asked, questionCount, rightAnswers: 0 },
     },
-    effects: [{ type: 'BOSS_FIGHT_STARTED', ticket, hp }],
+    effects: [{ type: 'BOSS_FIGHT_STARTED', ticket, hp, questionCount }],
   }
 }
 
@@ -1220,12 +1357,15 @@ export const trophyNameOf = (region: string | null, ticket: string): string =>
 export const bossRewardOf = (difficulty: Difficulty, questionCount: number): number =>
   Math.round((questXp(difficulty) * Math.min(questionCount, BOSS_QUESTIONS)) / BOSS_QUESTIONS)
 
-// Each right answer hits the boss and pays BOSS_ANSWER_XP of Intelligence,
-// uncapped (half when Exhausted); a wrong one costs WRONG_ANSWER_HP, as the
-// Sage's do. No haste rule: the boss's Questions are not timed. The boss at 0
-// HP is won (see closeQuest for its reward). The last Question answered with
-// the boss standing is lost: the answers keep what they earned or cost, and
-// nothing more. Either way the Quest closes.
+// Every Question is asked. A right answer pays BOSS_ANSWER_XP of
+// Intelligence, uncapped (half when Exhausted), and hits the boss while it
+// stands; once it has fallen, the Questions left are finishing blows, paid
+// the same. A wrong one costs WRONG_ANSWER_HP, as the Sage's do (nothing when
+// Exhausted: the Player fights on). No haste rule: the boss's Questions are
+// not timed. The last Question answered closes the Quest: won when the boss
+// fell (see closeQuest for its reward), Flawless with every Boss answer right
+// and no wrong Sage answer in the Quest; lost with the boss standing, the
+// answers keeping what they earned or cost.
 const answerBoss = (
   state: GameState,
   { id, choice, at }: Extract<GameEvent, { type: 'BOSS_ANSWERED' }>,
@@ -1258,36 +1398,36 @@ const answerBoss = (
     xp: scored.paid,
     hpLost,
   }
-  const hp = isCorrect ? bossFight.hp - 1 : bossFight.hp
+  const isHit = isCorrect && bossFight.hp > 0
+  const hp = isHit ? bossFight.hp - 1 : bossFight.hp
+  const questionCount = bossFight.questionCount ?? bossFight.maxHp
+  // A fight kept by an older mod counted no right answers: its hits did.
+  const rightAnswers = (bossFight.rightAnswers ?? bossFight.maxHp - bossFight.hp) + (isCorrect ? 1 : 0)
   const questions = bossFight.questions.filter(each => each !== question)
   const answered: GameState = {
     ...scored.state,
-    bossFight: { ...bossFight, hp, questions, lastAnswer: answer },
+    bossFight: { ...bossFight, hp, questions, lastAnswer: answer, rightAnswers },
   }
   const effects: Effect[] = [
     { type: 'QUESTION_ANSWERED', answer },
-    ...(isCorrect ? [{ type: 'BOSS_HIT', hp } as const] : hpLost > 0 ? [{ type: 'HP_LOST', amount: hpLost } as const] : []),
+    ...(isHit ? [{ type: 'BOSS_HIT', hp } as const] : hpLost > 0 ? [{ type: 'HP_LOST', amount: hpLost } as const] : []),
     ...scored.effects,
   ]
 
-  if (hp === 0) {
-    // Won today only with every Question right (the boss has one HP per
-    // Question), so a win is Flawless unless a Sage answer went wrong.
-    const questionCount = bossFight.questionCount ?? bossFight.maxHp
-    const allRight = bossFight.maxHp - hp === questionCount
-    const flawless = allRight && (state.quest?.sageWrong ?? 0) === 0
-    const closed = closeQuest(answered, 'won', { at, flawless, exhausted: isExhausted(state.player) })
-
-    return { state: closed.state, effects: [...effects, ...closed.effects] }
+  if (questions.length > 0) {
+    return { state: answered, effects }
   }
 
-  if (questions.length === 0) {
-    const closed = closeQuest(answered, 'lost', { at })
+  const closed =
+    hp === 0
+      ? closeQuest(answered, 'won', {
+          at,
+          flawless: rightAnswers >= questionCount && (state.quest?.sageWrong ?? 0) === 0,
+          exhausted: isExhausted(state.player),
+        })
+      : closeQuest(answered, 'lost', { at })
 
-    return { state: closed.state, effects: [...effects, ...closed.effects] }
-  }
-
-  return { state: answered, effects }
+  return { state: closed.state, effects: [...effects, ...closed.effects] }
 }
 
 /** What closing a Quest knows of how its Boss Fight ended. */

@@ -29,15 +29,53 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '
 
 const hpOf = (fight: BossFight): string => `${fight.hp}/${fight.maxHp} HP`
 
+/** How many Questions the Boss Fight asks in all. */
+export const questionCountOf = (fight: BossFight): number => fight.questionCount ?? fight.maxHp
+
+/** The fight as it starts: `Boss 2 HP · 3 Questions`. */
+export const bossStartText = (fight: Pick<BossFight, 'hp'> & { questionCount: number }): string =>
+  `Boss ${fight.hp} HP · ${plural(fight.questionCount, 'Question')}`
+
+/** What the Player is told while they fight Exhausted: nothing is blocked. */
+export const FIGHT_ON = 'You fight on, exhausted.'
+
+/** The boss's strike when Exhausted: it costs nothing, and the fight goes on. */
+const STRIKE_EXHAUSTED = 'The boss strikes, but you fight on, exhausted: no HP lost.'
+
+/**
+ * Whether the last answer was a finishing blow: right, after the boss had
+ * already fallen. The boss falls at its maxHp-th right answer; any right
+ * answer after it finishes it.
+ */
+const isFinishingBlow = (answer: QuestionAnswer, fight: BossFight): boolean =>
+  answer.isCorrect && fight.hp === 0 && (fight.rightAnswers ?? fight.maxHp) > fight.maxHp
+
 /** What the Boss Fight's end paid, as ` +100 XP (Intelligence).`; nothing when it paid none. */
 const rewardOf = (fight: BossFight): string =>
   fight.reward === undefined || fight.reward <= 0 ? '' : ` +${fight.reward} XP (Intelligence).`
 
-/** What a Boss Fight answer did, in one line: a hit, or the boss's strike back. */
-export const bossVerdictOf = (answer: QuestionAnswer, fight: BossFight): string =>
-  answer.isCorrect
-    ? `Hit! +${answer.xp} XP (Intelligence). Boss ${hpOf(fight)}`
-    : `The boss strikes${answer.hpLost > 0 ? `: -${answer.hpLost} HP` : ', but you are Exhausted: no HP lost'}. The answer was ${LETTERS[answer.question.answer]}: ${answer.question.options[answer.question.answer]}`
+/**
+ * What a Boss Fight answer did, in one line: a hit (the boss falling with
+ * it), a finishing blow once it has fallen, or the boss's strike back.
+ * `exhausted`: the Player is at 0 HP now.
+ */
+export const bossVerdictOf = (answer: QuestionAnswer, fight: BossFight, exhausted = false): string => {
+  const paid = `+${answer.xp} XP (Intelligence)`
+  if (answer.isCorrect) {
+    if (isFinishingBlow(answer, fight)) {
+      return `A finishing blow! ${paid}.`
+    }
+
+    return fight.hp === 0 ? `Hit! ${paid}. The boss falls!` : `Hit! ${paid}. Boss ${hpOf(fight)}`
+  }
+
+  const struck =
+    answer.hpLost > 0
+      ? `The boss strikes: -${answer.hpLost} HP.${exhausted ? ` ${FIGHT_ON}` : ''}`
+      : STRIKE_EXHAUSTED
+
+  return `${struck} The answer was ${LETTERS[answer.question.answer]}: ${answer.question.options[answer.question.answer]}`
+}
 
 /** How a Boss Fight ended, or that it has not, in one line. */
 export const bossOutcomeText = (fight: BossFight): string => {
@@ -45,7 +83,9 @@ export const bossOutcomeText = (fight: BossFight): string => {
     case 'summoned':
       return `The boss of Quest ${fight.ticket} approaches: its review Questions are being made.`
     case 'fighting':
-      return `The boss of Quest ${fight.ticket} stands, ${hpOf(fight)}.`
+      return fight.hp === 0
+        ? `The boss of Quest ${fight.ticket} has fallen: ${plural(fight.questions.length, 'finishing blow')} left.`
+        : `The boss of Quest ${fight.ticket} stands, ${hpOf(fight)}.`
     case 'won':
       return `The boss falls!${rewardOf(fight)}${fight.flawless === true ? ' Flawless!' : ''}${fight.trophy === undefined ? '' : ` Trophy: ${fight.trophy}.`} Quest ${fight.ticket} closed.`
     case 'lost':
@@ -61,14 +101,18 @@ export const bossOutcomeText = (fight: BossFight): string => {
  * The Boss Fight's current Question as text, for the terminal's `/boss`: the
  * question, the lines it points at, the lettered options.
  */
-export const bossQuestionText = (fight: BossFight): string => {
+export const bossQuestionText = (fight: BossFight, exhausted = false): string => {
   const question = fight.questions[0]
   if (question === undefined) {
     return bossOutcomeText(fight)
   }
 
+  const standing =
+    fight.hp === 0 ? 'the boss has fallen: a finishing blow' : `boss ${hpOf(fight)}`
+
   return [
-    `The boss of Quest ${fight.ticket} asks (${plural(fight.questions.length, 'review Question')} left, boss ${hpOf(fight)}): ${question.prompt}`,
+    ...(exhausted ? [FIGHT_ON] : []),
+    `The boss of Quest ${fight.ticket} asks (${plural(fight.questions.length, 'review Question')} left, ${standing}): ${question.prompt}`,
     `${question.source.path}:`,
     ...question.source.lines.map(line => `    ${line}`),
     ...question.options.map((option, at) => `  ${LETTERS[at]}. ${option}`),
@@ -77,13 +121,13 @@ export const bossQuestionText = (fight: BossFight): string => {
 }
 
 /** An answer as text: the verdict, the explanation, then what comes next. */
-export const bossAnswerText = (fight: BossFight): string => {
+export const bossAnswerText = (fight: BossFight, exhausted = false): string => {
   const answer = fight.lastAnswer
   const next = fight.status === 'fighting' ? bossQuestionText(fight) : bossOutcomeText(fight)
 
   return answer === null
     ? next
-    : `${bossVerdictOf(answer, fight)}\n${answer.question.explanation}\n\n${next}`
+    : `${bossVerdictOf(answer, fight, exhausted && fight.status === 'fighting')}\n${answer.question.explanation}\n\n${next}`
 }
 
 /**
@@ -95,6 +139,7 @@ export function drawBoss(
   e: RenderInput<'Pane'>,
   fight: BossFight | null,
   actions: BossActions,
+  exhausted = false,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text, Button, Code } = elements
@@ -110,7 +155,7 @@ export function drawBoss(
     last === null ? null : (
       <Box flexDirection="column">
         <Text bold color={last.isCorrect ? 'green' : 'red'}>
-          {bossVerdictOf(last, fight)}
+          {bossVerdictOf(last, fight, exhausted && fight.status === 'fighting')}
         </Text>
         <Text>{last.question.explanation}</Text>
       </Box>
@@ -121,7 +166,10 @@ export function drawBoss(
       <Text bold={!isUnderWay(fight)}>{bossOutcomeText(fight)}</Text>
     ) : (
       <Box flexDirection="column" gap={1}>
-        <Text dimColor>{`Review Question ${fight.maxHp - fight.questions.length + 1} of ${fight.maxHp}`}</Text>
+        <Text dimColor>
+          {`${fight.hp === 0 ? 'Finishing blow' : 'Review Question'} ${questionCountOf(fight) - fight.questions.length + 1} of ${questionCountOf(fight)}`}
+        </Text>
+        {exhausted && <Text color="red">{FIGHT_ON}</Text>}
         <Text bold>{first.prompt}</Text>
         <Box flexDirection="column">
           <Text dimColor>{first.source.path}</Text>
@@ -142,7 +190,7 @@ export function drawBoss(
       <Text bold color="red">
         {fight.status === 'summoned'
           ? `The boss of Quest ${fight.ticket}`
-          : `The boss of Quest ${fight.ticket} · ${hpOf(fight)}`}
+          : `The boss of Quest ${fight.ticket} · ${hpOf(fight)} · ${plural(questionCountOf(fight), 'Question')}`}
       </Text>
       {verdict}
       {question}
