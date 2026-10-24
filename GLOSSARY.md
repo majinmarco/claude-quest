@@ -158,8 +158,12 @@ _Avoid_: Character, bot
 A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle), with the Quest's ticket title and summary as context. A Question is shown before it is answered: the Sage's pane drawing it, or `/sage`, starts its time, and `/sage A` on a Question never shown shows it instead of answering. A right answer earns XP to its Stat tag, Wisdom for `wisdom` and Intelligence otherwise (a quarter of it when hasty, half when Exhausted, from the sage XP pool), a wrong one costs HP; both show the explanation. A Question about a change already answered, or waiting, that session is not asked again.
 _Avoid_: Quiz, prompt
 
+**Quest Giver**:
+The NPC who hands the Player a Quest just started: their Briefing, then a Question about the ticket, asked in the dialogue box with their own portrait (a grey-haired elder) and name, answered with `/sage` like any.
+_Avoid_: Narrator, quest master
+
 **Briefing**:
-The Quest Giver's two lines on a Quest just started, with one Question about the ticket itself (what done means, what is out of scope, where the change belongs), asked once per ticket and paid as a Sage Question. A ticket its Quest Source did not find has none.
+The Quest Giver's two lines (200 characters at most) on a Quest just started, with one Question about the ticket itself (what done means, what is out of scope, where the change belongs), made by one Haiku call once the Ticket lookup finds the ticket with a summary. It is one of the Sage's calls for that ticket (none when `sageCallsPerQuest` is 0), cached by ticket and summary so a ticket started again costs none, and its Question, pointing at the ticket rather than at lines, is paid as a Sage Question (non-trivial, so the hasty rule holds). Its first line shows in a toast and on the Scene until the Quest's first Encounter; the Quest Log shows it whole. A ticket its Quest Source did not find, or with no description, has none.
 _Avoid_: Intro, summary
 
 **Scouting**:
@@ -179,7 +183,7 @@ A right answer given quicker than a non-trivial Question can be read: under 5 se
 _Avoid_: Fast answer, guess
 
 **Haiku budget**:
-How many Haiku calls the game may make, per ticket for the session: 10 for the Sage and 3 for the Boss Fight, each counted apart, kept when the Quest closes or another replaces it (starting a ticket again does not refill it) and fresh in a new session; between Quests, 5 for the Sage per session. Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing; a call failing for a passing reason (rate limited, overloaded) is given back. When Haiku is not available on the account, Questions are off for the session, told once. The limits are settings, in `/config`; 0 disables Questions.
+How many Haiku calls the game may make, per ticket for the session: 10 for the Sage (the Quest Giver's Briefing among them) and 3 for the Boss Fight, each counted apart, kept when the Quest closes or another replaces it (starting a ticket again does not refill it) and fresh in a new session; between Quests, 5 for the Sage per session. Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing; a call failing for a passing reason (rate limited, overloaded) is given back. When Haiku is not available on the account, Questions are off for the session, told once. The limits are settings, in `/config`; 0 disables Questions.
 _Avoid_: Quota, rate limit
 
 **Question cache**:
@@ -187,7 +191,7 @@ The Questions the Sage made, kept by a hash of the change they are about (each f
 _Avoid_: Memo, store
 
 **Question Queue**:
-The Questions waiting for the Player; they never interrupt the session, the Player answers them when they choose, in the Sage's dialogue box (`/sage`). The HUD counts them.
+The Questions waiting for the Player, each naming the NPC who asks it (the Sage, the Quest Giver, the Cartographer); they never interrupt the session, the Player answers them when they choose, in the dialogue box (`/sage`), which takes the asking NPC's portrait and name. The HUD counts them.
 _Avoid_: Inbox, backlog
 
 ## The HUD

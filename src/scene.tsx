@@ -7,6 +7,7 @@ import type { EngineInterface, RenderInput } from 'claude-code'
 import { isUnderWay } from './engine'
 import type { BattleEncounter, BossFight, CheckKind, CraftingEncounter, Encounter } from './engine'
 import { bossStartText, questionCountOf } from './boss'
+import { briefingLine } from './briefing'
 import { bossSceneSvg, MONSTERS, sceneSvg } from './scene-art'
 
 /** How wide the scene is drawn, in CSS pixels: its 128 pixels at 3x. */
@@ -155,17 +156,30 @@ export const describeScene = (encounter: Encounter | null): string => {
   return `${where}${paidXp(readXp, ' · ')} · first visit${paidXp(discoveryXp, ', ', 'Wisdom')}`
 }
 
+/**
+ * The Scene pane. `briefing` is the Quest Giver's Briefing of the active
+ * Quest while it has no Encounter yet, else null: it then takes the line.
+ */
 export function drawScene(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
   encounter: Encounter | null,
   fight: BossFight | null = null,
+  briefing: string | null = null,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text } = elements
   const shown = sceneOf(encounter, fight)
-  const line = shown.kind === 'boss' ? describeBossFight(shown.fight) : describeScene(encounter)
-  const isIdle = shown.kind === 'encounter' && encounter === null
+  // While the Quest has no Encounter yet, the Quest Giver's Briefing (its
+  // first line) is what the Scene tells.
+  const isBriefing = shown.kind === 'encounter' && briefing !== null
+  const line =
+    shown.kind === 'boss'
+      ? describeBossFight(shown.fight)
+      : isBriefing
+        ? briefingLine(briefing)
+        : describeScene(encounter)
+  const isIdle = shown.kind === 'encounter' && encounter === null && !isBriefing
 
   // The terminal's table lists Svg too, as a fragment: it draws no SVG.
   if (e.surface === 'terminal' || !('Svg' in elements)) {

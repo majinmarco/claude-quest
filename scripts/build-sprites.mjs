@@ -54,6 +54,8 @@ const SPRITES = {
   dagger: { sheet: 'dungeon', index: 103 },
   staff: { sheet: 'dungeon', index: 129 },
   sage: { sheet: 'dungeon', index: 84 },
+  // The Quest Giver, who briefs a Quest at its start: the grey-haired elder.
+  questGiver: { sheet: 'dungeon', index: 100 },
   boss: { sheet: 'dungeon', index: 110 },
   // The HUD's portraits by Title; before a Title it is the hero tile, a plain adventurer.
   scholar: { sheet: 'dungeon', index: 111 },
