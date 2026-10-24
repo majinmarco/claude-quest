@@ -84,6 +84,8 @@ export type GameEvent =
       key?: string
       /** The NPC who asks it, drawn in the dialogue box; the Sage when absent. */
       npc?: Npc
+      /** The Modules a right answer charts: a Scouting's. */
+      modules?: string[]
     }
   /** The dialogue box put a waiting Question in front of the Player, at `at`. */
   | { type: 'QUESTION_SHOWN'; id: string; at: number }
@@ -170,6 +172,15 @@ export type Effect =
    * QUESTION_READY from the `quest-giver`.
    */
   | { type: 'BRIEFING_WANTED'; ticket: string; title?: string; summary: string }
+  /**
+   * The Cartographer is to scout (outside the engine): one Question about
+   * `modules`, the three Modules just discovered, made from `files`, the
+   * paths read in them lately (searched folders among them), oldest first.
+   * Queued as a QUESTION_READY from the `cartographer`, with `modules`.
+   */
+  | { type: 'SCOUTING_WANTED'; modules: string[]; files: string[] }
+  /** A Scouting answered right charted `modules`, none of them charted before. */
+  | { type: 'MODULES_CHARTED'; modules: string[] }
   /** The Player answered a Question: right or wrong, its explanation shows. */
   | { type: 'QUESTION_ANSWERED'; answer: QuestionAnswer }
   /** HP lost: a wrong answer's cost. */
@@ -515,7 +526,7 @@ export const step = (
 ): { state: GameState; effects: Effect[] } => {
   switch (event.type) {
     case 'FILE_READ':
-      return explore(state, event.path, event.module)
+      return scout(explore(withRead(state, event.path, event.module), event.path, event.module), rules)
     case 'SESSION_MEASURED':
       return measure(state, event)
     case 'QUEST_START':
@@ -529,7 +540,7 @@ export const step = (
     case 'FILE_EDIT':
       return craft(withFix(withQuestChange(state, event), event), event)
     case 'QUESTION_READY':
-      return queueQuestion(state, event.question, event.at, event.key, event.npc ?? 'sage')
+      return queueQuestion(state, event.question, event.at, event.key, event.npc ?? 'sage', event.modules)
     case 'QUESTION_SHOWN':
       return showQuestion(state, event.id, event.at)
     case 'QUESTION_ANSWERED':
@@ -747,6 +758,86 @@ const explore = (
     state: { ...played, encounter, quest: attach(played.quest, encounter) },
     effects: [{ type: 'ENCOUNTER_STARTED', encounter }, ...effects],
   }
+}
+
+/** How many Modules discovered in a Quest make a Scouting: the third, sixth, ninth. */
+export const SCOUTING_EVERY = 3
+
+/** The most Scoutings a Quest has. */
+export const MAX_SCOUTINGS_PER_QUEST = 3
+
+/** How many Modules discovered outside a Quest make a Scouting. */
+export const SCOUTING_EVERY_OUTSIDE = 5
+
+/** The most Scoutings a session has outside any Quest. */
+export const MAX_SCOUTINGS_OUTSIDE = 2
+
+/** How many Modules a Scouting asks about: the latest discovered. */
+export const SCOUTING_MODULES = 3
+
+/** The most paths a Scouting is handed, the latest read, before the hook keeps the files among them. */
+export const MAX_SCOUTING_CANDIDATES = 24
+
+/** The most reads the game keeps for Scoutings. */
+export const MAX_RECENT_READS = 60
+
+/** The game with a read of `path` in `module` kept as the latest; a read in no Module is not kept. */
+const withRead = (state: GameState, path: string, module: string | null): GameState =>
+  module === null
+    ? state
+    : {
+        ...state,
+        recentReads: [...(state.recentReads ?? []).filter(read => read.path !== path), { path, module }].slice(
+          -MAX_RECENT_READS,
+        ),
+      }
+
+/** The Scouting the game wants now: about the latest Modules discovered and what was read in them. */
+const scoutingOf = (state: GameState): Effect => {
+  const modules = state.visitedModules.slice(-SCOUTING_MODULES)
+  const files = (state.recentReads ?? [])
+    .filter(read => modules.includes(read.module))
+    .map(read => read.path)
+    .slice(-MAX_SCOUTING_CANDIDATES)
+
+  return { type: 'SCOUTING_WANTED', modules, files }
+}
+
+// The Cartographer scouts as Modules are discovered: in a Quest at the third,
+// sixth and ninth; outside one at every fifth, twice a session at most. A
+// Scouting is a Sage Question: with no Sage budget where the Player is
+// (`sageCallsPerQuest` in a Quest, `sageCallsOutsideQuest` outside) there is
+// none. Whether it costs a call, or was asked already, is for
+// HAIKU_CALL_REQUESTED and the Question Queue to say.
+const scout = (
+  { state, effects }: { state: GameState; effects: Effect[] },
+  rules: Rules,
+): { state: GameState; effects: Effect[] } => {
+  if (!effects.some(effect => effect.type === 'MODULE_DISCOVERED')) {
+    return { state, effects }
+  }
+
+  const { quest } = state
+  if (quest !== null) {
+    const count = (quest.modulesDiscovered ?? 0) + 1
+    const counted: GameState = { ...state, quest: { ...quest, modulesDiscovered: count } }
+    const isDue =
+      count % SCOUTING_EVERY === 0 && count / SCOUTING_EVERY <= MAX_SCOUTINGS_PER_QUEST && rules.sageCallsPerQuest > 0
+
+    return { state: counted, effects: isDue ? [...effects, scoutingOf(counted)] : effects }
+  }
+
+  const count = (state.modulesDiscoveredOutsideQuest ?? 0) + 1
+  const scoutings = state.scoutingsOutsideQuest ?? 0
+  const isDue =
+    count % SCOUTING_EVERY_OUTSIDE === 0 && scoutings < MAX_SCOUTINGS_OUTSIDE && rules.sageCallsOutsideQuest > 0
+  const counted: GameState = {
+    ...state,
+    modulesDiscoveredOutsideQuest: count,
+    ...(isDue ? { scoutingsOutsideQuest: scoutings + 1 } : {}),
+  }
+
+  return { state: counted, effects: isDue ? [...effects, scoutingOf(counted)] : effects }
 }
 
 /** An Encounter belongs to the active Quest; between Quests, to none. */
@@ -1303,6 +1394,7 @@ const queueQuestion = (
   at: number,
   key: string | undefined,
   npc: Npc,
+  modules?: string[],
 ): { state: GameState; effects: Effect[] } => {
   if (key !== undefined && isAsked(state, key)) {
     return { state, effects: [] }
@@ -1312,6 +1404,7 @@ const queueQuestion = (
   const question: Question = {
     ...content,
     ...(key !== undefined ? { key } : {}),
+    ...(modules !== undefined && modules.length > 0 ? { modules } : {}),
     id: `sage-${questionsAsked}`,
     npc: npc === 'sage' ? 'Sage' : npc,
     queuedAt: at,
@@ -1349,10 +1442,13 @@ const showQuestion = (
  * time (never recorded as shown: `/sage A` on a Question never told is shown
  * instead, and the Sage's pane records what it draws) it could not have been
  * read, so it is hasty. A Question about the ticket itself (the Briefing's)
- * points at no lines but asks for the ticket read: it is non-trivial.
+ * points at no lines but asks for the ticket read: it is non-trivial. So is
+ * a Scouting (the Cartographer's), which asks for files read.
  */
 const isHasty = (question: Question, answerMs: number | null, rules: Rules): boolean =>
-  (isAboutTicket(question) || question.source.lines.length >= rules.nonTrivialLines) &&
+  (isAboutTicket(question) ||
+    npcOf(question) === 'cartographer' ||
+    question.source.lines.length >= rules.nonTrivialLines) &&
   (answerMs === null || answerMs < rules.hastyAnswerMs)
 
 // A right answer pays QUESTION_XP to the Question's Stat (Wisdom for a
@@ -1408,10 +1504,25 @@ const answerQuestion = (
     ? paid.state
     : { ...paid.state, player: { ...player, tally: { ...player.tally, sageRight: player.tally.sageRight + 1 } } }
   const awarded = award(tallied, {}, at)
+  const charted = chart(awarded.state, question.modules ?? [])
 
   return {
-    state: { ...awarded.state, lastAnswer: answer },
-    effects: [{ type: 'QUESTION_ANSWERED', answer }, ...paid.effects, ...awarded.effects],
+    state: { ...charted.state, lastAnswer: answer },
+    effects: [{ type: 'QUESTION_ANSWERED', answer }, ...paid.effects, ...awarded.effects, ...charted.effects],
+  }
+}
+
+/** The game with `modules` charted, those not charted already told as MODULES_CHARTED. */
+const chart = (state: GameState, modules: readonly string[]): { state: GameState; effects: Effect[] } => {
+  const kept = state.chartedModules ?? []
+  const fresh = [...new Set(modules)].filter(module => !kept.includes(module))
+  if (fresh.length === 0) {
+    return { state, effects: [] }
+  }
+
+  return {
+    state: { ...state, chartedModules: [...kept, ...fresh] },
+    effects: [{ type: 'MODULES_CHARTED', modules: fresh }],
   }
 }
 

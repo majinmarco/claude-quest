@@ -166,9 +166,17 @@ _Avoid_: Narrator, quest master
 The Quest Giver's two lines (200 characters at most) on a Quest just started, with one Question about the ticket itself (what done means, what is out of scope, where the change belongs), made by one Haiku call once the Ticket lookup finds the ticket with a summary. It is one of the Sage's calls for that ticket (none when `sageCallsPerQuest` is 0), cached by ticket and summary so a ticket started again costs none, and its Question, pointing at the ticket rather than at lines, is paid as a Sage Question (non-trivial, so the hasty rule holds). Its first line shows in a toast and on the Scene until the Quest's first Encounter; the Quest Log shows it whole. A ticket its Quest Source did not find, or with no description, has none.
 _Avoid_: Intro, summary
 
+**Cartographer**:
+The NPC who maps the code: they ask the Scoutings, in the dialogue box with their own portrait (a traveller in purple) and name, answered with `/sage` like any. Not to be confused with the Cartographer Badge, which counts Modules discovered.
+_Avoid_: Mapper, guide
+
 **Scouting**:
-The Cartographer's Question after every third Module discovered in a Quest, about how the Modules just read fit together (what imports what, where a name is defined, where a change belongs), answerable from the files read; paid as a Sage Question to Wisdom. A Module whose Scouting was answered right is **charted**.
+The Cartographer's Question about how the Modules just read fit together (what imports what, where a name is defined, where a change belongs), made by one Haiku call at the third, sixth and ninth Module discovered in a Quest, and outside one at every fifth, twice a session at most. Haiku is shown the three Modules discovered last, the files read in them (paths only, 12 at most) and the import and export lines of three of them (60 lines in all), never whole files; its Question must point at one of those files, so the Player can open it, and a reply naming any other is skipped. It is one of the Sage's calls (per ticket in a Quest, the session's allowance outside; none when that is 0), cached by the Modules and those lines, and paid as a Sage Question to Wisdom (non-trivial, so the hasty rule holds).
 _Avoid_: Architecture quiz, exploration question
+
+**Charted**:
+A Module whose Scouting the Player answered right (hasty or not): a mark, not XP, kept per Player and project beside the Modules discovered, and listed in `/badges` under the Cartographer Badge's progress.
+_Avoid_: Mapped, mastered
 
 **Prophecy**:
 The Player's call, made after Claude writes or edits a test file and before the next Check runs, of how that Check will end: Red (one failure, or failures it counts none of), Green (passing) or Rout (two or more). It can be called until the next Check starts, and that Check, of any kind, settles it, not only the one the test belongs to; another test edit before the call replaces it, and a new Quest or the Quest closing clears it. A right call pays 10 Dexterity XP from the prophecy XP pool; a wrong one costs nothing; one never called pays nothing. Five right in a row (one never called or never settled breaking nothing) earn the Oracle Badge; Dexterity as the highest Stat makes the Player a Duelist. Called with the HUD's Buttons (`1 Red`, `2 Green`, `3 Rout`) or `/prophecy`.
@@ -187,7 +195,7 @@ A right answer given quicker than a non-trivial Question can be read: under 5 se
 _Avoid_: Fast answer, guess
 
 **Haiku budget**:
-How many Haiku calls the game may make, per ticket for the session: 10 for the Sage (the Quest Giver's Briefing among them) and 3 for the Boss Fight, each counted apart, kept when the Quest closes or another replaces it (starting a ticket again does not refill it) and fresh in a new session; between Quests, 5 for the Sage per session. Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing; a call failing for a passing reason (rate limited, overloaded) is given back. When Haiku is not available on the account, Questions are off for the session, told once. The limits are settings, in `/config`; 0 disables Questions.
+How many Haiku calls the game may make, per ticket for the session: 10 for the Sage (the Quest Giver's Briefing and the Cartographer's Scoutings among them) and 3 for the Boss Fight, each counted apart, kept when the Quest closes or another replaces it (starting a ticket again does not refill it) and fresh in a new session; between Quests, 5 for the Sage per session (Scoutings among them). Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing; a call failing for a passing reason (rate limited, overloaded) is given back. When Haiku is not available on the account, Questions are off for the session, told once. The limits are settings, in `/config`; 0 disables Questions.
 _Avoid_: Quota, rate limit
 
 **Question cache**:

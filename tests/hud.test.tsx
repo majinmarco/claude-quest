@@ -512,6 +512,8 @@ describe('HUD: the Player\'s progress', () => {
         'Lv 4 Scholar · 560 XP lifetime · INT 300 · WIS 40 · DEX 0 · STR 60',
         'Badges (2/11): Questbound, Boss Slayer',
         'Trophies (1): Bane of vault#12',
+        'Cartographer: 9/25 Modules discovered',
+        "  Charted here: none yet. Answer the Cartographer's Scouting right to chart its Modules.",
       ].join('\n'),
     )
   })

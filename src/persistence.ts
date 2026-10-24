@@ -222,6 +222,34 @@ export async function recordModulesDiscovered(
 }
 
 /**
+ * The `$.store` key the Player keeps a project's charted Modules under: a
+ * sibling of its discovered ones, so a mod reading `discovered:<root>` as a
+ * list of Modules reads it as before.
+ */
+export const chartedKey = (root: string): string => discoveredKey(root).replace(/^discovered:/, 'charted:')
+
+/** The Modules the Player has charted in the project at `root`; none until the first. */
+export async function loadCharted($: EngineInterface, root: string): Promise<string[]> {
+  const kept = await $.store.get(chartedKey(root))
+
+  return isModuleList(kept) ? kept : []
+}
+
+/**
+ * Adds the Modules the session has charted to the Player's for the project
+ * at `root`: the session's whole list, so a write that failed is made good
+ * by the next.
+ */
+export async function recordModulesCharted(
+  $: EngineInterface,
+  root: string,
+  modules: readonly string[],
+): Promise<void> {
+  const kept = await loadCharted($, root)
+  await $.store.set(chartedKey(root), [...new Set([...kept, ...modules])])
+}
+
+/**
  * The modules an older mod's Region file says were discovered; none when it
  * says none. Read once per project, to seed the Player's.
  */

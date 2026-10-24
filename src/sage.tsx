@@ -20,11 +20,8 @@ export const NPC_NAMES: Record<Npc, string> = {
   cartographer: 'The Cartographer',
 }
 
-/**
- * Each NPC's portrait tile: the Sage's and the Quest Giver's own; the
- * Cartographer, who has no tile yet, borrows the Sage's.
- */
-const PORTRAITS: Record<Npc, SpriteName> = { sage: 'sage', 'quest-giver': 'questGiver', cartographer: 'sage' }
+/** Each NPC's portrait tile, their own. */
+const PORTRAITS: Record<Npc, SpriteName> = { sage: 'sage', 'quest-giver': 'questGiver', cartographer: 'cartographer' }
 
 /** The portrait `npc` is drawn with in the dialogue box. */
 export const portraitOf = (npc: Npc): SpriteName => PORTRAITS[npc]
