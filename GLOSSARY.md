@@ -27,23 +27,51 @@ _Avoid_: Dead, knocked out
 ## The world
 
 **World**:
-The single map holding all of the Player's Regions.
+The single map holding all of the Player's Regions, each an Island, as the Overview shows it. A Region joins the World the first time the Player plays in its project and stays there after, its project gone or not; Islands never move once placed.
 _Avoid_: Game, universe
 
+**Island**:
+A Region as the World draws it: one of three sizes by how many Quests the Region holds, lit by the share of them cleared, the Region the Player is in marked. Choosing an Island opens that Region's map.
+_Avoid_: Tile, node
+
 **Region**:
-One project's area of the World, shaped by that project's spec.
+One project's area of the World, shaped by that project's spec and named after its project's folder. Its map shows its Dungeons on open land, the Wilds among them, and Fog past the last of them.
 _Avoid_: Level, zone, project map
 
+**Region map**:
+The pane that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second view of the same pane. From it a Quest is started the way the Quest Board starts one. It never opens itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
+_Avoid_: Minimap, level select
+
 **Dungeon**:
-One epic within a Region; cleared when all its Quests are done.
+One epic within a Region (a Jira ticket's parent, a GitHub milestone), drawn as Floors of Rooms; cleared when all its Quests are done.
 _Avoid_: Epic (outside the Jira adapter), area
+
+**Wilds**:
+The part of a Region holding the Quests that belong to no Dungeon, drawn as camps on open land, and all of a Region whose Quest Source knows no epics. Its camps are Rooms in all but name.
+_Avoid_: Backlog, unassigned, overworld
+
+**Room**:
+One Quest as a Dungeon draws it: dark when its ticket is still open, lit when cleared (its ticket closed in the Quest Source, or its Quest won here), showing its difficulty as the Scroll does. Choosing an open Room starts its Quest as Take Quest does.
+_Avoid_: Cell, node
+
+**Floor**:
+Up to twenty Rooms of a Dungeon shown at once, joined by corridors; a Dungeon with more Quests has more Floors, stepped through in turn.
+_Avoid_: Page, level
+
+**Module view**:
+The Region map's view of the project itself: a tile per Module, lit and named when the Player has discovered it, dark and nameless under Fog when not.
+_Avoid_: Codebase map, file tree
+
+**Snapshot**:
+What the World remembers of a Region the Player is not in: its Dungeons by name with how many Quests each holds and how many are cleared, and when that was last true. Taken whenever the Region's map is drawn or a session starts in its project.
+_Avoid_: Cache, sync
 
 **Module**:
 A part of a Region's project, as the Player explores it: the first two segments of the folder a read file is in, or of the folder searched, relative to the project's root (`src/engine`, `packages/api`; `.` for a file at the root). Nothing under a root-level `node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, `.venv` or `coverage` is a Module. The first visit to a Module earns Wisdom XP (from the ambient XP pool) and counts toward the Cartographer Badge, once per Player per project: the Player keeps the Modules discovered in each project (a Region file kept by an older mod seeds them once).
 _Avoid_: Package, directory (outside the event translator)
 
 **Fog**:
-The unrevealed part of a Region or Dungeon, standing for work not yet planned.
+The unrevealed part of a Region, a Dungeon or the Module view, drawn dark: the land past the last Dungeon and the Rooms past the last Quest, standing for work not yet planned, and the Modules the Player has not discovered.
 _Avoid_: Fog of war, hidden tiles
 
 ## Quests
@@ -149,8 +177,12 @@ _Avoid_: Inbox, backlog
 ## The HUD
 
 **HUD**:
-The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, the session's vitals, and the Stats in play. At most three rows of the band's width: when it is narrow the Quest's title shortens first, then the lesser parts give way.
+The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, the session's vitals, and the Stats in play. Where the surface draws pixel art it is one strip of it: the Player's portrait (by Title), the bars, and the Quest on a banner beside the current Encounter, calm but for a flash on damage and a fill on XP gained; in the terminal, and where the `hudStyle` setting says text, it is text, at most three rows of the band's width. When it is narrow the Quest's title shortens first, then the lesser parts give way.
 _Avoid_: Status bar, header
+
+**Overview**:
+The pane (`/overview`) with the Player's character sheet, their portrait, level, Title, XP to the next level, all six Stats (those not in play dimmed), Badges and Trophies, and the World below it, an Island to choose per Region.
+_Avoid_: Character sheet (the vision's word for its first half), profile, stats page
 
 **Mana**:
 The share of the session's context window used so far, shown on the HUD.
