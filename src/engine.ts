@@ -33,8 +33,8 @@ export type GameEvent =
        */
       replaceAll?: boolean
       /**
-       * `diff`: seen in the working tree's diff rather than in a tool's record
-       * (a Bash heredoc, a script, a subagent's edit); played the same.
+       * `diff`: seen in the working tree's diff rather than in a tool's
+       * record of the change; played the same.
        */
       source?: 'diff'
     }

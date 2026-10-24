@@ -39,13 +39,14 @@ export type FakeRepo = {
 /**
  * A repository whose HEAD and working tree hold `files`; `isRepo` false
  * answers every command as git does outside a repository, `isMissing` true
- * as when git is not installed (the call rejects).
+ * as when git is not installed (the call rejects), `hasCommits` false as a
+ * repository before its first commit (HEAD unborn, `files` untracked).
  */
 export const fakeRepo = (
   files: Record<string, string> = {},
-  { isRepo = true, isMissing = false }: { isRepo?: boolean; isMissing?: boolean } = {},
+  { isRepo = true, isMissing = false, hasCommits = true }: { isRepo?: boolean; isMissing?: boolean; hasCommits?: boolean } = {},
 ): FakeRepo => {
-  const head = new Map(Object.entries(files))
+  const head = new Map(hasCommits ? Object.entries(files) : [])
   const work = new Map(Object.entries(files))
   const ignored = new Set<string>()
   const binary = new Set<string>()
@@ -62,8 +63,16 @@ export const fakeRepo = (
     const [command, ...rest] = args
     switch (command) {
       case 'rev-parse':
+        if (rest.includes('--verify')) {
+          return head.size > 0 ? ok('0123456789abcdef0123456789abcdef01234567\n') : { exitCode: 1, stdout: '' }
+        }
+
         return ok('true\n')
       case 'diff':
+        if (rest.at(-1) !== (head.size > 0 ? 'HEAD' : '4b825dc642cb6eb9a060e54bf8d69288fbee4904')) {
+          return { exitCode: 128, stdout: '' }
+        }
+
         return ok(
           [...head.keys()]
             .filter(path => work.has(path) && work.get(path) !== head.get(path))

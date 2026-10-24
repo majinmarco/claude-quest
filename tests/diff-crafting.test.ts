@@ -138,6 +138,34 @@ describe('Crafting from the diff: what git sees', () => {
   })
 })
 
+describe('Crafting from the diff: what is no change of code', () => {
+  test('a binary file a script wrote (a NUL in it) forges nothing, untracked as it is', async () => {
+    const repo = await watched()
+    repo.work.set('assets/sprite.png', `\x89PNG\0\0\0IHDR${'x'.repeat(40)}\n`.repeat(5))
+
+    expect(await repo.check()).toEqual([])
+  })
+
+  test('a CRLF file edited by a line is one line changed, not a rewrite', async () => {
+    const crlf = codeLines(8).replace(/\n/g, '\r\n')
+    const repo = await watched({ 'src/a.ts': codeLines(8) })
+    repo.work.set('src/a.ts', crlf.replace('line4 = 4', 'line4 = 40'))
+
+    expect(await repo.check()).toMatchObject([{ linesAdded: 1, linesRemoved: 1 }])
+  })
+
+  test('a repo before its first commit still sees new files', async () => {
+    const repo = fakeRepo({}, { hasCommits: false })
+    const snapshot = await takeSnapshot(repo.git, repo.read)
+    if (snapshot === null) {
+      throw new Error('no snapshot')
+    }
+    repo.work.set('src/a.ts', codeLines(4))
+
+    expect(await changesSince(snapshot, repo.git, repo.read, ROOT)).toMatchObject([{ isNewFile: true, linesAdded: 4 }])
+  })
+})
+
 describe('Crafting from the diff: off without git', () => {
   test('not a git repo: no snapshot, so the diff path is off', async () => {
     const repo = fakeRepo({}, { isRepo: false })

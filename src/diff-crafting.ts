@@ -47,7 +47,10 @@ const CONTEXT = 3
 /** A changed path git listed: tracked (in HEAD's tree, or staged new), or untracked and not ignored. */
 type Listed = { path: string; isTracked: boolean }
 
-const NUMSTAT = ['diff', '--numstat', '-z', '--no-renames', '--no-ext-diff', '--ignore-submodules', '--diff-filter=d', '--relative', 'HEAD']
+/** What a repo with no commit yet diffs against: git's empty tree. */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+const NUMSTAT = ['diff', '--numstat', '-z', '--no-renames', '--no-ext-diff', '--ignore-submodules', '--diff-filter=d', '--relative']
 const UNTRACKED = ['ls-files', '--others', '--exclude-standard', '-z']
 
 /** Runs git, null when it could not run or failed. */
@@ -62,7 +65,9 @@ const run = async (git: Git, args: readonly string[], stdin?: string): Promise<s
  * untracked files `.gitignore` does not ignore; null when git cannot say.
  */
 const listChanged = async (git: Git): Promise<Listed[] | null> => {
-  const [numstat, untracked] = await Promise.all([run(git, NUMSTAT), run(git, UNTRACKED)])
+  // Before the first commit, everything tracked is changed from nothing.
+  const head = (await run(git, ['rev-parse', '--verify', '--quiet', 'HEAD'])) === null ? EMPTY_TREE : 'HEAD'
+  const [numstat, untracked] = await Promise.all([run(git, [...NUMSTAT, head]), run(git, UNTRACKED)])
   if (numstat === null || untracked === null) {
     return null
   }
@@ -77,7 +82,8 @@ const listChanged = async (git: Git): Promise<Listed[] | null> => {
     .filter(path => path !== '')
     .map(path => ({ path, isTracked: false }))
 
-  return [...tracked, ...others].slice(0, MAX_LISTED_FILES)
+  // A path with a newline in it cannot be handed to `hash-object --stdin-paths`.
+  return [...tracked, ...others].filter(file => !file.path.includes('\n')).slice(0, MAX_LISTED_FILES)
 }
 
 /** git's hash of each listed file's content, in order; null when git cannot give them all. */
@@ -91,11 +97,15 @@ const hashesOf = async (git: Git, listed: readonly Listed[]): Promise<string[] |
   return hashes.length === listed.length ? hashes : null
 }
 
-/** A file's text, null when it cannot be read or is too big to keep. */
+/**
+ * A file's text, null when it cannot be read, is too big to keep, or is no
+ * text at all (a NUL in it, as git tells a binary file): such a file is
+ * never diffed, so an image a script writes forges nothing.
+ */
 const contentOf = async (read: ReadFile, path: string): Promise<string | null> => {
   const text = await read(path).catch(() => null)
 
-  return text !== null && text.length <= MAX_KEPT_CHARS ? text : null
+  return text !== null && text.length <= MAX_KEPT_CHARS && !text.includes('\0') ? text : null
 }
 
 /**
@@ -231,7 +241,9 @@ export const hunksBetween = (before: string, after: string): Hunk[] => {
   let oldLine = 1
   let newLine = 1
   // Each step with the line it stands at in the old file and the new.
-  const placed = diffLines(linesOf(before), linesOf(after)).map(step => {
+  // Line endings are not changes: a CRLF file against HEAD's LF blob.
+  const unix = (text: string) => text.replace(/\r\n/g, '\n')
+  const placed = diffLines(linesOf(unix(before)), linesOf(unix(after))).map(step => {
     const at = { ...step, oldLine, newLine }
     oldLine += step.kind === '+' ? 0 : 1
     newLine += step.kind === '-' ? 0 : 1

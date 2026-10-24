@@ -130,7 +130,7 @@ _Avoid_: Team, squad, crew
 
 **Companion**:
 A subagent Claude starts during a Quest (a background or workflow agent too), as the party sees it: it sets out with the task's short description, the Scene showing it walk off, and comes back when its loop's turn ends, told in a toast counting what its loop played (`Implement issue #22: back. 12 read, 3 forged, 1 Battle won`). One whose agent stopped without ending its turn (killed, its session ended) leaves the party quietly at the next session start.
-_Avoid_: Subagent (outside the event translator), helper, minion
+_Avoid_: Helper, minion, sidekick
 
 **Check**:
 A test run, lint or type-check, read from a Bash command by its runner (vitest, jest, pytest, bun test, tsc, eslint, biome, ruff, or a package's test, lint or typecheck script) and kept as the command to rerun it, launchers, environment and output-only flags (`-q`, `-v`, `--verbose`, `--silent`, `--no-color`, `--color=…`, `--reporter…`) left out, so `vitest run -q` and `vitest run` are one Check. A Battle is against one Check.

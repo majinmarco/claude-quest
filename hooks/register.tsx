@@ -791,9 +791,12 @@ let lastBashCheck = Number.NEGATIVE_INFINITY
 let diffTurn: Promise<void> = Promise.resolve()
 
 /** Runs `work` after every step on the snapshot before it; a failure plays nothing more. */
-function inDiffTurn(work: () => Promise<void>): Promise<void> {
-  const done = diffTurn.then(work).catch(() => undefined)
-  diffTurn = done
+function inDiffTurn<T>(work: () => Promise<T>): Promise<T> {
+  const done = diffTurn.then(work)
+  diffTurn = done.then(
+    () => undefined,
+    () => undefined,
+  )
 
   return done
 }
@@ -804,7 +807,7 @@ function startDiff($: EngineInterface, root: string | null): Promise<void> {
 
   return inDiffTurn(async () => {
     snapshot = root === null ? null : await takeSnapshot(gitOf($, root), readerOf($, root))
-  })
+  }).catch(() => undefined)
 }
 
 /** Plays what changed in the working tree since the last check, in `agentId`'s loop: at every turn's end, and before a commit. */
@@ -816,34 +819,39 @@ function checkDiff($: EngineInterface, root: string | null, agentId: string | un
     for (const edit of await changesSince(snapshot, gitOf($, root), readerOf($, root), root)) {
       await play($, edit, rules, agentId)
     }
-  })
+  }).catch(() => undefined)
 }
 
 /** As checkDiff, after a Bash call that may have changed files: at most every BASH_CHECK_MS. */
 async function checkDiffAfterBash($: EngineInterface, root: string | null, agentId: string | undefined, rules: Rules): Promise<void> {
+  // The snapshot itself is read in turn: the first may still be being taken.
   const now = await $.clock.now()
-  if (snapshot === null || now - lastBashCheck < BASH_CHECK_MS) {
+  if (now - lastBashCheck < BASH_CHECK_MS) {
     return
   }
   lastBashCheck = now
   await checkDiff($, root, agentId, rules)
 }
 
-/** Plays a tool's FILE_EDIT, then takes its file into the snapshot, so the diff path never plays that change again. */
-function playFileEdit(
+/**
+ * Plays a tool's FILE_EDIT, then takes its file into the snapshot, so the
+ * diff path never plays that change again. Called in the diff's turn.
+ */
+async function playFileEdit(
   $: EngineInterface,
   edit: Extract<GameEvent, { type: 'FILE_EDIT' }>,
   root: string | null,
   agentId: string | undefined,
   rules: Rules,
 ): Promise<void> {
-  return inDiffTurn(async () => {
-    await play($, edit, rules, agentId)
-    if (snapshot !== null && root !== null) {
-      await noteChanged(snapshot, gitOf($, root), readerOf($, root), root, edit.path)
-    }
-  })
+  await play($, edit, rules, agentId)
+  if (snapshot !== null && root !== null) {
+    await noteChanged(snapshot, gitOf($, root), readerOf($, root), root, edit.path)
+  }
 }
+
+/** The tools that change a file and hand over its change: played from their record, never from the diff. */
+const FILE_CHANGE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 
 export const register: Register = (on, options) => {
   // The Player's settings, from /config: a change there reloads the mod, and
@@ -956,18 +964,31 @@ export const register: Register = (on, options) => {
 
   on('tool.call', async ($, e, next) => {
     const { agentId } = e
+    // Without the root, a read still explores, but discovers no Module.
+    const root = await $.session.root().catch(() => null)
+
+    // A file-changing tool runs in the diff's turn, from the call to its
+    // change noted: no check (another loop's) sees the change in between.
+    if (FILE_CHANGE_TOOLS.has(e.tool)) {
+      return inDiffTurn(async () => {
+        const changed = await next(e)
+        const edit = translateToolCall(e, changed, root)
+        if (edit?.type === 'FILE_EDIT') {
+          await playFileEdit($, edit, root, agentId, rules).catch(() => undefined)
+        }
+
+        return changed
+      })
+    }
+
     // A commit hides what it commits from the diff: what changed is played first.
     if (e.tool === 'Bash' && typeof e.command === 'string' && MAY_COMMIT.test(e.command)) {
-      await checkDiff($, await $.session.root().catch(() => null), agentId, rules)
+      await checkDiff($, root, agentId, rules)
     }
     const outcome = await next(e)
-    // Without the root, the read still explores, but discovers no Module.
-    const root = await $.session.root().catch(() => null)
     const event = translateToolCall(e, outcome, root)
 
-    if (event?.type === 'FILE_EDIT') {
-      await playFileEdit($, event, root, agentId, rules)
-    } else if (event !== null) {
+    if (event !== null) {
       await play($, event, rules, agentId)
     }
 
