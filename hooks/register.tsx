@@ -90,7 +90,7 @@ import { takeQuest } from '../src/take-quest'
 import { themeRegion } from '../src/theming'
 import type { ThemingDeps } from '../src/theming'
 import { autoOpenSceneOf, hudStyleOf, rulesOf, soundVolumeOf } from '../src/settings'
-import { playCues, setSoundVolume } from '../src/sounds'
+import { playCues, playUiCue, setSoundVolume } from '../src/sounds'
 import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { GameScreen, QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketDetails, TicketFetch, XpPool } from '../types'
@@ -684,6 +684,7 @@ const bossActions = ($: EngineInterface, rules: Rules): BossActions => ({
 /** What the Overview's buttons do: an Island opens its Region's map, live for the session's own. */
 const overviewActions = ($: EngineInterface): OverviewActions => ({
   open: island => {
+    void playUiCue($, 'view-switched')
     void openRegionMap($, island.isHere ? { kind: 'live' } : { kind: 'snapshot', entry: island.entry }).catch(() => undefined)
   },
   page: page => {
@@ -813,6 +814,7 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
     void updatePlace($, 'board', place => ({ ...place, page }))
   },
   readMore: ticket => {
+    void playUiCue($, 'view-switched')
     void openQuestLog($, ticket).catch(() => undefined)
   },
 })
@@ -874,6 +876,17 @@ async function openQuestLog($: EngineInterface, ticket: string): Promise<{ isPla
   return showView($, 'log')
 }
 
+/**
+ * The Game Screen opened by the Player's command: `opening` awaited, then
+ * its click played, unawaited. The `autoOpenScene` open plays none.
+ */
+async function clicked<T>($: EngineInterface, opening: Promise<T>): Promise<T> {
+  const opened = await opening
+  void playUiCue($, 'game-screen-opened')
+
+  return opened
+}
+
 /** The ticket the Quest Log shows: the one picked, else the active Quest's; null with neither. */
 async function logTicketOf($: EngineInterface): Promise<string | null> {
   return (await readGameScreen($)).log.ticket ?? (await read($, game))?.quest?.ticket ?? null
@@ -885,6 +898,7 @@ async function logTicketOf($: EngineInterface): Promise<string | null> {
  * project, the log's ticket, the World's Regions). It opens nothing.
  */
 async function chooseView($: EngineInterface, view: GameView): Promise<void> {
+  void playUiCue($, 'view-switched')
   await updateGameScreen($, current => ({ ...current, view }))
   if (view === 'quests' && (await read($, board)).listing.state === 'loading') {
     await listQuests($)
@@ -919,6 +933,7 @@ const questHeaderOf = ($: EngineInterface, ticket: string, title: string | undef
   ticket,
   ...(title === undefined ? {} : { title }),
   openLog: () => {
+    void playUiCue($, 'view-switched')
     void openQuestLog($, ticket).catch(() => undefined)
   },
 })
@@ -1705,18 +1720,18 @@ export const register: Register = (on, options) => {
 
   // /game opens the Game Screen on the view last shown; /scene too, the
   // stage being always there.
-  on('command.run', { command: 'game' }, async $ => ({ text: openedText('Game Screen', await openGameScreen($)) }))
+  on('command.run', { command: 'game' }, async $ => ({ text: openedText('Game Screen', await clicked($, openGameScreen($))) }))
 
-  on('command.run', { command: 'scene' }, async $ => ({ text: openedText('Scene', await openGameScreen($)) }))
+  on('command.run', { command: 'scene' }, async $ => ({ text: openedText('Scene', await clicked($, openGameScreen($))) }))
 
   on('command.run', { command: 'quest-board' }, async $ => {
-    const opened = await showView($, 'quests')
+    const opened = await clicked($, showView($, 'quests'))
     await listQuests($)
 
     return { text: openedText('Quest Board', opened) }
   })
 
-  on('command.run', { command: 'map' }, async $ => ({ text: openedText('Region map', await openRegionMap($, { kind: 'live' })) }))
+  on('command.run', { command: 'map' }, async $ => ({ text: openedText('Region map', await clicked($, openRegionMap($, { kind: 'live' }))) }))
 
   // /sage opens the Game Screen, its dialogue box on the first Question, and
   // tells the Question as text, for the terminal; /sage A to D answers it.
@@ -1730,7 +1745,7 @@ export const register: Register = (on, options) => {
     }
 
     if (first === undefined) {
-      await openGameScreen($).catch(() => undefined)
+      await clicked($, openGameScreen($)).catch(() => undefined)
 
       return { text: NO_QUESTION }
     }
@@ -1741,7 +1756,7 @@ export const register: Register = (on, options) => {
       if (current?.lastAnswer != null) {
         await play($, { type: 'ANSWER_DISMISSED' }, rules)
       }
-      await openGameScreen($).catch(() => undefined)
+      await clicked($, openGameScreen($)).catch(() => undefined)
       await showFirstQuestion($, rules)
 
       return { text: `Read it first: no answer was taken.\n${questionText(first, current?.questions.length ?? 1)}` }
@@ -1758,7 +1773,7 @@ export const register: Register = (on, options) => {
     if (current?.lastAnswer != null) {
       await play($, { type: 'ANSWER_DISMISSED' }, rules)
     }
-    await openGameScreen($).catch(() => undefined)
+    await clicked($, openGameScreen($)).catch(() => undefined)
     await showFirstQuestion($, rules)
 
     return { text: questionText(first, current?.questions.length ?? 1) }
@@ -1770,7 +1785,7 @@ export const register: Register = (on, options) => {
     const args = e.args.trim()
     const current = await read($, game)
     const fight = current?.bossFight ?? null
-    await openGameScreen($).catch(() => undefined)
+    await clicked($, openGameScreen($)).catch(() => undefined)
 
     if (!isUnderWay(fight)) {
       return { text: fight === null ? NO_BOSS : `${NO_BOSS} ${bossOutcomeText(fight)}` }
@@ -1846,7 +1861,7 @@ export const register: Register = (on, options) => {
       return { text: NO_ACTIVE_QUEST }
     }
 
-    const opened = await openQuestLog($, ticket)
+    const opened = await clicked($, openQuestLog($, ticket))
     const title = quest?.ticket === ticket ? quest.title : (await listedCard($, ticket))?.title
     const named = `${ticket}${title === undefined ? '' : ` ${title}`}`
 
@@ -1863,7 +1878,7 @@ export const register: Register = (on, options) => {
     const charted = current === null ? [] : chartedModulesOf(current)
     // The sheet as text, for the terminal; the Game Screen on the Sheet beside it.
     await showRegions($)
-    await showView($, 'sheet').catch(() => undefined)
+    await clicked($, showView($, 'sheet')).catch(() => undefined)
 
     return { text: `${badgesText(player)}\n${cartographerText(player, charted)}` }
   })
@@ -1871,7 +1886,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'overview' }, async $ => {
     await showRegions($)
 
-    return { text: openedText('Overview', await showView($, 'sheet')) }
+    return { text: openedText('Overview', await clicked($, showView($, 'sheet'))) }
   })
 
   on('session.attach', async ($, e, next) => {

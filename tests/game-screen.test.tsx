@@ -75,7 +75,7 @@ const engine = (on: On, { surfaces = ['desktop'], open = [] as string[] }: { sur
   }))
   const clock = mock.clock(on, { now: Date.UTC(2026, 9, 24, 9, 0) })
 
-  return { opened, closed, panes, settle: () => clock.settle() }
+  return { opened, closed, panes, settle: () => clock.settle(), advance: (ms: number) => clock.advance(ms) }
 }
 
 /** Runs `/<command> <args>` as the Player types it. */
@@ -129,6 +129,29 @@ describe('Game Screen: one pane', () => {
     await $.session.attach({ surface: 'vscode', clientId: 'vscode:default' })
 
     expect(opened).toEqual(['game'])
+  })
+
+  test('a command opening it and a view switched click; opening itself does not', async ($, on) => {
+    const { settle, advance } = engine(on, { surfaces: ['desktop'] })
+    const clips: string[] = []
+    on('audio.play', (_, e) => {
+      clips.push(e.clip.asset ?? '')
+
+      return { value: undefined }
+    })
+    await $.session.start(START)
+    expect(clips).toEqual([])
+
+    await run($, 'game')
+    await settle()
+    expect(clips).toEqual(['assets/sounds/ui.mp3'])
+
+    const ui = await $.ui.mount({ ...GAME, surface: 'desktop' })
+    await advance(2_000)
+    await ui.press({ key: 'game-tab:sheet' })
+    await settle()
+    expect(clips).toEqual(['assets/sounds/ui.mp3', 'assets/sounds/ui.mp3'])
+    await ui.unmount()
   })
 
   test('in the terminal alone it waits for a command', async ($, on) => {
