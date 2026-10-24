@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { DEFAULT_RULES } from '../src/engine'
-import { autoOpenSceneOf, rulesOf } from '../src/settings'
+import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
 
 describe('Settings', () => {
   test('with nothing set, the rules are the defaults', () => {
@@ -44,5 +44,13 @@ describe('Settings', () => {
     expect(autoOpenSceneOf({ autoOpenScene: false })).toBe(false)
     // A value that is no switch keeps the default.
     expect(autoOpenSceneOf({ autoOpenScene: 'no' })).toBe(true)
+  })
+
+  test('the HUD is the pixel strip unless the Player chose text', () => {
+    expect(hudStyleOf({})).toBe('pixel')
+    expect(hudStyleOf({ hudStyle: 'pixel' })).toBe('pixel')
+    expect(hudStyleOf({ hudStyle: 'text' })).toBe('text')
+    // A value that is no style keeps the default.
+    expect(hudStyleOf({ hudStyle: 'fancy' })).toBe('pixel')
   })
 })

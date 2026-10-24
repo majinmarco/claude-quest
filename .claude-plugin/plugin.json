@@ -48,6 +48,13 @@
       "title": "Open the Scene automatically",
       "description": "Open the Scene pane once per session when a surface that draws its art (the desktop, the editor) joins. Off, it opens only with /scene.",
       "default": true
+    },
+    "hudStyle": {
+      "type": "string",
+      "title": "HUD style",
+      "description": "pixel: on the desktop and in VS Code the HUD is a pixel-art strip. text: the text band, as in the terminal. The terminal always shows the text band.",
+      "options": ["pixel", "text"],
+      "default": "pixel"
     }
   }
 }

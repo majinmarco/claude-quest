@@ -177,7 +177,7 @@ _Avoid_: Inbox, backlog
 ## The HUD
 
 **HUD**:
-The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, the session's vitals, and the Stats in play. Where the surface draws pixel art it is one strip of it: the Player's portrait (by Title), the bars, and the Quest on a banner beside the current Encounter, calm but for a flash on damage and a fill on XP gained; in the terminal, and where the `hudStyle` setting says text, it is text, at most three rows of the band's width. When it is narrow the Quest's title shortens first, then the lesser parts give way.
+The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, the session's vitals, and the Stats in play. Where the surface draws pixel art it is one strip of it: the Player's portrait (a plain adventurer until a Title, then a Scholar, Pathfinder or Warrior), the bars, and the Quest on a banner beside the current Encounter, calm but for a flash on damage and a fill on XP gained; in the terminal, and where the `hudStyle` setting says text, it is text, at most three rows of the band's width. When it is narrow the Quest's title shortens first, then the lesser parts give way.
 _Avoid_: Status bar, header
 
 **Overview**:

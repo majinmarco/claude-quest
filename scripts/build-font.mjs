@@ -1,4 +1,4 @@
-// Builds src/pixel-font.ts, the Quest Board's lettering as bitmap glyphs,
+// Builds src/pixel-font.ts, the pixel art's lettering as bitmap glyphs,
 // from the bundled Kenney Mini font (CC0; see assets/CREDITS.md):
 //
 //   node scripts/build-font.mjs
@@ -14,9 +14,9 @@ import { readFileSync, writeFileSync } from 'node:fs'
 const FONT = new URL('../assets/kenney-fonts/Kenney Mini.ttf', import.meta.url)
 const OUT = new URL('../src/pixel-font.ts', import.meta.url)
 
-/** What the Quest Board writes: letters, digits, and the marks its cards use. */
+/** What the art writes: letters, digits, and the marks the cards and the HUD use. */
 const CHARACTERS = [
-  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#.-:/()·,\'!?_+&[]%"<>=*@ ',
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789#.-:/()·,\'!?_+&[]%"<>=*@$… ',
 ]
 
 const b = readFileSync(FONT)

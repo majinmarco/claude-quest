@@ -126,7 +126,7 @@ export const wrapPixelText = (text: string, max: number, lines: number): string[
 const truncate = (text: string, max: number): string => cutText(text, max)
 
 /** The pixels drawn: a colour per pixel, the last drawn on top. */
-class Canvas {
+export class Canvas {
   private readonly pixels = new Map<string, { x: number; y: number; color: string }>()
 
   set(x: number, y: number, color: string): void {
@@ -188,7 +188,7 @@ class Canvas {
 }
 
 /** The text drawn on one SVG: each glyph used is defined once, then placed. */
-class Lettering {
+export class Lettering {
   private readonly used = new Set<string>()
 
   /** `text` with its top left at `x`, `y`, in `color`. */

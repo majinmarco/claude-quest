@@ -23,6 +23,7 @@ Change these in `/config` under the mod:
 - `sageCallsPerQuest` (10), `bossFightCallsPerQuest` (3), `sageCallsOutsideQuest` (5): the Haiku budget, per ticket for the session. 0 turns those Questions off.
 - `hastyAnswerSeconds` (5) and `nonTrivialLines` (3): when a right answer counts as hasty and pays less.
 - `autoOpenScene` (on): open the Scene once per session on surfaces that draw its art.
+- `hudStyle` (`pixel`): on the desktop and in VS Code the HUD is a pixel-art strip (your portrait by Title, the HP, XP and Mana bars, the Quest on a scroll); `text` brings back the text band there. The terminal always shows the text band.
 
 ## Quest Source
 

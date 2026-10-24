@@ -1,5 +1,5 @@
-// The Player's settings: the Haiku budget, the hasty-answer rule and whether
-// the Scene opens itself, as the rows of Claude Code's own settings menu
+// The Player's settings: the Haiku budget, the hasty-answer rule, whether
+// the Scene opens itself and how the HUD is drawn, as the rows of Claude Code's own settings menu
 // (/config). They are the plugin's `userConfig` fields
 // (.claude-plugin/plugin.json), stored by Claude Code in settings.json under
 // pluginConfigs["quest-mod"].options and handed to `register(on, options)`; a
@@ -45,3 +45,9 @@ export const rulesOf = (options: PluginOptions): Rules => {
  * art (the `autoOpenScene` setting): yes unless the Player turned it off.
  */
 export const autoOpenSceneOf = (options: PluginOptions): boolean => options.autoOpenScene !== false
+
+/** How the HUD is drawn where a surface draws SVG: the pixel strip, or the text band. */
+export type HudStyle = 'pixel' | 'text'
+
+/** The `hudStyle` setting: the pixel strip unless the Player chose text. */
+export const hudStyleOf = (options: PluginOptions): HudStyle => (options.hudStyle === 'text' ? 'text' : 'pixel')
