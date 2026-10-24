@@ -363,3 +363,57 @@ export const ruffPassing = {
 // Not recorded through tool.call: the output of a failing run as the mod
 // reads it, after "Exit code 1".
 export const CLAUDE_PLUGIN_TEST_FAILING = "\n> test\n> claude plugin test .\n\n(fail) Event translator: which Bash commands are checks > npm test reads the summary of the runner it ran: here, claude plugin test [0.15ms]\n(pass) Event translator: which Bash commands are checks > a check a hook denied is no event [0.10ms]\n\n 225 pass\n 1 fail\nRan 226 tests across 7 files. [0.90s]\n"
+
+// Bash reads (#22): derived from the recorded format above (a record with
+// stdout on exit 0, `Exit code N` text otherwise), not captured; the
+// commands are the ones a subagent ran implementing #14, under the session's
+// root /work/claude-quest.
+
+/** A Bash call of `command` that exited `code`, printing `stdout`. */
+const bashRun = (id: string, command: string, stdout: string, code = 0) => ({
+  input: { command, description: `Run ${command}`, tool: 'Bash', tool_use_id: `toolu_${id}` },
+  result:
+    code === 0
+      ? { ref: 1, result: { stdout, stderr: '', interrupted: false, isImage: false, noOutputExpected: false }, text: stdout }
+      : { ref: 1, result: `Error: Exit code ${code}\n${stdout}`, text: `Exit code ${code}\n${stdout}`, isError: true as const },
+})
+
+export const catFile = bashRun('cat01', 'cat src/a.ts', 'export const a = 1\n')
+
+export const sedRange = bashRun('sed01', 'sed -n 1,40p src/b.ts', 'export const b = 2\n')
+
+export const grepRecursive = bashRun('grep01', 'grep -rn x src/', 'src/a.ts:1:x\n')
+
+export const rgTests = bashRun('rg01', 'rg x tests', 'tests/a.test.ts:3:x\n')
+
+export const sedInPlace = bashRun('sed02', "sed -i 's/a/b/' src/a.ts", '')
+
+export const catMissing = bashRun('cat02', 'cat src/nope.ts', 'cat: src/nope.ts: No such file or directory', 1)
+
+export const grepNoMatch = bashRun('grep02', 'grep -rn nothing src', '', 1)
+
+export const catOutside = bashRun('cat03', 'cat /etc/hosts ~/.bashrc ../other/x.ts', '127.0.0.1 localhost\n')
+
+export const catMany = bashRun(
+  'cat04',
+  'cat src/a.ts docs/b.md tests/c.ts hooks/d.tsx scripts/e.mjs assets/f.txt types/g.d.ts',
+  '...\n',
+)
+
+export const readChain = bashRun(
+  'chain01',
+  'cd src && head -n 40 engine.ts | nl && grep -n FILE_EDIT translate.ts 2>/dev/null; wc -l ../README.md',
+  '...\n',
+)
+
+export const heredocWrite = bashRun('write01', "cat > src/new-file.ts <<'EOF'\nexport const x = 1\nEOF", '')
+
+export const pythonWrite = bashRun('write02', 'python3 scripts/gen.py && cat src/generated.ts', 'export const g = 1\n')
+
+export const findSearch = bashRun('find01', "find src -name '*.ts'", 'src/a.ts\n')
+
+export const findDelete = bashRun('find02', "find dist -name '*.map' -delete", '')
+
+export const pipedGrep = bashRun('grep03', 'cat src/a.ts | grep -n export', '1:export const a = 1\n')
+
+export const nodeModulesRead = bashRun('cat05', 'cat node_modules/react/index.js', '...\n')
