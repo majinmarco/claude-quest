@@ -142,3 +142,97 @@ write('hud-battle-200.svg', strip(HUD_BATTLE, 200))
 for (const [name, stats] of [['adventurer', {}], ['scholar', { intelligence: 9 }], ['pathfinder', { wisdom: 9 }], ['warrior', { strength: 9 }]]) {
   write(`hud-portrait-${name}.svg`, strip({ ...HUD_CALM, player: { ...playerAt(name === 'adventurer' ? 2 : 3, stats) } }, 80))
 }
+
+// The Quest Log: a sample Quest under way, as the desktop draws it (the
+// Scroll at full width, then its sections; log.html) and as the terminal
+// does (the text scroll, then the same sections as text; log-terminal.txt).
+const { questLogScrollSvg } = await import('../src/scroll-art.ts')
+const { textScrollLines } = await import('../src/quest-board.tsx')
+const { descriptionShown, historyLineOf, progressLines } = await import('../src/quest-log.tsx')
+const { questXp } = await import('../src/engine.ts')
+
+const LOG_CARD = {
+  ticket: '#21',
+  title: 'Quest Log: the whole ticket, its description and progress in the UI',
+  status: 'ready-for-agent',
+  difficulty: 'Medium',
+  recommendedStats: ['intelligence'],
+  url: 'https://github.com/majinmarco/claude-quest/issues/21',
+  tags: ['ready-for-agent'],
+}
+const LOG_DESCRIPTION = `## Problem
+
+The game shows a Quest as its ticket number and a cut-down title. The Player should be able to read the **whole ticket** inside the game.
+
+## What to build
+
+- [ ] \`/quest\` opens the active Quest's log
+- [ ] \`/quest #N\` opens any ticket's`
+const LOG_BRIEFING = 'Bring back the whole ticket, not its summary: the Player reads before Claude writes.'
+const LOG_PROGRESS = {
+  ticket: '#21',
+  encounters: 14,
+  modulesDiscovered: ['src', 'hooks', 'tests'],
+  itemsForged: ['Quest Log'],
+  battlesWon: 1,
+  battlesStanding: [{ check: 'tsc -p .', foe: 'typecheck', hp: 2, maxHp: 3 }],
+  questions: { right: 2, wrong: 1, waiting: 1 },
+  boss: { status: 'none' },
+  pools: [
+    { pool: 'ambient', earned: 60, cap: 60, isFull: true },
+    { pool: 'battle', earned: 20, cap: 60, isFull: false },
+    { pool: 'sage', earned: 40, cap: 200, isFull: false },
+  ],
+}
+const LOG_RECORD = { ticket: '#21', startedAt: '2026-10-24T12:00:00.000Z', resumedAt: '2026-10-24T15:30:00.000Z', status: 'active' }
+const LOG_HISTORY = [
+  { ticket: '#21', startedAt: '2026-10-20T10:00:00.000Z', status: 'lost', endedAt: '2026-10-20T11:30:00.000Z' },
+  { ticket: '#21', startedAt: '2026-10-22T08:00:00.000Z', status: 'abandoned' },
+]
+
+const logSvg = questLogScrollSvg(LOG_CARD, { xp: questXp(LOG_CARD.difficulty) })
+write('log-scroll.svg', logSvg)
+const esc = text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+const section = (title, lines) => `<h3>${esc(title)}</h3>${lines.map(line => `<div>${esc(line)}</div>`).join('')}`
+writeFileSync(
+  `${out}/log.html`,
+  `<!doctype html><meta charset="utf-8"><title>Quest Log</title>
+<style>body{background:#2b2b33;color:#ddd;font:13px system-ui;margin:16px;max-width:680px}img{display:block;max-width:100%}
+h3{color:#e5c07b;font-size:13px;margin:14px 0 4px}a{color:#7ab0f5}pre{white-space:pre-wrap;font:13px system-ui;margin:0}
+button{font:12px system-ui;padding:3px 10px;border-radius:5px;border:1px solid #666;background:#3a7bd5;color:#eee}</style>
+<p><i>Quest under way (progress) — and, below the line, the same ticket not under way (Take Quest, history).</i></p>
+${img(logSvg)}<a href="${LOG_CARD.url}">${LOG_CARD.url}</a>
+<h3>The ticket</h3><pre>${esc(descriptionShown(LOG_DESCRIPTION))}</pre>
+${section("The Quest Giver's briefing", [LOG_BRIEFING])}
+${section('Progress', progressLines(LOG_PROGRESS, LOG_RECORD))}
+<hr><p><button>Take Quest #21</button></p>
+${section('History', LOG_HISTORY.map(historyLineOf))}
+`,
+)
+console.log('log.html')
+
+const terminal = [
+  ...textScrollLines(LOG_CARD, 80, { titleLines: 6 }),
+  LOG_CARD.url,
+  '',
+  'The ticket',
+  descriptionShown(LOG_DESCRIPTION),
+  '',
+  "The Quest Giver's briefing",
+  LOG_BRIEFING,
+  '',
+  'Progress',
+  ...progressLines(LOG_PROGRESS, LOG_RECORD),
+  '',
+  '--- the same ticket, not under way ---',
+  '[ Take Quest #21 ]',
+  '',
+  'History',
+  ...LOG_HISTORY.map(historyLineOf),
+].join('\n')
+writeFileSync(`${out}/log-terminal.txt`, `${terminal}\n`)
+console.log('log-terminal.txt')
+
+// The Quest Board's card unrolled with the excerpt of its description.
+const { excerptOf } = await import('../src/quest-log.tsx')
+write('card-unrolled-excerpt.svg', scrollCardSvg(LOG_CARD, { unrolled: true, xp: questXp(LOG_CARD.difficulty), excerpt: excerptOf(LOG_DESCRIPTION) }))

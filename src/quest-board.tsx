@@ -189,6 +189,16 @@ const textScroll = (
   }
 }
 
+/**
+ * A card unrolled as the terminal's text scroll, as plain lines (colours
+ * left out): what scripts/render-art.mjs previews the Quest Log's with.
+ */
+export const textScrollLines = (quest: QuestCard, width: number, options: TextScrollOptions = {}): string[] => {
+  const { roller, rows } = textScroll(quest, true, width, options)
+
+  return [roller, ...rows.map(runs => `│ ${runs.map(run => run.text).join('')} │`), roller]
+}
+
 /** A text scroll drawn: its rollers and its rows of paper, each a Text. */
 function textScrollElement(
   { Box, Text }: Pick<ReturnType<EngineInterface['ui']['resolve']>, 'Box' | 'Text'>,

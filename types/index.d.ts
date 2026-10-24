@@ -1,7 +1,12 @@
 // Claude Quest's contract: the game's data types, and the values the mod keeps
 // in `$.state` for the session.
 
-import type { StateFamily } from 'claude-code'
+/**
+ * A `$.state` key holding one value per `id` (a ticket), as Claude Code's
+ * StateFamily marks it: the same shape, written here so the contract stands
+ * alone. No value has this shape; a member reads as `T`.
+ */
+export type StateFamily<T> = { readonly byId: T }
 
 export type Stats = {
   intelligence: number
