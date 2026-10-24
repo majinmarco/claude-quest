@@ -330,6 +330,13 @@ export type QuestionContent = {
   source: SourceRef
 }
 
+/**
+ * The NPCs who put Questions in the Question Queue, each drawn with their own
+ * portrait and name in the dialogue box: the Sage (about a change), the Quest
+ * Giver (the Briefing, about the ticket), the Cartographer (Scouting).
+ */
+export type Npc = 'sage' | 'quest-giver' | 'cartographer'
+
 /** A comprehension Question an NPC put to the Player, in the Question Queue. */
 export type Question = QuestionContent & {
   /**
@@ -339,8 +346,13 @@ export type Question = QuestionContent & {
   key?: string
   /** Unique in the session: `sage-1`, `sage-2`, ... for the Sage, `boss-1` ... for the boss. */
   id: string
-  /** Who asks it: the Sage (the Question Queue) or the boss (the Boss Fight). */
-  npc: 'Sage' | 'Boss'
+  /**
+   * Who asks it: the Sage (the Question Queue) or the boss (the Boss Fight);
+   * another NPC of the Question Queue by its Npc name (`quest-giver`,
+   * `cartographer`). `Sage` is the Sage's spelling from before other NPCs
+   * asked; read it through npcOf (src/engine.ts), which takes either.
+   */
+  npc: 'Sage' | 'Boss' | Npc
   /** When it joined the Question Queue, in ms since the epoch. */
   queuedAt: number
   /**
@@ -592,6 +604,12 @@ declare module 'claude-code' {
       questionCache: { key: string; question: QuestionContent }[]
       /** Whether the Scene opened itself this session: once at most. */
       sceneOpened: boolean
+      /**
+       * The Quest Giver's Briefing of each ticket, its two lines as they
+       * arrived: a family by ticket, `{ plugin: 'quest-mod', key: 'briefing',
+       * id: '#19' }` (see src/briefing.ts). Kept for the session.
+       */
+      briefing: StateFamily<{ text: string }>
     }
   }
 }

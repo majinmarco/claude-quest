@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Badge, BadgeId, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
+import type { Badge, BadgeId, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Npc, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
 
-export type { Badge, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
+export type { Badge, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Npc, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
 
 export type GameEvent =
   /**
@@ -82,6 +82,8 @@ export type GameEvent =
        * already answered this session is not queued again.
        */
       key?: string
+      /** The NPC who asks it, drawn in the dialogue box; the Sage when absent. */
+      npc?: Npc
     }
   /** The dialogue box put a waiting Question in front of the Player, at `at`. */
   | { type: 'QUESTION_SHOWN'; id: string; at: number }
@@ -157,8 +159,17 @@ export type Effect =
    * Question about. A Crafting's file, or the edits that won a Battle.
    */
   | { type: 'CODE_CHANGED'; changes: FileChange[] }
-  /** A Question joined the Question Queue; `waiting` is how many wait now. */
-  | { type: 'QUESTION_QUEUED'; id: string; waiting: number }
+  /**
+   * A Question joined the Question Queue; `waiting` is how many wait now.
+   * `npc` names who asks it when that is not the Sage.
+   */
+  | { type: 'QUESTION_QUEUED'; id: string; waiting: number; npc?: Exclude<Npc, 'sage'> }
+  /**
+   * The active Quest's ticket was found with a summary: the Quest Giver's
+   * Briefing is to be made from it (outside the engine), then queued as a
+   * QUESTION_READY from the `quest-giver`.
+   */
+  | { type: 'BRIEFING_WANTED'; ticket: string; title?: string; summary: string }
   /** The Player answered a Question: right or wrong, its explanation shows. */
   | { type: 'QUESTION_ANSWERED'; answer: QuestionAnswer }
   /** HP lost: a wrong answer's cost. */
@@ -510,7 +521,7 @@ export const step = (
     case 'QUEST_START':
       return startQuest(state, event.ticket, event.difficulty ?? 'Unrated')
     case 'QUEST_DETAILS':
-      return { state: withDetails(state, event), effects: [] }
+      return { state: withDetails(state, event), effects: briefingWanted(state, event, rules) }
     case 'TEST_FAIL':
       return settleProphecy(checkFailed(state, event), event.failures === null || event.failures <= 1 ? 'red' : 'rout')
     case 'TEST_PASS':
@@ -518,7 +529,7 @@ export const step = (
     case 'FILE_EDIT':
       return craft(withFix(withQuestChange(state, event), event), event)
     case 'QUESTION_READY':
-      return queueQuestion(state, event.question, event.at, event.key)
+      return queueQuestion(state, event.question, event.at, event.key, event.npc ?? 'sage')
     case 'QUESTION_SHOWN':
       return showQuestion(state, event.id, event.at)
     case 'QUESTION_ANSWERED':
@@ -983,6 +994,51 @@ const startQuest = (
 /** The most of a ticket's summary a Quest keeps, in characters: what Haiku is shown of it. */
 export const MAX_SUMMARY_CHARS = 1500
 
+/** Where a Question about the ticket itself points (the Briefing's): no file, no lines. */
+export const TICKET_SOURCE = '<ticket>'
+
+/** Whether `question` is about the ticket itself (the Briefing's), pointing at no file. */
+export const isAboutTicket = (question: Pick<QuestionContent, 'source'>): boolean =>
+  question.source.path === TICKET_SOURCE
+
+/** Who asks `question`: its Npc, the Sage for one queued before other NPCs asked. */
+export const npcOf = (question: Pick<Question, 'npc'>): Npc =>
+  question.npc === 'quest-giver' || question.npc === 'cartographer' ? question.npc : 'sage'
+
+// The Quest Giver briefs a Quest once its ticket is found with a summary:
+// details for the active Quest's ticket, not verified missing, with a summary
+// to read. The Briefing is a Sage Question, so with no Sage budget per ticket
+// (`sageCallsPerQuest` 0) there is none, not even from the cache. Whether it
+// costs a call, or was asked already, is for HAIKU_CALL_REQUESTED and the
+// Question Queue to say.
+const briefingWanted = (
+  state: GameState,
+  { ticket, title, summary, verified }: Extract<GameEvent, { type: 'QUEST_DETAILS' }>,
+  rules: Rules,
+): Effect[] => {
+  const { quest } = state
+  if (
+    quest === null ||
+    quest.ticket !== ticket ||
+    summary === undefined ||
+    summary.trim() === '' ||
+    (verified ?? quest.verified) === 'not-found' ||
+    rules.sageCallsPerQuest <= 0
+  ) {
+    return []
+  }
+  const known = title ?? quest.title
+
+  return [
+    {
+      type: 'BRIEFING_WANTED',
+      ticket,
+      summary: summary.slice(0, MAX_SUMMARY_CHARS),
+      ...(known === undefined ? {} : { title: known }),
+    },
+  ]
+}
+
 // What is known of a ticket arrives after its Quest started (looked up
 // unawaited): it is kept on the Quest if that ticket's Quest is still the
 // active one, and dropped otherwise. The difficulty is fixed at the start (the
@@ -1238,12 +1294,15 @@ export const isAsked = (state: GameState, key: string): boolean =>
 // them; nothing in it ever holds up the session. A Question about a change
 // whose Question was already answered this session (a cache hit, the same
 // diff again) is not queued: an answer known pays once. Nor is one about a
-// change whose Question is waiting already: it is asked once.
+// change whose Question is waiting already: it is asked once. Another NPC's
+// Question (the Quest Giver's Briefing) waits in the same queue, answered
+// and paid as the Sage's are; the Sage keeps her older spelling, `Sage`.
 const queueQuestion = (
   state: GameState,
   content: QuestionContent,
   at: number,
   key: string | undefined,
+  npc: Npc,
 ): { state: GameState; effects: Effect[] } => {
   if (key !== undefined && isAsked(state, key)) {
     return { state, effects: [] }
@@ -1254,7 +1313,7 @@ const queueQuestion = (
     ...content,
     ...(key !== undefined ? { key } : {}),
     id: `sage-${questionsAsked}`,
-    npc: 'Sage',
+    npc: npc === 'sage' ? 'Sage' : npc,
     queuedAt: at,
     shownAt: null,
   }
@@ -1262,7 +1321,9 @@ const queueQuestion = (
 
   return {
     state: { ...state, questions, questionsAsked },
-    effects: [{ type: 'QUESTION_QUEUED', id: question.id, waiting: questions.length }],
+    effects: [
+      { type: 'QUESTION_QUEUED', id: question.id, waiting: questions.length, ...(npc === 'sage' ? {} : { npc }) },
+    ],
   }
 }
 
@@ -1287,10 +1348,12 @@ const showQuestion = (
  * answered in under `hastyAnswerMs` from when it was shown. With no answer
  * time (never recorded as shown: `/sage A` on a Question never told is shown
  * instead, and the Sage's pane records what it draws) it could not have been
- * read, so it is hasty.
+ * read, so it is hasty. A Question about the ticket itself (the Briefing's)
+ * points at no lines but asks for the ticket read: it is non-trivial.
  */
 const isHasty = (question: Question, answerMs: number | null, rules: Rules): boolean =>
-  question.source.lines.length >= rules.nonTrivialLines && (answerMs === null || answerMs < rules.hastyAnswerMs)
+  (isAboutTicket(question) || question.source.lines.length >= rules.nonTrivialLines) &&
+  (answerMs === null || answerMs < rules.hastyAnswerMs)
 
 // A right answer pays QUESTION_XP to the Question's Stat (Wisdom for a
 // `wisdom` tag, else Intelligence) from the sage pool, HASTY_ANSWER_XP when it

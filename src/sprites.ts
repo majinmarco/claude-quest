@@ -453,6 +453,28 @@ export const SPRITES = {
       '.aaabbgggbbaaaa.',
     ],
   },
+  /** Tile 100 of the sheet. */
+  questGiver: {
+    palette: ["#3f2631","#8b9bb4","#c0cbdc","#e19a65","#f7c282","#262b44","#763b36","#bd6c4a"],
+    rows: [
+      '................',
+      '....aaaaaaa.....',
+      '...aaaaaaaaaa...',
+      '..aaabbccbbaaa..',
+      '..aabbbbccbbaa..',
+      '.aaabbbccbbbaaa.',
+      '.aabbbdddbbbbaa.',
+      '.aacbdeeeebbcaa.',
+      '.aacceffeffccaa.',
+      '.aacbeeedeeecaa.',
+      '.aabbbeeeeebbaa.',
+      'aaaegbddddbgeaaa',
+      'aaeeeggghggeeeaa',
+      'aaeeahhhbhhaehaa',
+      'aaaaaggggggahaaa',
+      '.aaagggghggahaa.',
+    ],
+  },
   /** Tile 110 of the sheet. */
   boss: {
     palette: ["#3f2631","#e84537","#ff706d","#763b36","#f7c282","#bd6c4a"],

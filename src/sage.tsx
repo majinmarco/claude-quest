@@ -2,13 +2,35 @@
 // lines and its four options as Buttons; once answered, the verdict and the
 // explanation. Where the surface draws SVG the Sage's portrait sits beside it;
 // the terminal has the same box in text, Buttons included, and `/sage A`-`D`
-// answers there too.
+// answers there too. Every NPC of the Question Queue speaks in this box: the
+// Question shown names who asks it (npcOf), and the box takes that NPC's
+// portrait and name.
 
-import type { EngineInterface, RenderInput } from 'claude-code'
+import type { EngineInterface, RenderInput, RenderNode } from 'claude-code'
 
-import type { GameState, Question, QuestionAnswer } from '../types'
-import { QUESTION_XP, statOf } from './engine'
+import type { GameState, Npc, Question, QuestionAnswer } from '../types'
+import { isAboutTicket, npcOf, QUESTION_XP, statOf } from './engine'
 import { portraitSvg } from './scene-art'
+import type { SpriteName } from './sprites'
+
+/** Each NPC's name, as the dialogue box heads it. */
+export const NPC_NAMES: Record<Npc, string> = {
+  sage: 'The Sage',
+  'quest-giver': 'The Quest Giver',
+  cartographer: 'The Cartographer',
+}
+
+/**
+ * Each NPC's portrait tile: the Sage's and the Quest Giver's own; the
+ * Cartographer, who has no tile yet, borrows the Sage's.
+ */
+const PORTRAITS: Record<Npc, SpriteName> = { sage: 'sage', 'quest-giver': 'questGiver', cartographer: 'sage' }
+
+/** The portrait `npc` is drawn with in the dialogue box. */
+export const portraitOf = (npc: Npc): SpriteName => PORTRAITS[npc]
+
+/** What a Question about the ticket says it points at, in place of a file. */
+const ABOUT_TICKET = "About the Quest's ticket"
 
 export type SageActions = {
   /** The Player chose option `choice` of Question `id`. */
@@ -66,8 +88,8 @@ export const verdictOf = ({ isCorrect, isHasty, xp, hpLost, question }: Question
  */
 export const questionText = (question: Question, waiting: number): string =>
   [
-    `The Sage asks (${plural(waiting, 'Question')} waiting): ${question.prompt}`,
-    `${question.source.path}:`,
+    `${NPC_NAMES[npcOf(question)]} asks (${plural(waiting, 'Question')} waiting): ${question.prompt}`,
+    ...(isAboutTicket(question) ? [`${ABOUT_TICKET}.`] : [`${question.source.path}:`]),
     ...question.source.lines.map(line => `    ${line}`),
     ...question.options.map((option, at) => `  ${LETTERS[at]}. ${option}`),
     'Answer with /sage A, B, C or D, or the buttons in the Sage\'s pane.',
@@ -108,10 +130,14 @@ export function drawSage(
       <Box flexDirection="column" gap={1}>
         <Text dimColor>{`Question 1 of ${questions.length}`}</Text>
         <Text bold>{first.prompt}</Text>
-        <Box flexDirection="column">
-          <Text dimColor>{first.source.path}</Text>
-          <Code source={first.source.lines.join('\n')} path={first.source.path} />
-        </Box>
+        {isAboutTicket(first) ? (
+          <Text dimColor>{ABOUT_TICKET}</Text>
+        ) : (
+          <Box flexDirection="column">
+            <Text dimColor>{first.source.path}</Text>
+            <Code source={first.source.lines.join('\n')} path={first.source.path} />
+          </Box>
+        )}
         <Box flexDirection="column">
           {first.options.map((option, at) => (
             <Button key={`option:${first.id}:${at}`} onPress={() => actions.answer(first.id, at)}>
@@ -122,9 +148,24 @@ export function drawSage(
       </Box>
     )
 
+  // Who speaks: the one whose answer shows, else the one asking; the Sage
+  // when nobody waits.
+  const shown = lastAnswer?.question ?? first
+
+  return drawDialogue($, e, shown === undefined ? 'sage' : npcOf(shown), body)
+}
+
+/**
+ * The dialogue box around `body`, spoken by `npc`: their name above it, and
+ * their portrait beside it where the surface draws SVG.
+ */
+export function drawDialogue($: EngineInterface, e: RenderInput<'Pane'>, npc: Npc, body: RenderNode) {
+  const elements = $.ui.resolve(e)
+  const { Box, Text } = elements
+  const name = NPC_NAMES[npc]
   const heading = (
     <Text bold color="magenta">
-      The Sage
+      {name}
     </Text>
   )
 
@@ -142,7 +183,7 @@ export function drawSage(
 
   return (
     <Box flexDirection="row" gap={2}>
-      <Svg source={portraitSvg('sage', PORTRAIT_WIDTH)} alt="The Sage" />
+      <Svg source={portraitSvg(portraitOf(npc), PORTRAIT_WIDTH)} alt={name} />
       <Box flexDirection="column" gap={1}>
         {heading}
         {body}

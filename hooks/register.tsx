@@ -3,6 +3,7 @@ import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
 import { bossAnswerText, bossOutcomeText, bossQuestionText, bossStartText, drawBoss, NO_BOSS } from '../src/boss'
 import type { BossActions } from '../src/boss'
+import { briefingKeyOf, briefingLine, generateBriefing } from '../src/briefing'
 import {
   changesOfGitShow,
   generateQuestion,
@@ -12,7 +13,7 @@ import {
 } from '../src/content-generator'
 import type { Model, ModelFailure, QuestionInput, TicketContext } from '../src/content-generator'
 import { callName, isExhausted, isUnderWay, newGame, PROPHECY_CALLS, step, summonedChanges } from '../src/engine'
-import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, ProphecyCall, QuestionContent, Rules } from '../src/engine'
+import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, Npc, ProphecyCall, QuestionContent, Rules } from '../src/engine'
 import { badgesText, drawHud } from '../src/hud'
 import type { HudActions } from '../src/hud'
 import {
@@ -34,7 +35,7 @@ import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
 import { resolveQuestSource } from '../src/quest-source-setting'
 import type { ResolvedQuestSource } from '../src/quest-source-setting'
-import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
+import { answerText, choiceOf, drawSage, NO_QUESTION, NPC_NAMES, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
@@ -279,18 +280,108 @@ async function makeSageQuestion($: EngineInterface, changes: FileChange[], key: 
 }
 
 /**
- * Queues a Question the Sage made about the change cached under `key`; the
- * Game Engine queues none for a change already answered this session, or
- * whose Question is waiting.
+ * Queues a Question `npc` (the Sage unless told) made about what is cached
+ * under `key`; the Game Engine queues none for a change already answered
+ * this session, or whose Question is waiting. Whether it was queued.
  */
 async function queueQuestion(
   $: EngineInterface,
   question: QuestionContent,
   key: string,
   rules: Rules,
-): Promise<void> {
-  await play($, { type: 'QUESTION_READY', question, key, at: await $.clock.now() }, rules)
+  npc: Npc = 'sage',
+): Promise<boolean> {
+  const effects = await play(
+    $,
+    { type: 'QUESTION_READY', question, key, at: await $.clock.now(), ...(npc === 'sage' ? {} : { npc }) },
+    rules,
+  )
   await showIfInView($, rules)
+
+  return effects.some(effect => effect.type === 'QUESTION_QUEUED')
+}
+
+/**
+ * The Briefings being made, by their cache key: a ticket looked up twice
+ * meanwhile waits on the one call. The module's own, as sageInFlight is.
+ */
+const briefingInFlight = new Map<string, Promise<void>>()
+
+/**
+ * The Quest Giver's Briefing of the Quest just started: from the cache when
+ * the ticket was briefed before with the same summary, at no cost; else,
+ * while the Sage's budget for the ticket lasts, Haiku writes it and its
+ * contract is checked. Its text is kept as `briefing:<ticket>` for the Quest
+ * Log and the Scene; its Question joins the Question Queue as the Quest
+ * Giver's, told in a toast. Started unawaited after the lookup; a Briefing
+ * that could not be made, or was over budget, is skipped, logged to the debug
+ * log alone. A Quest replaced meanwhile is briefed no more.
+ */
+async function askBriefing(
+  $: EngineInterface,
+  wanted: Extract<Effect, { type: 'BRIEFING_WANTED' }>,
+  rules: Rules,
+): Promise<void> {
+  const key = await briefingKeyOf(wanted.ticket, wanted.summary)
+  const making = briefingInFlight.get(key)
+  if (making !== undefined) {
+    return making
+  }
+
+  const made = makeBriefing($, wanted, key, rules).finally(() => briefingInFlight.delete(key))
+  briefingInFlight.set(key, made)
+
+  return made
+}
+
+async function makeBriefing(
+  $: EngineInterface,
+  { ticket, title, summary }: Extract<Effect, { type: 'BRIEFING_WANTED' }>,
+  key: string,
+  rules: Rules,
+): Promise<void> {
+  // Outside its Quest (closed, or replaced meanwhile) nothing is asked.
+  const isActive = async () => (await read($, game))?.quest?.ticket === ticket
+  if (!(await isActive())) {
+    return
+  }
+
+  const cached = cachedQuestion(await read($, questionCache), key)
+  if (cached !== undefined) {
+    const kept = await read($, { plugin: 'quest-mod', key: 'briefing', id: ticket })
+    if ((await queueQuestion($, cached, key, rules, 'quest-giver')) && kept !== undefined) {
+      $.ui.toast(briefingLine(kept.text))
+    }
+    return
+  }
+
+  const granted = await spendHaikuCall($, 'sage', rules, key)
+  if (granted === null) {
+    return
+  }
+  // Counted on another ticket (the Quest replaced as it was asked): given back.
+  if (granted.ticket !== ticket) {
+    await stepGame($, { type: 'HAIKU_CALL_REFUNDED', purpose: 'sage', ticket: granted.ticket }, rules)
+    return
+  }
+
+  const generated = await generateBriefing(
+    { ref: ticket, summary, ...(title === undefined ? {} : { title }) },
+    haikuModel($),
+  )
+  if (!generated.ok) {
+    $.ui.log(`The Quest Giver skipped the Briefing (${generated.reason}): ${generated.detail}`, { to: 'debug' })
+    await noteModelFailure($, 'sage', granted, generated.failure, rules)
+    return
+  }
+
+  // Kept whatever happened meanwhile: the call is spent, and the ticket's
+  // next start reuses it. Asked only while its Quest is still the active one.
+  await update($, questionCache, cache => remember(cache, key, generated.question))
+  await update($, { plugin: 'quest-mod', key: 'briefing', id: ticket }, () => ({ text: generated.briefing }))
+  if ((await isActive()) && (await queueQuestion($, generated.question, key, rules, 'quest-giver'))) {
+    $.ui.toast(briefingLine(generated.briefing))
+  }
 }
 
 /**
@@ -674,24 +765,27 @@ const prophecyCallOf = (args: string): ProphecyCall | undefined =>
 const HAIKU_UNAVAILABLE_TEXT = "Questions are off: Haiku isn't available on this account"
 
 /**
- * Steps the session's game by one event as playOne does; a FILE_EDIT of a
- * test file, from whatever saw the change (a Write, Edit or NotebookEdit; a
- * change read from git), then plays the TEST_FILE_EDITED that arms a Prophecy.
+ * Steps the session's game by one event as playOne does and returns the
+ * effects; a FILE_EDIT of a test file, from whatever saw the change (a Write,
+ * Edit or NotebookEdit; a change read from git), then plays the
+ * TEST_FILE_EDITED that arms a Prophecy, its effects returned too.
  */
-async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
-  await playOne($, event, rules)
+async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<Effect[]> {
+  const effects = await playOne($, event, rules)
 
   if (event.type === 'FILE_EDIT') {
     const root = await $.session.root().catch(() => null)
     const tested = testFileEditedOf(event, root, await $.clock.now())
     if (tested !== null) {
-      await playOne($, tested, rules)
+      return [...effects, ...(await playOne($, tested, rules))]
     }
   }
+
+  return effects
 }
 
-/** Steps the session's game by one event, keeps the Player, plays the effects. */
-async function playOne($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
+/** Steps the session's game by one event, keeps the Player, plays the effects, and returns them. */
+async function playOne($: EngineInterface, event: GameEvent, rules: Rules): Promise<Effect[]> {
   const effects = await stepGame($, event, rules)
 
   const saved = await read($, game)
@@ -726,8 +820,16 @@ async function playOne($: EngineInterface, event: GameEvent, rules: Rules): Prom
     if (effect.type === 'HAIKU_UNAVAILABLE') {
       $.ui.toast(HAIKU_UNAVAILABLE_TEXT)
     }
-    if (effect.type === 'QUESTION_QUEUED') {
+    // The Quest Giver's Question is told by the Briefing's own toast.
+    if (effect.type === 'QUESTION_QUEUED' && effect.npc === undefined) {
       $.ui.toast('The Sage has a Question for you: /sage')
+    }
+    if (effect.type === 'QUESTION_QUEUED' && effect.npc === 'cartographer') {
+      $.ui.toast(`${NPC_NAMES.cartographer} has a Question for you: /sage`)
+    }
+    if (effect.type === 'BRIEFING_WANTED') {
+      // Never awaited: the lookup that found the ticket returns at once.
+      void askBriefing($, effect, rules).catch(() => undefined)
     }
     if (effect.type === 'BATTLE_WON') {
       const xp = effects.find(gained => gained.type === 'XP_GAINED' && gained.stat === 'strength')
@@ -775,6 +877,8 @@ async function playOne($: EngineInterface, event: GameEvent, rules: Rules): Prom
       await recordQuestClosed($, effect.ticket, effect.outcome)
     }
   }
+
+  return effects
 }
 
 /** Plays a reading of the session's vitals, with the model it runs on. */
@@ -1116,8 +1220,14 @@ export const register: Register = (on, options) => {
   // call, so it never slows one.
   on('ui.render', { component: 'Pane', requestId: SCENE.id }, async ($, e) => {
     const current = await read($, game)
+    // The Quest Giver's Briefing tells the Scene's line until the Quest's first Encounter.
+    const quest = current?.quest ?? null
+    const briefing =
+      quest !== null && quest.encounters.length === 0
+        ? ((await read($, { plugin: 'quest-mod', key: 'briefing', id: quest.ticket }))?.text ?? null)
+        : null
 
-    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null)
+    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null, briefing)
   })
 
   on('ui.render', { component: 'Pane', requestId: SAGE.id }, async ($, e) => {
