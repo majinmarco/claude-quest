@@ -1666,7 +1666,7 @@ describe('Game Engine: Prophecy', () => {
     return { state, effects }
   }
 
-  test('a test file edited during a Quest arms a Prophecy, unanswered', () => {
+  test('a test file edited during a Quest arms a Prophecy, not yet called', () => {
     const { state, effects } = play(questing, testEdited())
 
     expect(state.prophecy).toEqual({ file: 'tests/vault.test.ts', armedAt: T })
@@ -1735,6 +1735,17 @@ describe('Game Engine: Prophecy', () => {
 
     expect(state.player).toEqual({ ...hurt.player, tally: { ...hurt.player.tally, prophecyStreak: 0 } })
     expect(effects.some(effect => effect.type === 'HP_LOST' || effect.type === 'XP_GAINED')).toBe(false)
+  })
+
+  test('once a Check starts, a Prophecy not yet called goes and none can be made; one called waits for the Check\'s end', () => {
+    const started = { type: 'CHECK_STARTED' } as const
+    const uncalled = play(questing, testEdited(), started, call('red'))
+    expect(uncalled.state.prophecy).toBeNull()
+    expect(uncalled.effects).toEqual([])
+
+    const called = play(questing, testEdited(), call('red'), started)
+    expect(called.state.prophecy).toEqual({ file: 'tests/vault.test.ts', call: 'red', armedAt: T })
+    expect(play(called.state, ran(bash.vitestFailing1)).effects).toContainEqual(expect.objectContaining({ type: 'PROPHECY_SETTLED', isRight: true }))
   })
 
   test('a Prophecy never called goes with the next Check, paying nothing, telling nothing', () => {

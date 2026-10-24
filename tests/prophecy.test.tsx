@@ -60,7 +60,13 @@ const engine = (on: On) => {
     value: { exitCode: 1, stdout: '', stderr: 'offline\n', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   const answers = new Map<string, unknown>()
-  on('tool.call', (_, e) => answers.get(e.tool_use_id ?? '') as never)
+  // What happens while a call runs, before it answers, by its id.
+  const meanwhile = new Map<string, () => Promise<void>>()
+  on('tool.call', async (_, e) => {
+    await meanwhile.get(e.tool_use_id ?? '')?.()
+
+    return answers.get(e.tool_use_id ?? '') as never
+  })
   const toasts: string[] = []
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
@@ -71,6 +77,7 @@ const engine = (on: On) => {
 
   return {
     toasts,
+    meanwhile,
     player: () => kept.get('player') as { stats: Record<string, number> } | undefined,
     call: ($: Engine, recorded: Recorded) => {
       answers.set(recorded.input.tool_use_id, recorded.result)
@@ -163,6 +170,23 @@ describe('Prophecy', () => {
     expect((await run($, 'prophecy', 'purple')).text).toBe('Call it with /prophecy red, green or rout.')
     expect((await run($, 'prophecy', 'Rout')).text).toBe('You call it: Rout. The next Check will tell.')
     expect((await run($, 'prophecy', 'red')).text).toBe('You called it already: Rout. The next Check will tell.')
+  })
+
+  test('no call is taken while the Check runs: what it prints cannot be read before calling', async ($, on) => {
+    const { call, toasts, meanwhile } = engine(on)
+    await $.session.start(START)
+    await startQuest($)
+    await call($, editTest)
+
+    // The Check under way: the Player calls it from the prompt meanwhile.
+    let calledMidway: string | undefined
+    meanwhile.set(vitestFailing1.input.tool_use_id, async () => {
+      calledMidway = (await run($, 'prophecy', 'red')).text
+    })
+    await call($, vitestFailing1)
+
+    expect(calledMidway).toBe('No Prophecy is armed: one is when Claude edits a test file.')
+    expect(toasts.some(toast => toast.startsWith('Prophecy'))).toBe(false)
   })
 
   test('the Player\'s Stats show Dexterity in play in /badges', async ($, on) => {

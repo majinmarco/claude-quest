@@ -5,7 +5,7 @@
 // what order of importance, is the HUD's (src/hud.tsx); this draws it.
 
 import type { Player, ProphecyCall } from '../types'
-import { titleOf } from './engine'
+import { callName, titleOf } from './engine'
 import type { ManaLevel } from './engine'
 import { Canvas, Lettering, pixelWidth, SCROLL_COLORS } from './scroll-art'
 import { SPRITES } from './sprites'
@@ -143,7 +143,7 @@ const labelOf = (segment: StripSegment): string => {
     case 'boss':
       return segment.isApproaching ? 'approaching' : ''
     case 'prophecy':
-      return segment.call === null ? 'Prophecy: call it' : `Prophecy: ${segment.call.charAt(0).toUpperCase()}${segment.call.slice(1)}`
+      return segment.call === null ? 'Prophecy: call it' : `Prophecy: ${callName(segment.call)}`
     default:
       return segment.text
   }

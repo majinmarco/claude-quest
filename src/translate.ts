@@ -395,6 +395,15 @@ const translateCheck = (command: string, outcome: ToolCallOutcome): GameEvent | 
 }
 
 /**
+ * A Bash call that will run a Check, seen before it runs: a CHECK_STARTED,
+ * which stops the Prophecy from being called; any other call, no event.
+ */
+export const translateCheckStart = (input: ToolCallSeen): GameEvent | null =>
+  input.tool === 'Bash' && typeof input.command === 'string' && readCheck(input.command) !== null
+    ? { type: 'CHECK_STARTED' }
+    : null
+
+/**
  * The folder a command's commit ran in, when the command moved there first
  * (`cd vault && git commit ...`): the target of its last `cd` before the
  * `git commit`, as written, relative to the session's folder or absolute.

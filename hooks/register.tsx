@@ -11,9 +11,9 @@ import {
   REVIEW_QUESTION_COUNT,
 } from '../src/content-generator'
 import type { Model, ModelFailure, QuestionInput, TicketContext } from '../src/content-generator'
-import { isExhausted, isUnderWay, newGame, step, summonedChanges } from '../src/engine'
+import { callName, isExhausted, isUnderWay, newGame, PROPHECY_CALLS, step, summonedChanges } from '../src/engine'
 import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, ProphecyCall, QuestionContent, Rules } from '../src/engine'
-import { badgesText, callName, drawHud, PROPHECY_CALLS } from '../src/hud'
+import { badgesText, drawHud } from '../src/hud'
 import type { HudActions } from '../src/hud'
 import {
   loadDiscovered,
@@ -38,7 +38,7 @@ import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../sr
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
-import { moduleOfFolder, testFileEditedOf, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard, QuestCard, QuestSourceSetting, XpPool } from '../types'
 
@@ -674,9 +674,9 @@ const prophecyCallOf = (args: string): ProphecyCall | undefined =>
 const HAIKU_UNAVAILABLE_TEXT = "Questions are off: Haiku isn't available on this account"
 
 /**
- * Steps the session's game by one event, keeps the Player, plays the effects.
- * A FILE_EDIT of a test file, from whatever saw the change (a Write, Edit or
- * NotebookEdit; a change read from git), arms a Prophecy after it.
+ * Steps the session's game by one event as playOne does; a FILE_EDIT of a
+ * test file, from whatever saw the change (a Write, Edit or NotebookEdit; a
+ * change read from git), then plays the TEST_FILE_EDITED that arms a Prophecy.
  */
 async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
   await playOne($, event, rules)
@@ -888,6 +888,13 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
+    // A Check about to run: no Prophecy is called from now, with its output
+    // in sight.
+    const starting = translateCheckStart(e)
+    if (starting !== null) {
+      await play($, starting, rules)
+    }
+
     const outcome = await next(e)
     // Without the root, the read still explores, but discovers no Module.
     const root = await $.session.root().catch(() => null)

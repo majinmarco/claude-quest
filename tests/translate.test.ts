@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { SessionUsage } from 'claude-code'
 
-import { isTestFile, testFileEditedOf, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import { isTestFile, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import * as commits from './fixtures/git-commits'
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
 import * as bash from './fixtures/bash-calls'
@@ -781,5 +781,13 @@ describe('Event translator: which files are test files', () => {
     expect(testFileEditedOf(edit('tests/vault.test.ts'), null, 7)).toEqual({ type: 'TEST_FILE_EDITED', path: 'tests/vault.test.ts', at: 7 })
     expect(testFileEditedOf(edit(`${ROOT}/src/engine.ts`), ROOT, 7)).toBeNull()
     expect(testFileEditedOf({ type: 'FILE_READ', path: 'tests/a.test.ts', module: null }, ROOT, 7)).toBeNull()
+  })
+})
+
+describe('Event translator: a Check starting', () => {
+  test('a Bash call that runs a Check, before it runs, is a CHECK_STARTED; any other is no event', () => {
+    expect(translateCheckStart(vitestFailing3.input)).toEqual({ type: 'CHECK_STARTED' })
+    expect(translateCheckStart({ tool: 'Bash', command: 'git status' })).toBeNull()
+    expect(translateCheckStart({ tool: 'Read', file_path: '/work/a.ts' })).toBeNull()
   })
 })

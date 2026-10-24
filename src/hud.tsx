@@ -10,7 +10,7 @@
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
-import { BADGES, isExhausted, isUnderWay, manaLevel, titleOf, xpToClear } from './engine'
+import { BADGES, callName, isExhausted, isUnderWay, manaLevel, PROPHECY_CALLS, titleOf, xpToClear } from './engine'
 import type { Encounter, GameState, ManaLevel, Player, ProphecyCall } from './engine'
 import { COMPACTION_WARNING, hudStrip, PIXELS_PER_COLUMN, portraitOf, STILL, STRIP_HEIGHT, stripWidth } from './hud-art'
 import type { StripMotion, StripSegment } from './hud-art'
@@ -80,12 +80,6 @@ export const questLine = ({ ticket, title }: { ticket: string; title?: string },
 /** The Stats in play, abbreviated, in one line: `INT 120 · WIS 15 · DEX 10 · STR 40`. */
 export const statsLine = ({ stats }: Player): string =>
   `INT ${stats.intelligence} · WIS ${stats.wisdom} · DEX ${stats.dexterity} · STR ${stats.strength}`
-
-/** The three calls of a Prophecy, in the order of their Buttons and hotkeys. */
-export const PROPHECY_CALLS: readonly ProphecyCall[] = ['red', 'green', 'rout']
-
-/** A call as the Player reads it: `Red`, `Green`, `Rout`. */
-export const callName = (call: ProphecyCall): string => call.charAt(0).toUpperCase() + call.slice(1)
 
 /** What the HUD's Buttons do: the Prophecy's three calls. */
 export type HudActions = { prophesy: (call: ProphecyCall) => void }

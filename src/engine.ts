@@ -131,14 +131,19 @@ export type GameEvent =
   /** The Player skipped the Boss Fight. */
   | { type: 'BOSS_FIGHT_SKIPPED' }
   /**
-   * Claude wrote or edited a test file (`path`, as the tool named it; see
-   * isTestFile), at `at`: a Prophecy is armed for the next Check. Emitted
-   * beside the FILE_EDIT of a Write, Edit or NotebookEdit; any other path
-   * that changes a test file may emit it too.
+   * Claude wrote or edited a test file (`path`, as the change named it; see
+   * isTestFile), at `at`: a Prophecy is armed for the next Check. Played
+   * after every FILE_EDIT of a test file, whatever saw the change (a Write,
+   * Edit or NotebookEdit, a change read from git).
    */
   | { type: 'TEST_FILE_EDITED'; path: string; at: number }
   /** The Player called the armed Prophecy: how the next Check will end. */
   | { type: 'PROPHECY_MADE'; call: ProphecyCall }
+  /**
+   * A Check is about to run (its TEST_PASS or TEST_FAIL comes when it ends):
+   * no Prophecy can be called from now, as its output could be read first.
+   */
+  | { type: 'CHECK_STARTED' }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
@@ -209,7 +214,7 @@ export type Effect =
   | { type: 'TROPHY_EARNED'; trophy: Trophy }
   /** The active Quest closed, its Boss Fight ended as `outcome`. */
   | { type: 'QUEST_CLOSED'; ticket: string; outcome: QuestOutcome }
-  /** A Prophecy is armed, unanswered, on the edit of test file `file`. */
+  /** A Prophecy is armed, not yet called, on the edit of test file `file`. */
   | { type: 'PROPHECY_ARMED'; file: string }
   /**
    * A Check settled the Prophecy the Player called: `call` theirs, `outcome`
@@ -542,6 +547,8 @@ export const step = (
       return armProphecy(state, event.path, event.at)
     case 'PROPHECY_MADE':
       return makeProphecy(state, event.call)
+    case 'CHECK_STARTED':
+      return { state: state.prophecy != null && state.prophecy.call === undefined ? { ...state, prophecy: null } : state, effects: [] }
   }
 }
 
@@ -1145,8 +1152,16 @@ const checkPassed = (
   }
 }
 
+/** The three calls of a Prophecy, in the order of their Buttons and hotkeys. */
+export const PROPHECY_CALLS: readonly ProphecyCall[] = ['red', 'green', 'rout']
+
+/** A call as the Player reads it: `Red`, `Green`, `Rout`. */
+export const callName = (call: ProphecyCall): string => call.charAt(0).toUpperCase() + call.slice(1)
+
 // A Prophecy: when Claude writes or edits a test file, the Player may call
-// how the next Check will end before it runs. Re-arming replaces a Prophecy
+// how the next Check will end before it runs. Once a Check starts
+// (CHECK_STARTED), one not yet called goes: none is made with the Check's
+// output in sight. Re-arming replaces a Prophecy
 // not yet called (its file and time); one called stays until its Check.
 const armProphecy = (
   state: GameState,

@@ -167,7 +167,7 @@ The Cartographer's Question after every third Module discovered in a Quest, abou
 _Avoid_: Architecture quiz, exploration question
 
 **Prophecy**:
-The Player's call, made after Claude writes or edits a test file and before the next Check runs, of how that Check will end: Red (one failure, or failures it counts none of), Green (passing) or Rout (two or more). The next Check of any kind settles it, not only the one the test belongs to; another test edit before the call replaces it, and a new Quest or the Quest closing clears it. A right call pays 10 Dexterity XP from the prophecy XP pool; a wrong one costs nothing; one never called pays nothing. Five right in a row (one never called or never settled breaking nothing) earn the Oracle Badge; Dexterity as the highest Stat makes the Player a Duelist. Called with the HUD's Buttons (`1 Red`, `2 Green`, `3 Rout`) or `/prophecy`.
+The Player's call, made after Claude writes or edits a test file and before the next Check runs, of how that Check will end: Red (one failure, or failures it counts none of), Green (passing) or Rout (two or more). It can be called until the next Check starts, and that Check, of any kind, settles it, not only the one the test belongs to; another test edit before the call replaces it, and a new Quest or the Quest closing clears it. A right call pays 10 Dexterity XP from the prophecy XP pool; a wrong one costs nothing; one never called pays nothing. Five right in a row (one never called or never settled breaking nothing) earn the Oracle Badge; Dexterity as the highest Stat makes the Player a Duelist. Called with the HUD's Buttons (`1 Red`, `2 Green`, `3 Rout`) or `/prophecy`.
 _Avoid_: Bet, prediction, wager
 
 **Test file**:

@@ -55,8 +55,8 @@ export type Tally = {
   /** The Regions a Quest was closed in (won, lost or unfought). */
   regions: string[]
   /**
-   * Right Prophecies in a row: a wrong one resets it, one left unsettled or
-   * unanswered leaves it. Absent on a Player kept by an older mod.
+   * Right Prophecies in a row: a wrong one resets it, one never called or
+   * never settled leaves it. Absent on a Player kept by an older mod.
    */
   prophecyStreak?: number
 }
