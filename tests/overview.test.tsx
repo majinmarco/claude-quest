@@ -9,6 +9,7 @@ import type { On } from 'claude-code'
 import type { RegionEntry } from '../src/region-registry'
 import { commitAfterAdd, GIT_SHOW_DEPOSIT } from './fixtures/git-commits'
 import { HERE, snapshotOf, THREE_REGIONS } from './fixtures/world-regions'
+import { inPanel } from './fixtures/game-screen'
 
 const pane = (requestId: string, title: string) =>
   ({
@@ -25,8 +26,7 @@ const pane = (requestId: string, title: string) =>
     },
   }) as const
 
-const OVERVIEW = pane('overview', 'Overview')
-const REGION_MAP = pane('region-map', 'Region map')
+const OVERVIEW = pane('game', 'Claude Quest')
 
 const NOW = Date.UTC(2026, 9, 24, 12, 0)
 
@@ -102,14 +102,12 @@ const run = ($: Engine, command: string, args = '') =>
 
 const START = (cwd: string) => ({ cwd, surface: 'terminal', isInteractive: true }) as const
 
-type Drawn = {
-  findAll: (query: { type: string }) => Promise<{ key: string | undefined; text: string; props: Record<string, unknown> }[]>
-}
+type Drawn = Parameters<typeof inPanel>[0]
 
-const textsOf = async (ui: Drawn) => (await ui.findAll({ type: 'Text' })).map(found => found.text)
+const textsOf = async (ui: Drawn) => (await inPanel(ui, 'Text')).map(found => found.text)
 
 const islandButtons = async (ui: Drawn) =>
-  (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith('island:'))
+  (await inPanel(ui, 'Button')).filter(found => found.key?.startsWith('island:'))
 
 describe('The registry of Regions', () => {
   test('a session start puts its project on the World, its remote kept; the next session touches it', async ($, on) => {
@@ -173,15 +171,15 @@ describe('The registry of Regions', () => {
 })
 
 describe('The Overview', () => {
-  test('/overview opens the pane; on the desktop the sheet stands beside the portrait, above the World', async ($, on) => {
+  test('/overview opens the Game Screen on the Sheet; on the desktop the sheet stands beside the portrait, above the World', async ($, on) => {
     const { opened } = engine(on, { stored: { player: SCHOLAR, regions: THREE_REGIONS }, root: HERE, remote: 'git@github.com:majinmarco/claude-quest.git' })
     await $.session.start(START(HERE))
 
     expect((await run($, 'overview')).text).toBe('Overview opened.')
-    expect(opened).toContain('overview')
+    expect(opened).toContain('game')
 
     const ui = await $.ui.mount({ ...OVERVIEW, surface: 'desktop' })
-    const art = (await ui.findAll({ type: 'Svg' })).map(found => found.props)
+    const art = (await inPanel(ui, 'Svg')).map(found => found.props)
     expect(art[0]).toMatchObject({ alt: 'Portrait: Scholar', width: 80 })
     expect(String(art[1]?.alt)).toBe(
       'World: 1 claude-quest (medium, you are here · 5/12 cleared); 2 vault (majinmarco/vault) (small, 6/6 cleared); 3 vault (acme/vault) (small, not mapped yet)',
@@ -231,16 +229,14 @@ describe('The Overview', () => {
     await run($, 'overview')
     const ui = await $.ui.mount({ ...OVERVIEW, surface: 'terminal' })
 
+    // The Island opens the map in the same Game Screen; the Sheet tab comes back to the World.
     await ui.press({ key: 'island:/home/player/vault' })
-    expect(opened).toContain('region-map')
-    let map = await $.ui.mount({ ...REGION_MAP, surface: 'terminal' })
-    expect((await textsOf(map))[0]).toBe('vault · as of 2026-10-20')
-    await map.unmount()
+    expect(opened).toContain('game')
+    expect((await textsOf(ui))[0]).toBe('vault · as of 2026-10-20')
 
+    await ui.press({ key: 'game-tab:sheet' })
     await ui.press({ key: `island:${HERE}` })
-    map = await $.ui.mount({ ...REGION_MAP, surface: 'terminal' })
-    expect((await textsOf(map))[0]).toBe('claude-quest')
-    await map.unmount()
+    expect((await textsOf(ui))[0]).toBe('claude-quest')
     await ui.unmount()
   })
 

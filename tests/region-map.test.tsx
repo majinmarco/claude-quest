@@ -3,20 +3,9 @@ import type { Engine } from 'claude-code/testing'
 import type { FsEntry, On, ProcessRunResult } from 'claude-code'
 
 import { takeQuestContract } from './take-quest-contract'
+import { GAME, inPanel } from './fixtures/game-screen'
 
-const MAP = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'region-map',
-  props: {
-    title: 'Region map',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 40 },
-    view: {},
-  },
-} as const
+const MAP = GAME
 
 const START = { cwd: '/work', surface: 'desktop', isInteractive: true } as const
 const REGION = '/work/.claude/claude-quest.json'
@@ -101,23 +90,25 @@ const world = (
 const map = ($: Engine) =>
   $.command.run({ command: 'map', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
 
-type Drawn = {
-  findAll: (query: { type: string }) => Promise<{ key: string | undefined; text: string; props: Record<string, unknown> }[]>
-}
+type Drawn = Parameters<typeof inPanel>[0]
 
-const texts = async (ui: Drawn) => (await ui.findAll({ type: 'Text' })).map(found => found.text)
-const buttons = async (ui: Drawn) => (await ui.findAll({ type: 'Button' })).map(found => found.key ?? '')
-const altOf = async (ui: Drawn) => String((await ui.findAll({ type: 'Svg' }))[0]?.props.alt ?? '')
+// The map is the Game Screen's panel: its elements alone, the shell's left out.
+const texts = async (ui: Drawn) => (await inPanel(ui, 'Text')).map(found => found.text)
+const buttons = async (ui: Drawn) => (await inPanel(ui, 'Button')).map(found => found.key ?? '')
+const altOf = async (ui: Drawn) => String((await inPanel(ui, 'Svg'))[0]?.props.alt ?? '')
 
 describe('Region map', () => {
-  test('/map opens the pane; it never opens by itself', async ($, on) => {
+  test('/map opens the Game Screen on the map; it never opens by itself', async ($, on) => {
     const { opened } = world(on, { open: [issue(5)] })
     await $.session.start(START)
-    expect(opened).not.toContain('region-map')
+    expect(opened).toEqual([])
 
     await map($)
 
-    expect(opened).toEqual(['region-map'])
+    expect(opened).toEqual(['game'])
+    const ui = await $.ui.mount({ ...MAP, surface: 'terminal' })
+    expect((await ui.find({ type: 'Button', key: 'game-tab:map' }))?.props.variant).toBe('primary')
+    await ui.unmount()
   })
 
   test('the desktop draws the overworld as tiles, the terminal as a grid, with the same buttons', async ($, on) => {
@@ -131,7 +122,7 @@ describe('Region map', () => {
     await desktop.unmount()
 
     const terminal = await $.ui.mount({ ...MAP, surface: 'terminal' })
-    expect(await terminal.findAll({ type: 'Svg' })).toEqual([])
+    expect(await inPanel(terminal, 'Svg')).toEqual([])
     expect((await texts(terminal)).some(text => text.includes('┌1'))).toBe(true)
     expect(await buttons(terminal)).toEqual(shown)
     expect(shown).toEqual(['map-overworld', 'map-modules', 'map-refresh', 'site:wilds', 'site:2'])
@@ -319,6 +310,10 @@ describe('Region map', () => {
       return { value: { isSet: true as const, version } }
     })
     await $.session.start(START)
+    // The Map view chosen on the tab row, as the Overview leaves it.
+    const tabs = await $.ui.mount({ ...MAP, surface: 'terminal' })
+    await tabs.press({ key: 'game-tab:map' })
+    await tabs.unmount()
 
     // The state is the test's own here, so each step is drawn afresh.
     const drawn = async (press?: string) => {

@@ -3,36 +3,13 @@ import type { Engine } from 'claude-code/testing'
 import type { On, ProcessRunResult } from 'claude-code'
 
 import { writeNewFile } from './fixtures/file-changes'
+import { GAME, inBand } from './fixtures/game-screen'
 
 const START = { cwd: '/work/forge', surface: 'terminal', isInteractive: true } as const
 
-const SAGE = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'sage',
-  props: {
-    title: 'The Sage',
-    isFocused: true,
-    bodyColumns: 80,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 30 },
-    view: {},
-  },
-} as const
+const SAGE = GAME
 
-const SCENE = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'scene',
-  props: {
-    title: 'Scene',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 20 },
-    view: {},
-  },
-} as const
+const SCENE = GAME
 
 /** Haiku's Briefing of #19, following the contract. */
 const BRIEFING = {
@@ -272,7 +249,7 @@ describe("The Quest Giver's Briefing", () => {
 
     const ui = await $.ui.mount({ ...SAGE, surface: 'desktop' })
 
-    expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('The Quest Giver')
+    expect((await inBand(ui, 'game-dialogue', 'Svg'))[0]?.props.alt).toBe('The Quest Giver')
     expect((await ui.find({ type: 'Text', text: /^The Quest Giver$/ }))?.text).toBe('The Quest Giver')
     expect(await ui.find({ type: 'Code' })).toBeUndefined()
     await ui.unmount()

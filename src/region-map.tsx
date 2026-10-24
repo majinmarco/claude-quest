@@ -1,4 +1,4 @@
-// The Region map pane (`/map`): the Region the Player is in, as an
+// The Region map, the Game Screen's Map view (`/map`): the Region the Player is in, as an
 // overworld of its Dungeons and the Wilds, each opening to Floors of Rooms
 // (one per Quest), and the Module view of the project, chosen with numbered
 // Buttons under the picture, the selection highlighted in the art. SVG where
@@ -6,7 +6,7 @@
 // Room still open starts its Quest as the Quest Board does (src/take-quest.ts).
 // Another Region, opened from the World (the Overview, issue #16), is drawn
 // from its Snapshot: dated, with Take Quest hidden and no Quest Source read.
-// The pane never opens by itself. Drawing the overworld of the current
+// It never opens by itself. Drawing the overworld of the current
 // Region keeps its Snapshot in the registry. A Region or Dungeon themed by
 // Haiku (src/theming.ts) is drawn in its biome or kind and shown by its
 // themed name, its own beside it; drawing one with no theme yet asks for one.
@@ -26,27 +26,21 @@ import { takeQuest } from './take-quest'
 import { MAX_THEMED_TITLES, themeDungeon, themeRegion } from './theming'
 import type { ThemingDeps } from './theming'
 import { moduleOfFolder } from './translate'
-import type { QuestCard, QuestRecord, QuestSourceProblem, RegionMapListing, RegionMapState } from '../types'
-
-/** The pane: its id, which the Overview opens too. */
-export const REGION_MAP = { id: 'region-map', title: 'Region map' } as const
+import { readGameScreen, showView, updatePlace } from './game-screen'
+import type { GameScreen, QuestCard, QuestRecord, QuestSourceProblem, RegionMapListing, RegionMapState } from '../types'
 
 /** Which Region the pane draws: the current project, or another from its registry entry. */
 export type RegionMapTarget = { kind: 'live' } | { kind: 'snapshot'; entry: RegionEntry }
 
-/** The pane as it starts: the current project, its overworld, nothing read yet. */
+/** The map as it starts: the current project, nothing read yet. */
 const INITIAL: RegionMapState = {
   target: { kind: 'live' },
-  view: 'overworld',
-  site: null,
-  floor: 0,
-  selected: null,
   project: null,
   open: { state: 'loading' },
   closed: {},
 }
 
-/** The pane's place and what it read, for the session; it survives a reload. */
+/** The Region it draws and what it read, for the session; it survives a reload. */
 const regionMap = atom({ plugin: 'quest-mod', key: 'regionMap' } as const, INITIAL)
 
 /** The Snapshot last written this session, by its Region and content: an overworld drawn again unchanged writes none. */
@@ -139,16 +133,33 @@ async function readProject($: EngineInterface): Promise<void> {
   }))
 }
 
+/** The map's place at its start: the overworld, no site entered. */
+const OVERWORLD: GameScreen['map'] = { view: 'overworld', site: null, floor: 0, selected: null }
+
 /**
- * Opens the Region map on its overworld: the current project (`live`, as
- * `/map` does), its tickets read again; or another Region from its registry
- * entry (`snapshot`), reading nothing.
+ * Opens the Game Screen on the Region map's overworld: the current project
+ * (`live`, as `/map` does), its tickets read again; or another Region from
+ * its registry entry (`snapshot`), reading nothing.
  */
-export async function openRegionMap($: EngineInterface, target: RegionMapTarget): Promise<void> {
+export async function openRegionMap($: EngineInterface, target: RegionMapTarget): Promise<{ isPlaced: boolean }> {
   lastSnapshot = ''
-  await update($, regionMap, (current): RegionMapState => ({ ...current, target, view: 'overworld', site: null, floor: 0, selected: null }))
-  await $.ui.open(REGION_MAP)
+  await update($, regionMap, (current): RegionMapState => ({ ...current, target }))
+  await updatePlace($, 'map', () => OVERWORLD)
+  const opened = await showView($, 'map')
   if (target.kind === 'live') {
+    await readProject($)
+  }
+
+  return opened
+}
+
+/**
+ * Reads the current project for the map when it never was this session (the
+ * Map tab pressed before any /map), its place kept; else nothing.
+ */
+export async function readRegionMapOnce($: EngineInterface): Promise<void> {
+  const state = await read($, regionMap)
+  if (state.target.kind === 'live' && state.project === null && state.open.state === 'loading') {
     await readProject($)
   }
 }
@@ -177,16 +188,16 @@ export type RegionMapActions = {
 function actionsOf($: EngineInterface): RegionMapActions {
   return {
     show: view => {
-      void update($, regionMap, (current): RegionMapState => ({ ...current, view }))
+      void updatePlace($, 'map', current => ({ ...current, view }))
     },
     enter: site => {
-      void update($, regionMap, (current): RegionMapState => ({ ...current, view: 'dungeon', site, floor: 0, selected: null }))
+      void updatePlace($, 'map', () => ({ view: 'dungeon', site, floor: 0, selected: null }))
     },
     floor: floor => {
-      void update($, regionMap, (current): RegionMapState => ({ ...current, floor, selected: null }))
+      void updatePlace($, 'map', current => ({ ...current, floor, selected: null }))
     },
     select: at => {
-      void update($, regionMap, (current): RegionMapState => ({ ...current, selected: at }))
+      void updatePlace($, 'map', current => ({ ...current, selected: at }))
     },
     take: quest => {
       void takeQuest($, quest).catch(() => undefined)
@@ -215,7 +226,7 @@ export type RegionMapView = {
   asOf: string | null
   /** A line under the header: why some Rooms may be dark that should not be; null when nothing is amiss. */
   note: string | null
-  place: Pick<RegionMapState, 'view' | 'site' | 'floor' | 'selected'>
+  place: GameScreen['map']
   /** The Modules the Cartographer charted here, starred in the Module view; none when left out. */
   charted?: readonly string[]
 }
@@ -235,7 +246,7 @@ const siteLabel = (site: Site, view: Pick<RegionMapView, 'dungeonThemes'>): stri
   `${siteNameOf(site, view)} ${clearedOf(site)}/${site.rooms.length}`
 
 /**
- * The Region map, drawn for a pane or a panel `width` cells wide: a header,
+ * The Region map, drawn for the Game Screen's panel: a header,
  * the view buttons, then the view chosen. The overworld numbers each site as
  * its Button does; a Floor numbers its Rooms, and a Room still open starts
  * its Quest with Take Quest, which a Snapshot never shows.
@@ -478,13 +489,18 @@ const themedLooks = (
 }
 
 /**
- * The view for the pane state: the current project from what it read (and
- * the Modules discovered, as the game holds them), or another Region from
- * its Snapshot. `kept` is the Region's registry entry as kept now, for its
- * themes (another Region's, its Snapshot too, when the registry has it).
+ * The view for the map's state at `place`: the current project from what it
+ * read (and the Modules discovered, as the game holds them), or another
+ * Region from its Snapshot. `kept` is the Region's registry entry as kept
+ * now, for its themes (another Region's, its Snapshot too, when the
+ * registry has it).
  */
-export const regionMapView = (state: RegionMapState, discovered: readonly string[], kept?: RegionEntry): RegionMapView => {
-  const place = { view: state.view, site: state.site, floor: state.floor, selected: state.selected }
+export const regionMapView = (
+  state: RegionMapState,
+  place: GameScreen['map'],
+  discovered: readonly string[],
+  kept?: RegionEntry,
+): RegionMapView => {
   if (state.target.kind === 'snapshot') {
     const entry = kept ?? state.target.entry
     const snapshot = entry.snapshot
@@ -534,7 +550,7 @@ export const regionMapView = (state: RegionMapState, discovered: readonly string
 }
 
 /**
- * Draws the Region map pane from its state; drawing the overworld of the
+ * Draws the Region map from its state, at the Game Screen's place; drawing the overworld of the
  * current Region, once its closed tickets are read, keeps its Snapshot in
  * the registry (just after the drawing, which may not write; an overworld
  * drawn again unchanged writes nothing). With `theming`, drawing an
@@ -553,7 +569,7 @@ export async function renderRegionMap(
   const key =
     state.target.kind === 'snapshot' ? registryKeyOf(state.target.entry) : project === null ? null : rootKeyOf(project.root)
   const kept = key === null ? undefined : (await readRegions($).catch((): Record<string, RegionEntry> => ({})))[key]
-  const view = { ...regionMapView(state, discovered, kept), charted }
+  const view = { ...regionMapView(state, (await readGameScreen($)).map, discovered, kept), charted }
   if (theming !== undefined && key !== null && kept !== undefined && view.region !== null) {
     askThemes($, theming, key, kept, view, state.target.kind === 'live')
   }

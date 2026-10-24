@@ -1,5 +1,5 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderSurface } from 'claude-code'
+import type { EngineInterface, Register, RenderInput, RenderSurface } from 'claude-code'
 
 import { translateBashReads } from '../src/bash-reads'
 import { bossAnswerText, bossOutcomeText, bossQuestionText, bossStartText, drawBoss, NO_BOSS } from '../src/boss'
@@ -17,6 +17,20 @@ import { changesSince, noteChanged, takeSnapshot } from '../src/diff-crafting'
 import type { Git, ReadFile, Snapshot } from '../src/diff-crafting'
 import { callName, isExhausted, isUnderWay, newGame, PROPHECY_CALLS, questProgressOf, step, summonedChanges } from '../src/engine'
 import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, Npc, ProphecyCall, QuestionContent, Rules } from '../src/engine'
+import {
+  closeRetiredPanes,
+  drawGameScreen,
+  drawsArtOn,
+  GAME,
+  isGameScreenInView,
+  openGameScreen,
+  readGameScreen,
+  showView,
+  stageLayoutOf,
+  updateGameScreen,
+  updatePlace,
+} from '../src/game-screen'
+import type { GameView } from '../src/game-screen'
 import { badgesText, drawHud } from '../src/hud'
 import type { HudActions } from '../src/hud'
 import {
@@ -35,7 +49,7 @@ import {
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
-import { drawOverview, emptyOverview, OVERVIEW } from '../src/overview'
+import { drawOverview, emptyOverview } from '../src/overview'
 import type { OverviewActions, OverviewState } from '../src/overview'
 import { backText, comeBack, emptyParty, setOut, stillOut, tally } from '../src/party'
 import type { Party } from '../src/party'
@@ -47,7 +61,6 @@ import {
   drawQuestLog,
   NO_ACTIVE_QUEST,
   NOT_A_TICKET,
-  QUEST_LOG,
   questArgOf,
   scrollExcerptOf,
 } from '../src/quest-log'
@@ -55,12 +68,13 @@ import type { QuestHeader, QuestLogActions } from '../src/quest-log'
 import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
 import { regionQuestSource } from '../src/quest-source-setting'
-import { openRegionMap, redrawRegionMap, REGION_MAP, renderRegionMap } from '../src/region-map'
+import { openRegionMap, readRegionMapOnce, redrawRegionMap, renderRegionMap } from '../src/region-map'
 import { clearedOf, readRegions, recordRegionQuestClosed, themeOf, touchRegion } from '../src/region-registry'
 import type { RegionEntry } from '../src/region-registry'
 import { answerText, choiceOf, drawSage, NO_QUESTION, NPC_NAMES, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
-import { drawScene } from '../src/scene'
+import { drawStage, sceneLineOf, sceneOf } from '../src/scene'
+import type { SceneState } from '../src/scene'
 import {
   cartographerText,
   chartedModulesOf,
@@ -76,25 +90,22 @@ import { takeQuest } from '../src/take-quest'
 import { themeRegion } from '../src/theming'
 import type { ThemingDeps } from '../src/theming'
 import { autoOpenSceneOf, hudStyleOf, rulesOf, soundVolumeOf } from '../src/settings'
-import { playCues, setSoundVolume } from '../src/sounds'
+import { playCues, playUiCue, setSoundVolume } from '../src/sounds'
 import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
-import type { QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketDetails, TicketFetch, XpPool } from '../types'
+import type { GameScreen, QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketDetails, TicketFetch, XpPool } from '../types'
 import type { Sourced } from '../src/quest-source'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
 
 /**
- * The Quest Board: the Quests last listed, the Player's filters, the card
- * unrolled and the page shown (absent in a board kept by an older mod, which
- * the board draws as every card rolled, on the first page).
+ * The Quest Board: the Quests last listed and the Player's filters. Its
+ * place (the page, the Scroll unrolled) is the Game Screen's.
  */
 const board = atom({ plugin: 'quest-mod', key: 'board' } as const, {
   listing: { state: 'loading' },
   filters: noFilters(),
-  selected: null,
-  page: 0,
 } satisfies QuestBoard)
 
 /**
@@ -107,7 +118,7 @@ const questionCache = atom(
   [] as QuestionCache,
 )
 
-/** The Quest Log pane: the ticket it shows, and that ticket's Region file history read as it opened. */
+/** The Quest Log: the ticket last loaded, and its Region file history read then. */
 const questLog = atom({ plugin: 'quest-mod', key: 'questLog' } as const, { ticket: null, history: [] } satisfies QuestLog)
 
 /**
@@ -120,7 +131,7 @@ const ticketDetails = { plugin: 'quest-mod', key: 'ticketDetails' } as const
 /** The Quest Giver's briefing of a ticket (`{ text }`), which the Briefing (#19) writes and the Quest Log shows. */
 const briefing = { plugin: 'quest-mod', key: 'briefing' } as const
 
-/** Whether the Scene has opened itself this session: it does so once at most. */
+/** Whether the Game Screen has opened itself this session (the `autoOpenScene` rule): once at most. */
 const sceneOpened = atom({ plugin: 'quest-mod', key: 'sceneOpened' } as const, false)
 
 /**
@@ -130,14 +141,6 @@ const sceneOpened = atom({ plugin: 'quest-mod', key: 'sceneOpened' } as const, f
 const overview = atom({ plugin: 'quest-mod', key: 'overview' } as const, emptyOverview() satisfies OverviewState)
 /** The party: the companions (subagents) out during a Quest, and the Scene's beat of one setting out. */
 const party = atom({ plugin: 'quest-mod', key: 'party' } as const, emptyParty() as Party)
-
-const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
-
-const SCENE = { id: 'scene', title: 'Scene' } as const
-
-const SAGE = { id: 'sage', title: 'The Sage' } as const
-
-const BOSS = { id: 'boss', title: 'The Boss' } as const
 
 /**
  * The API errors that say Haiku cannot be used on this account at all: its
@@ -556,12 +559,11 @@ async function makeScouting($: EngineInterface, input: ScoutingInput, key: strin
 }
 
 /**
- * Times the first Question from now when the Sage's pane is up and showing
- * it: one that arrives while the Player looks at the dialogue box.
+ * Times the first Question from now when the Game Screen is up, its
+ * dialogue box showing it: one that arrives while the Player looks.
  */
 async function showIfInView($: EngineInterface, rules: Rules): Promise<void> {
-  const panes = await $.ui.panes().catch(() => [])
-  if (panes.some(pane => pane.id === SAGE.id && pane.isShown && pane.isPlaced)) {
+  if (await isGameScreenInView($)) {
     await showFirstQuestion($, rules)
   }
 }
@@ -682,10 +684,11 @@ const bossActions = ($: EngineInterface, rules: Rules): BossActions => ({
 /** What the Overview's buttons do: an Island opens its Region's map, live for the session's own. */
 const overviewActions = ($: EngineInterface): OverviewActions => ({
   open: island => {
+    void playUiCue($, 'view-switched')
     void openRegionMap($, island.isHere ? { kind: 'live' } : { kind: 'snapshot', entry: island.entry }).catch(() => undefined)
   },
   page: page => {
-    void update($, overview, (current): OverviewState => ({ ...current, page }))
+    void updatePlace($, 'sheet', () => ({ page }))
   },
 })
 
@@ -701,7 +704,7 @@ async function showRegions($: EngineInterface, regions?: Record<string, RegionEn
 
 /**
  * What Haiku theming needs of the session (src/theming.ts): Haiku, whether
- * it was found unavailable this session, and the panes to draw again once a
+ * it was found unavailable this session, and the views to draw again once a
  * theme is kept, the Overview and the Region map.
  */
 const themingOf = ($: EngineInterface): ThemingDeps => ({
@@ -714,11 +717,12 @@ const themingOf = ($: EngineInterface): ThemingDeps => ({
 })
 
 /**
- * Opens the Scene, unasked, when one of `surfaces` draws its art, at most once
- * per session, and only with the `autoOpenScene` setting on. In the terminal
- * alone it waits for /scene: the HUD already tells the Encounter.
+ * Opens the Game Screen, unasked, when one of `surfaces` draws its art, at
+ * most once per session, and only with the `autoOpenScene` setting on. In
+ * the terminal alone it waits for a command: the HUD already tells the
+ * Encounter.
  */
-async function openSceneForArt(
+async function openGameForArt(
   $: EngineInterface,
   surfaces: readonly RenderSurface[],
   autoOpen: boolean,
@@ -734,7 +738,7 @@ async function openSceneForArt(
     return true
   })
   if (!wasOpened) {
-    await $.ui.open(SCENE).catch(() => undefined)
+    await openGameScreen($).catch(() => undefined)
   }
 }
 
@@ -766,14 +770,18 @@ async function listQuests($: EngineInterface): Promise<void> {
   const { source, setting } = await regionQuestSource($)
   const listed = await source.list()
 
-  // A card unrolled whose ticket is no longer listed is rolled for good.
   await update($, board, (current): QuestBoard => ({
     ...current,
-    ...(listed.ok && !listed.value.some(quest => quest.ticket === current.selected) ? { selected: null } : {}),
     listing: listed.ok
       ? { state: 'listed', quests: listed.value, ...(setting === undefined ? {} : { source: setting }) }
       : { state: 'unavailable', problem: listed.problem },
   }))
+  // A Scroll unrolled whose ticket is no longer listed is rolled for good.
+  if (listed.ok) {
+    await updatePlace($, 'board', place =>
+      listed.value.some(quest => quest.ticket === place.selected) ? place : { ...place, selected: null },
+    )
+  }
 }
 
 /** What the Quest Board's buttons do. */
@@ -783,29 +791,30 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
   },
   // A filter changed shows its first page.
   filterStatus: status => {
-    void update($, board, current => ({ ...current, filters: { ...current.filters, status }, page: 0 }))
+    void update($, board, current => ({ ...current, filters: { ...current.filters, status } })).then(() =>
+      updatePlace($, 'board', place => ({ ...place, page: 0 })),
+    )
   },
   filterDifficulty: difficulty => {
-    void update($, board, current => ({
-      ...current,
-      filters: { ...current.filters, difficulty },
-      page: 0,
-    }))
+    void update($, board, current => ({ ...current, filters: { ...current.filters, difficulty } })).then(() =>
+      updatePlace($, 'board', place => ({ ...place, page: 0 })),
+    )
   },
   refresh: () => {
     void listQuests($)
   },
   // Unrolled, the card shows the start of its description: fetched now, once.
   select: ticket => {
-    void update($, board, current => ({ ...current, selected: ticket }))
+    void updatePlace($, 'board', place => ({ ...place, selected: ticket }))
     if (ticket !== null) {
       void fetchTicket($, ticket).catch(() => undefined)
     }
   },
   page: page => {
-    void update($, board, current => ({ ...current, page }))
+    void updatePlace($, 'board', place => ({ ...place, page }))
   },
   readMore: ticket => {
+    void playUiCue($, 'view-switched')
     void openQuestLog($, ticket).catch(() => undefined)
   },
 })
@@ -845,18 +854,67 @@ async function keepTicket($: EngineInterface, ticket: string, got: Sourced<Ticke
 }
 
 /**
- * Opens the Quest Log on `ticket`: its Region file history read now, its
- * details fetched (once per session). Only the Player opens it: /quest, the
- * Quest Board's Read more, the Quest Log Buttons of the Sage and Boss panes.
+ * Loads the Quest Log's `ticket`: its Region file history read now, its
+ * details fetched (once per session).
  */
-async function openQuestLog($: EngineInterface, ticket: string): Promise<{ isPlaced: boolean }> {
+async function loadQuestLog($: EngineInterface, ticket: string): Promise<void> {
   const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
   const history = region.ok ? recordsOf(region.value, ticket) : []
   await update($, questLog, (): QuestLog => ({ ticket, history }))
-  const opened = await $.ui.open(QUEST_LOG)
   void fetchTicket($, ticket).catch(() => undefined)
+}
+
+/**
+ * Opens the Game Screen on the Quest Log of `ticket`, loaded now. Only the
+ * Player picks a ticket: /quest, the Quest Board's Read more, the Quest Log
+ * Button over the Sage's and the boss's dialogue box.
+ */
+async function openQuestLog($: EngineInterface, ticket: string): Promise<{ isPlaced: boolean }> {
+  await updatePlace($, 'log', () => ({ ticket }))
+  await loadQuestLog($, ticket)
+
+  return showView($, 'log')
+}
+
+/**
+ * The Game Screen opened by the Player's command: `opening` awaited, then
+ * its click played, unawaited. The `autoOpenScene` open plays none.
+ */
+async function clicked<T>($: EngineInterface, opening: Promise<T>): Promise<T> {
+  const opened = await opening
+  void playUiCue($, 'game-screen-opened')
 
   return opened
+}
+
+/** The ticket the Quest Log shows: the one picked, else the active Quest's; null with neither. */
+async function logTicketOf($: EngineInterface): Promise<string | null> {
+  return (await readGameScreen($)).log.ticket ?? (await read($, game))?.quest?.ticket ?? null
+}
+
+/**
+ * Shows `view` on the Game Screen, from its tab row: its place as kept, and
+ * what it reads when nothing is read yet (the Board's listing, the map's
+ * project, the log's ticket, the World's Regions). It opens nothing.
+ */
+async function chooseView($: EngineInterface, view: GameView): Promise<void> {
+  void playUiCue($, 'view-switched')
+  await updateGameScreen($, current => ({ ...current, view }))
+  if (view === 'quests' && (await read($, board)).listing.state === 'loading') {
+    await listQuests($)
+  }
+  if (view === 'map') {
+    await readRegionMapOnce($)
+  }
+  if (view === 'log') {
+    const ticket = await logTicketOf($)
+    if (ticket !== null && (await read($, questLog)).ticket !== ticket) {
+      await loadQuestLog($, ticket)
+    }
+  }
+  if (view === 'sheet') {
+    await showRegions($)
+  }
 }
 
 /** What the Quest Log's buttons do. */
@@ -870,11 +928,12 @@ const questLogActions = ($: EngineInterface, ticket: string): QuestLogActions =>
   },
 })
 
-/** The Quest header the Sage's and Boss's panes draw for `ticket`, its Quest Log a press away. */
+/** The Quest header over the Sage's and the boss's dialogue box for `ticket`, its Quest Log a press away. */
 const questHeaderOf = ($: EngineInterface, ticket: string, title: string | undefined): QuestHeader => ({
   ticket,
   ...(title === undefined ? {} : { title }),
   openLog: () => {
+    void playUiCue($, 'view-switched')
     void openQuestLog($, ticket).catch(() => undefined)
   },
 })
@@ -1252,6 +1311,162 @@ async function playFileEdit(
 /** The tools that change a file and hand over its change: played from their record, never from the diff. */
 const FILE_CHANGE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 
+/** The Quest Board's panel, at its place: the unrolled Scroll's excerpt as fetched on Unroll. */
+async function boardPanel($: EngineInterface, e: RenderInput<'Pane'>, place: GameScreen['board']) {
+  const shown = await read($, board)
+  const excerpt = place.selected == null ? undefined : scrollExcerptOf(await read($, memberOf(ticketDetails, { requestId: place.selected })))
+
+  return drawQuestBoard($, e, shown, place, boardActions($), (await read($, game))?.player ?? null, excerpt)
+}
+
+// The Quest Log draws what is already kept: the fetch, the game, the
+// briefing. It fetches nothing itself.
+async function logPanel($: EngineInterface, e: RenderInput<'Pane'>, picked: string | null) {
+  const current = await read($, game)
+  const ticket = picked ?? current?.quest?.ticket ?? null
+  if (ticket === null) {
+    return drawEmptyQuestLog($, e)
+  }
+
+  const kept = await read($, questLog)
+  const history = kept.ticket === ticket ? kept.history : []
+  const quest = current?.quest?.ticket === ticket ? current.quest : null
+  const briefed = await read($, memberOf(briefing, { requestId: ticket }))
+  const fetch = await read($, memberOf(ticketDetails, { requestId: ticket }))
+  const listed = await listedCard($, ticket)
+  // The Dungeon the ticket is in, as its Quest Source says (fetched, else listed).
+  const dungeon = (fetch?.state === 'got' ? fetch.details?.dungeon : undefined) ?? listed?.dungeon
+
+  return drawQuestLog(
+    $,
+    e,
+    {
+      ticket,
+      fetch,
+      listed,
+      quest,
+      progress: quest === null || current === null ? null : questProgressOf(current),
+      history,
+      briefing: typeof briefed?.text === 'string' && briefed.text.trim() !== '' ? briefed.text : null,
+      ...(dungeon === undefined ? {} : { dungeon: dungeon.name }),
+    },
+    questLogActions($, ticket),
+  )
+}
+
+async function mapPanel($: EngineInterface, e: RenderInput<'Pane'>) {
+  const current = await read($, game)
+
+  return renderRegionMap($, e, current?.visitedModules ?? [], current === null ? [] : chartedModulesOf(current), themingOf($))
+}
+
+// Drawing the World asks, just after (a drawing may not write), for the
+// theme of each Island with none yet: once each at most (src/theming.ts).
+async function sheetPanel($: EngineInterface, e: RenderInput<'Pane'>, place: GameScreen['sheet']) {
+  const state = await read($, overview)
+  const unthemed = Object.entries(state.regions)
+    .filter(([, entry]) => themeOf(entry) === undefined)
+    .map(([key]) => key)
+  if (unthemed.length > 0) {
+    const theming = themingOf($)
+    $.clock.after(0, () => {
+      for (const key of unthemed) {
+        void themeRegion($, theming, key)
+      }
+    })
+  }
+
+  return drawOverview($, e, (await read($, game))?.player ?? (await loadPlayer($)), state, place, overviewActions($))
+}
+
+/** What the Scene plays now, from the game, the party and the Briefing kept. */
+async function sceneStateOf($: EngineInterface, current: GameState | null): Promise<SceneState> {
+  // The Quest Giver's Briefing tells the Scene's line until the Quest's first Encounter.
+  const quest = current?.quest ?? null
+  const briefed =
+    quest !== null && quest.encounters.length === 0
+      ? ((await read($, { plugin: 'quest-mod', key: 'briefing', id: quest.ticket }))?.text ?? null)
+      : null
+
+  return {
+    encounter: current?.encounter ?? null,
+    fight: current?.bossFight ?? null,
+    briefing: briefed,
+    beat: (await read($, party)).beat,
+  }
+}
+
+/**
+ * The dialogue box: the boss while its fight is under way; else the
+ * Sage's Question or answer while one waits or shows; else the boss's
+ * outcome while the Scene still plays the fight just ended; else the
+ * narrator. On the desktop the narrator tells the Scene's line under the
+ * stage's art; in the terminal, where the stage is that line, it says
+ * who may speak next. Drawing a Question puts it in front of the Player:
+ * its time starts, recorded just after (a drawing may not write).
+ */
+function dialogueOf(
+  $: EngineInterface,
+  e: RenderInput<'Pane'>,
+  current: GameState | null,
+  scene: SceneState,
+  drawsArt: boolean,
+  rules: Rules,
+) {
+  const { Box, Text } = $.ui.resolve(e)
+  const fight = current?.bossFight ?? null
+  const quest = current?.quest ?? null
+  const boss = () => {
+    // The Quest the fight ends, or ended: the active one's, else the fight's own ticket.
+    const ticket = fight?.ticket ?? quest?.ticket
+    const title = quest?.ticket === ticket ? quest?.title : undefined
+
+    return drawBoss(
+      $,
+      e,
+      fight,
+      bossActions($, rules),
+      current !== null && isExhausted(current.player),
+      ticket === undefined ? null : drawQuestHeader($, e, questHeaderOf($, ticket, title)),
+    )
+  }
+
+  if (isUnderWay(fight)) {
+    return boss()
+  }
+  if (current !== null && (current.lastAnswer !== null || current.questions.length > 0)) {
+    if (current.lastAnswer === null && current.questions[0]?.shownAt === null) {
+      $.clock.after(0, () => {
+        void showFirstQuestion($, rules).catch(() => undefined)
+      })
+    }
+
+    return drawSage(
+      $,
+      e,
+      { questions: current.questions, lastAnswer: current.lastAnswer },
+      sageActions($, rules),
+      quest === null ? null : drawQuestHeader($, e, questHeaderOf($, quest.ticket, quest.title)),
+    )
+  }
+  if (fight !== null && sceneOf(scene.encounter, fight).kind === 'boss') {
+    return boss()
+  }
+
+  const { line, isIdle } = sceneLineOf(scene)
+  const narrator = drawsArt ? <Text dimColor={isIdle}>{line}</Text> : <Text dimColor>{NO_QUESTION}</Text>
+
+  // During a Quest the box is headed by it, its Quest Log a press away, as when someone speaks.
+  return quest === null ? (
+    narrator
+  ) : (
+    <Box flexDirection="column" gap={1}>
+      {drawQuestHeader($, e, questHeaderOf($, quest.ticket, quest.title))}
+      {narrator}
+    </Box>
+  )
+}
+
 export const register: Register = (on, options) => {
   // The Player's settings, from /config: a change there reloads the mod, and
   // register runs again with the new values.
@@ -1321,27 +1536,34 @@ export const register: Register = (on, options) => {
       }
     })
 
+    // The Game Screen is the mod's one pane: one an older load left open
+    // under its own id is closed.
+    await closeRetiredPanes($)
+
     // The commands are a convenience: the game plays without them.
     await $.command
-      .register({ name: 'quest-board', description: 'Open the Quest Board: this Region\'s open Quests' })
+      .register({ name: 'game', description: 'Open the Game Screen: the stage, the dialogue box and the view you left' })
       .catch(() => undefined)
     await $.command
-      .register({ name: 'scene', description: 'Open the Scene: the current Encounter, played' })
+      .register({ name: 'quest-board', description: 'Open the Game Screen on the Quest Board: this Region\'s open Quests' })
       .catch(() => undefined)
     await $.command
-      .register({ name: 'map', description: 'Open the Region map: this Region\'s Dungeons, the Wilds and its Modules' })
+      .register({ name: 'scene', description: 'Open the Game Screen: the current Encounter, played on its stage' })
+      .catch(() => undefined)
+    await $.command
+      .register({ name: 'map', description: 'Open the Game Screen on the Region map: this Region\'s Dungeons, the Wilds and its Modules' })
       .catch(() => undefined)
     await $.command
       .register({
         name: 'sage',
-        description: 'Answer the Sage\'s Questions; /sage A-D answers the first one',
+        description: 'Answer the Sage\'s Questions on the Game Screen; /sage A-D answers the first one',
       })
       .catch(() => undefined)
     await $.command
-      .register({ name: 'badges', description: 'Your character sheet as text: level, Stats, Badges, Trophies' })
+      .register({ name: 'badges', description: 'Your character sheet as text, and the Game Screen on the Sheet: level, Stats, Badges, Trophies' })
       .catch(() => undefined)
     await $.command
-      .register({ name: 'overview', description: 'Open the Overview: your character sheet and the World of Islands' })
+      .register({ name: 'overview', description: 'Open the Game Screen on the Sheet: your character sheet and the World of Islands' })
       .catch(() => undefined)
     await $.command
       .register({
@@ -1352,18 +1574,18 @@ export const register: Register = (on, options) => {
     await $.command
       .register({
         name: 'quest',
-        description: 'Open the Quest Log: the active Quest\'s ticket, description and progress; /quest #N for any ticket',
+        description: 'Open the Game Screen on the Quest Log: the active Quest\'s ticket, description and progress; /quest #N for any ticket',
         argumentHint: '[#N | ABC-123]',
       })
       .catch(() => undefined)
     await $.command
       .register({
         name: 'boss',
-        description: 'Fight the Quest\'s Boss Fight; /boss A-D answers, /boss skip skips it',
+        description: 'Fight the Quest\'s Boss Fight on the Game Screen; /boss A-D answers, /boss skip skips it',
       })
       .catch(() => undefined)
 
-    await openSceneForArt($, await $.session.surfaces().catch(() => []), autoOpenScene)
+    await openGameForArt($, await $.session.surfaces().catch(() => []), autoOpenScene)
 
     // A Boss Fight summoned before a reload of the mod may have lost the
     // unawaited work making its Questions: it is made again. Should that work
@@ -1492,41 +1714,27 @@ export const register: Register = (on, options) => {
     // The game never blocks a spawn: on a failure it starts as asked.
     .catch(($, e, next) => next(e))
 
+  /** What a command that opened the Game Screen says: `what` opened, and when it shows if it waits undrawn. */
+  const openedText = (what: string, opened: { isPlaced: boolean }) =>
+    opened.isPlaced ? `${what} opened.` : `${what} opened: it shows once the window is wide enough.`
+
+  // /game opens the Game Screen on the view last shown; /scene too, the
+  // stage being always there.
+  on('command.run', { command: 'game' }, async $ => ({ text: openedText('Game Screen', await clicked($, openGameScreen($))) }))
+
+  on('command.run', { command: 'scene' }, async $ => ({ text: openedText('Scene', await clicked($, openGameScreen($))) }))
+
   on('command.run', { command: 'quest-board' }, async $ => {
-    const opened = await $.ui.open(QUEST_BOARD)
+    const opened = await clicked($, showView($, 'quests'))
     await listQuests($)
 
-    return {
-      text: opened.isPlaced
-        ? 'Quest Board opened.'
-        : 'Quest Board opened: it shows once the window is wide enough.',
-    }
+    return { text: openedText('Quest Board', opened) }
   })
 
-  on('command.run', { command: 'map' }, async $ => {
-    await openRegionMap($, { kind: 'live' })
-    const opened = (await $.ui.panes().catch(() => [])).find(pane => pane.id === REGION_MAP.id)
+  on('command.run', { command: 'map' }, async $ => ({ text: openedText('Region map', await clicked($, openRegionMap($, { kind: 'live' }))) }))
 
-    return {
-      text:
-        opened === undefined || opened.isPlaced
-          ? 'Region map opened.'
-          : 'Region map opened: it shows once the window is wide enough.',
-    }
-  })
-
-  on('command.run', { command: 'scene' }, async $ => {
-    const opened = await $.ui.open(SCENE)
-
-    return {
-      text: opened.isPlaced
-        ? 'Scene opened.'
-        : 'Scene opened: it shows once the window is wide enough.',
-    }
-  })
-
-  // /sage opens the dialogue box and tells the first Question as text, for
-  // the terminal; /sage A to D answers it.
+  // /sage opens the Game Screen, its dialogue box on the first Question, and
+  // tells the Question as text, for the terminal; /sage A to D answers it.
   on('command.run', { command: 'sage' }, async ($, e) => {
     const choice = e.args.trim() === '' ? undefined : choiceOf(e.args)
     const current = await read($, game)
@@ -1537,7 +1745,7 @@ export const register: Register = (on, options) => {
     }
 
     if (first === undefined) {
-      await $.ui.open(SAGE).catch(() => undefined)
+      await clicked($, openGameScreen($)).catch(() => undefined)
 
       return { text: NO_QUESTION }
     }
@@ -1548,7 +1756,7 @@ export const register: Register = (on, options) => {
       if (current?.lastAnswer != null) {
         await play($, { type: 'ANSWER_DISMISSED' }, rules)
       }
-      await $.ui.open(SAGE).catch(() => undefined)
+      await clicked($, openGameScreen($)).catch(() => undefined)
       await showFirstQuestion($, rules)
 
       return { text: `Read it first: no answer was taken.\n${questionText(first, current?.questions.length ?? 1)}` }
@@ -1565,7 +1773,7 @@ export const register: Register = (on, options) => {
     if (current?.lastAnswer != null) {
       await play($, { type: 'ANSWER_DISMISSED' }, rules)
     }
-    await $.ui.open(SAGE).catch(() => undefined)
+    await clicked($, openGameScreen($)).catch(() => undefined)
     await showFirstQuestion($, rules)
 
     return { text: questionText(first, current?.questions.length ?? 1) }
@@ -1577,7 +1785,7 @@ export const register: Register = (on, options) => {
     const args = e.args.trim()
     const current = await read($, game)
     const fight = current?.bossFight ?? null
-    await $.ui.open(BOSS).catch(() => undefined)
+    await clicked($, openGameScreen($)).catch(() => undefined)
 
     if (!isUnderWay(fight)) {
       return { text: fight === null ? NO_BOSS : `${NO_BOSS} ${bossOutcomeText(fight)}` }
@@ -1653,7 +1861,7 @@ export const register: Register = (on, options) => {
       return { text: NO_ACTIVE_QUEST }
     }
 
-    const opened = await openQuestLog($, ticket)
+    const opened = await clicked($, openQuestLog($, ticket))
     const title = quest?.ticket === ticket ? quest.title : (await listedCard($, ticket))?.title
     const named = `${ticket}${title === undefined ? '' : ` ${title}`}`
 
@@ -1668,24 +1876,22 @@ export const register: Register = (on, options) => {
     const current = await read($, game)
     const player = current?.player ?? (await loadPlayer($))
     const charted = current === null ? [] : chartedModulesOf(current)
+    // The sheet as text, for the terminal; the Game Screen on the Sheet beside it.
+    await showRegions($)
+    await clicked($, showView($, 'sheet')).catch(() => undefined)
 
     return { text: `${badgesText(player)}\n${cartographerText(player, charted)}` }
   })
 
   on('command.run', { command: 'overview' }, async $ => {
     await showRegions($)
-    const opened = await $.ui.open(OVERVIEW)
 
-    return {
-      text: opened.isPlaced
-        ? 'Overview opened.'
-        : 'Overview opened: it shows once the window is wide enough.',
-    }
+    return { text: openedText('Overview', await clicked($, showView($, 'sheet'))) }
   })
 
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
-    await openSceneForArt($, [e.surface], autoOpenScene)
+    await openGameForArt($, [e.surface], autoOpenScene)
 
     return attached
   })
@@ -1733,123 +1939,36 @@ export const register: Register = (on, options) => {
     // Vitals are a reading: a failed one leaves the last on the HUD.
     .catch(($, e, next) => next(e))
 
-  on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) => {
-    const shown = await read($, board)
-    // The unrolled card's excerpt of its description, as fetched on Unroll.
-    const excerpt = shown.selected == null ? undefined : scrollExcerptOf(await read($, memberOf(ticketDetails, { requestId: shown.selected })))
-
-    return drawQuestBoard($, e, shown, boardActions($), (await read($, game))?.player ?? null, excerpt)
-  })
-
-  // The Quest Log draws what is already kept: the fetch, the game, the
-  // briefing. It fetches nothing itself, and never opens itself.
-  on('ui.render', { component: 'Pane', requestId: QUEST_LOG.id }, async ($, e) => {
-    const { ticket, history } = await read($, questLog)
-    if (ticket === null) {
-      return drawEmptyQuestLog($, e)
-    }
-
+  // The Game Screen draws what the game already holds: it never runs in a
+  // tool call, so it never slows one. Its panel is the view chosen, at the
+  // place the Game Screen keeps for it.
+  on('ui.render', { component: 'Pane', requestId: GAME.id }, async ($, e) => {
     const current = await read($, game)
-    const quest = current?.quest?.ticket === ticket ? current.quest : null
-    const briefed = await read($, memberOf(briefing, { requestId: ticket }))
-    const fetch = await read($, memberOf(ticketDetails, { requestId: ticket }))
-    const listed = await listedCard($, ticket)
-    // The Dungeon the ticket is in, as its Quest Source says (fetched, else listed).
-    const dungeon = (fetch?.state === 'got' ? fetch.details?.dungeon : undefined) ?? listed?.dungeon
+    const screen = await readGameScreen($)
+    const drawsArt = drawsArtOn(e.surface, $.ui.resolve(e))
+    const layout = stageLayoutOf(drawsArt, e.props.scroll.bodyRows, e.props.bodyColumns)
+    const scene = await sceneStateOf($, current)
+    const player = current?.player ?? (await loadPlayer($))
+    const panel =
+      screen.view === 'quests'
+        ? await boardPanel($, e, screen.board)
+        : screen.view === 'map'
+          ? await mapPanel($, e)
+          : screen.view === 'log'
+            ? await logPanel($, e, screen.log.ticket)
+            : await sheetPanel($, e, screen.sheet)
 
-    return drawQuestLog(
-      $,
-      e,
-      {
-        ticket,
-        fetch,
-        listed,
-        quest,
-        progress: quest === null || current === null ? null : questProgressOf(current),
-        history,
-        briefing: typeof briefed?.text === 'string' && briefed.text.trim() !== '' ? briefed.text : null,
-        ...(dungeon === undefined ? {} : { dungeon: dungeon.name }),
+    return drawGameScreen($, e, {
+      stage: drawStage($, e, layout, scene),
+      dialogue: dialogueOf($, e, current, scene, drawsArt, rules),
+      panel,
+      view: screen.view,
+      level: `Lv ${player.level}`,
+      badges: player.badges?.length ?? 0,
+      choose: view => {
+        void chooseView($, view).catch(() => undefined)
       },
-      questLogActions($, ticket),
-    )
-  })
-
-  on('ui.render', { component: 'Pane', requestId: REGION_MAP.id }, async ($, e) => {
-    const current = await read($, game)
-
-    return renderRegionMap($, e, current?.visitedModules ?? [], current === null ? [] : chartedModulesOf(current), themingOf($))
-  })
-
-  // The Scene draws what the game already holds: it never runs in a tool
-  // call, so it never slows one.
-  on('ui.render', { component: 'Pane', requestId: SCENE.id }, async ($, e) => {
-    const current = await read($, game)
-    // The Quest Giver's Briefing tells the Scene's line until the Quest's first Encounter.
-    const quest = current?.quest ?? null
-    const briefing =
-      quest !== null && quest.encounters.length === 0
-        ? ((await read($, { plugin: 'quest-mod', key: 'briefing', id: quest.ticket }))?.text ?? null)
-        : null
-
-    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null, briefing, (await read($, party)).beat)
-  })
-
-  on('ui.render', { component: 'Pane', requestId: SAGE.id }, async ($, e) => {
-    const current = await read($, game)
-    // Drawing a Question puts it in front of the Player: its time starts.
-    // A drawing may not write, so it is recorded just after; showing a
-    // Question already shown changes nothing.
-    if (current !== null && current.lastAnswer === null && current.questions[0]?.shownAt === null) {
-      $.clock.after(0, () => {
-        void showFirstQuestion($, rules).catch(() => undefined)
-      })
-    }
-
-    const quest = current?.quest ?? null
-
-    return drawSage(
-      $,
-      e,
-      { questions: current?.questions ?? [], lastAnswer: current?.lastAnswer ?? null },
-      sageActions($, rules),
-      quest === null ? null : drawQuestHeader($, e, questHeaderOf($, quest.ticket, quest.title)),
-    )
-  })
-
-  on('ui.render', { component: 'Pane', requestId: BOSS.id }, async ($, e) => {
-    const current = await read($, game)
-    const fight = current?.bossFight ?? null
-    // The Quest the fight ends, or ended: the active one's, else the fight's own ticket.
-    const ticket = fight?.ticket ?? current?.quest?.ticket
-    const title = current?.quest?.ticket === ticket ? current?.quest?.title : undefined
-
-    return drawBoss(
-      $,
-      e,
-      fight,
-      bossActions($, rules),
-      current !== null && isExhausted(current.player),
-      ticket === undefined ? null : drawQuestHeader($, e, questHeaderOf($, ticket, title)),
-    )
-  })
-
-  // Drawing the World asks, just after (a drawing may not write), for the
-  // theme of each Island with none yet: once each at most (src/theming.ts).
-  on('ui.render', { component: 'Pane', requestId: OVERVIEW.id }, async ($, e) => {
-    const state = await read($, overview)
-    const unthemed = Object.entries(state.regions)
-      .filter(([, entry]) => themeOf(entry) === undefined)
-      .map(([key]) => key)
-    if (unthemed.length > 0) {
-      const theming = themingOf($)
-      $.clock.after(0, () => {
-        for (const key of unthemed) {
-          void themeRegion($, theming, key)
-        }
-      })
-    }
-
-    return drawOverview($, e, (await read($, game))?.player ?? (await loadPlayer($)), state, overviewActions($))
+    })
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

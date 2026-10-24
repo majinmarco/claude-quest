@@ -3,20 +3,9 @@ import type { Engine } from 'claude-code/testing'
 import type { McpToolResult, On, PromptFillInput, ProcessRunResult } from 'claude-code'
 
 import { takeQuestContract } from './take-quest-contract'
+import { GAME, inPanel } from './fixtures/game-screen'
 
-const BOARD = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'quest-board',
-  props: {
-    title: 'Quest Board',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 30 },
-    view: {},
-  },
-} as const
+const BOARD = GAME
 
 const SURFACES = ['terminal', 'desktop'] as const
 
@@ -145,22 +134,21 @@ const questBoard = ($: Engine) =>
     presentation: { isFullscreen: false, columns: 120 },
   })
 
-type Drawn = {
-  findAll: (query: { type: string }) => Promise<{ key: string | undefined; text: string; props: Record<string, unknown> }[]>
-}
+/** The Game Screen drawn: the board is its panel. */
+type Drawn = Parameters<typeof inPanel>[0]
 
 /** Every Text the board shows, as shown. */
-const texts = async (ui: Drawn) => (await ui.findAll({ type: 'Text' })).map(found => found.text)
+const texts = async (ui: Drawn) => (await inPanel(ui, 'Text')).map(found => found.text)
 
 /** The keys of the Quest cards the board shows, in order. */
 const cards = async (ui: Drawn) =>
-  (await ui.findAll({ type: 'Button' }))
+  (await inPanel(ui, 'Button'))
     .map(found => found.key ?? '')
     .filter(key => key.startsWith('quest:'))
 
 /** The SVG the board draws for `ticket`'s card, by its alt. */
 const artOf = async (ui: Drawn, ticket: string) =>
-  (await ui.findAll({ type: 'Svg' })).find(art => String(art.props.alt).startsWith(`${ticket} `))?.props
+  (await inPanel(ui, 'Svg')).find(art => String(art.props.alt).startsWith(`${ticket} `))?.props
 
 describe('Quest Board', () => {
   test('/quest-board opens the pane, listing the open issues as Quest cards', async ($, on) => {
@@ -170,7 +158,7 @@ describe('Quest Board', () => {
 
     await questBoard($)
 
-    expect(opened).toContain('quest-board')
+    expect(opened).toContain('game')
     expect(runs[0]?.slice(0, 3)).toEqual(['gh', 'issue', 'list'])
 
     // Where the surface draws SVG, each card is said in its scroll's alt.
@@ -1011,7 +999,7 @@ describe('Quest Board: scrolls', () => {
     expect(five?.alt).toBe('#5 Quest Board from GitHub Issues · Medium · Boss: +100 XP · INT · ready-for-agent')
     expect(String(five?.source)).toMatch(/^<svg [^>]*width="384"/)
     expect(five?.isInteractive).toBeUndefined()
-    const header = (await ui.findAll({ type: 'Svg' }))[0]
+    const header = (await inPanel(ui, 'Svg'))[0]
     expect(header?.props.alt).toBe('Quest Board')
     // The words are the art's: no card is told again as plain text.
     expect(await texts(ui)).not.toContain('Medium · Boss: +100 XP · INT · ready-for-agent')
@@ -1103,7 +1091,7 @@ describe('Quest Board: scrolls', () => {
     expect(await cards(ui)).toEqual(['quest:#19', 'quest:#20', 'quest:#21', 'quest:#22', 'quest:#23', 'quest:#24'])
 
     // Every page's art fits the Svg element, the six cards and the header together.
-    const sources = (await ui.findAll({ type: 'Svg' })).map(art => String(art.props.source))
+    const sources = (await inPanel(ui, 'Svg')).map(art => String(art.props.source))
     expect(sources).toHaveLength(7)
     expect(sources.every(source => source.length < SVG_LIMIT)).toBe(true)
     await ui.unmount()
@@ -1160,7 +1148,7 @@ describe('Quest Board: scrolls', () => {
     }
   })
 
-  test('a board kept by an older mod, naming no unrolled card or page, draws its first page rolled', async ($, on) => {
+  test('a board kept by an older mod draws its first page rolled: the Game Screen keeps its place, not the board', async ($, on) => {
     engine(on)
     const older: { selected?: string } = {}
     on('state.get', (_, e, next) =>
@@ -1182,8 +1170,11 @@ describe('Quest Board: scrolls', () => {
     const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
     expect(await cards(ui)).toEqual(['quest:#5'])
     expect((await artOf(ui, '#5'))?.isInteractive).toBeUndefined()
+    // Its own unrolled card is not read: the Game Screen keeps the board's place.
     older.selected = '#5'
     await ui.redraw()
+    expect((await artOf(ui, '#5'))?.isInteractive).toBeUndefined()
+    await ui.press({ key: 'scroll:#5' })
     expect((await artOf(ui, '#5'))?.isInteractive).toBe(true)
     await ui.unmount()
   })
