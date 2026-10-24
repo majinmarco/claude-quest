@@ -3,20 +3,9 @@ import type { Engine } from 'claude-code/testing'
 import type { On, RenderSurface } from 'claude-code'
 
 import { read } from './fixtures/tool-calls'
+import { bandTexts, GAME } from './fixtures/game-screen'
 
-const SCENE = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'scene',
-  props: {
-    title: 'Scene',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 20 },
-    view: {},
-  },
-} as const
+const SCENE = GAME
 
 const HUD = {
   plugin: 'quest-mod',
@@ -99,14 +88,14 @@ const scene = ($: Engine) =>
 /** A Read of `file`, under the project's root, as Claude Code makes it. */
 const readOf = (file: string) => ({ ...read.input, file_path: `${ROOT}/${file}` })
 
-describe('Scene pane', () => {
-  test('/scene opens the Scene pane', async ($, on) => {
+describe('Scene, on the Game Screen', () => {
+  test('/scene opens the Game Screen', async ($, on) => {
     const { opened } = engine(on, { surfaces: ['terminal'] })
     await $.session.start({ ...START, surface: 'terminal' })
 
     await scene($)
 
-    expect(opened).toEqual(['scene'])
+    expect(opened).toEqual(['game'])
   })
 
   test('a session on the desktop opens the Scene as it starts', async ($, on) => {
@@ -114,7 +103,7 @@ describe('Scene pane', () => {
 
     await $.session.start(START)
 
-    expect(opened).toEqual(['scene'])
+    expect(opened).toEqual(['game'])
   })
 
   test('a session only in the terminal leaves the Scene closed until asked', async ($, on) => {
@@ -132,7 +121,7 @@ describe('Scene pane', () => {
 
     await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
 
-    expect(opened).toEqual(['scene'])
+    expect(opened).toEqual(['game'])
   })
 
   test('the Scene opens itself once per session: the desktop attaching again leaves it be', async ($, on) => {
@@ -143,7 +132,7 @@ describe('Scene pane', () => {
     await $.session.attach({ surface: 'desktop', clientId: 'desktop:second' })
     await $.session.attach({ surface: 'vscode', clientId: 'vscode:default' })
 
-    expect(opened).toEqual(['scene'])
+    expect(opened).toEqual(['game'])
   })
 
   test('with autoOpenScene off the Scene waits for /scene, even on the desktop', { options: { autoOpenScene: false } }, async ($, on) => {
@@ -155,17 +144,17 @@ describe('Scene pane', () => {
     expect(opened).toEqual([])
 
     await scene($)
-    expect(opened).toEqual(['scene'])
+    expect(opened).toEqual(['game'])
   })
 
-  test('the Quest Board never opens itself', async ($, on) => {
+  test('reading the code opens nothing more: the Game Screen opened itself once, the Quest Board never', async ($, on) => {
     const { opened } = engine(on, { surfaces: ['desktop'] })
     on('session.attach', (_, e) => ({ clientId: e.clientId }))
     await $.session.start(START)
     await $.session.attach({ surface: 'desktop', clientId: 'desktop:second' })
     await $.tool.call(readOf('src/engine.ts'))
 
-    expect(opened).not.toContain('quest-board')
+    expect(opened).toEqual(['game'])
   })
 
   test('before any Encounter the desktop shows the hero waiting', async ($, on) => {
@@ -203,8 +192,7 @@ describe('Scene pane', () => {
     await $.tool.call(readOf('src/hud.tsx'))
 
     const ui = await $.ui.mount({ ...SCENE, surface: 'terminal' })
-    const lines = await ui.findAll({ type: 'Text' })
-    expect(lines.map(line => line.text)).toEqual(['Exploring hud.tsx in src'])
+    expect(await bandTexts(ui, 'game-stage')).toEqual(['Exploring hud.tsx in src'])
     await ui.unmount()
   })
 

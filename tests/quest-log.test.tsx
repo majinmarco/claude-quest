@@ -10,6 +10,7 @@ import type { On, ProcessRunResult } from 'claude-code'
 import { newGame, questProgressOf, step } from '../src/engine'
 import type { GameEvent, GameState, QuestionContent } from '../src/engine'
 import { DESCRIPTION_CUT, descriptionShown, EXCERPT_CHARS, excerptOf, questArgOf } from '../src/quest-log'
+import { bandTexts, GAME, inPanel } from './fixtures/game-screen'
 
 const play = (state: GameState, ...events: GameEvent[]): GameState =>
   events.reduce((played, event) => step(played, event).state, state)
@@ -211,27 +212,9 @@ describe('Quest Log: /quest\'s argument', () => {
   })
 })
 
-// The pane, as the Player sees it.
+// The Game Screen, as the Player sees it: the log is its panel.
 
-const LOG = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'quest-log',
-  props: {
-    title: 'Quest Log',
-    isFocused: false,
-    bodyColumns: 80,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 40 },
-    view: {},
-  },
-} as const
-
-const paneOf = (requestId: 'quest-board' | 'sage' | 'boss') => ({
-  ...LOG,
-  requestId,
-  props: { ...LOG.props, title: requestId },
-})
+const LOG = GAME
 
 const START = { cwd: '/work', surface: 'desktop', isInteractive: true } as const
 const REGION = '/work/.claude/claude-quest.json'
@@ -345,11 +328,10 @@ const world = (
 const run = ($: Engine, command: string, args = '') =>
   $.command.run({ command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
 
-type Drawn = {
-  findAll: (query: { type: string }) => Promise<{ key: string | undefined; text: string; props: Record<string, unknown> }[]>
-}
+type Drawn = Parameters<typeof inPanel>[0]
 
-const textsOf = async (ui: Drawn) => (await ui.findAll({ type: 'Text' })).map(found => found.text)
+/** The Texts of the panel: the view shown. */
+const textsOf = async (ui: Drawn) => (await inPanel(ui, 'Text')).map(found => found.text)
 
 /** The characters an SVG letters, by the glyphs it places, in order. */
 const lettered = (svg: string): string =>
@@ -387,11 +369,11 @@ describe('Quest Log: /quest', () => {
     await settle()
 
     expect(said.text).toBe('Quest Log opened: #5.')
-    expect(opened).toEqual(['quest-log'])
+    expect(opened).toEqual(['game'])
     expect(views).toEqual(['5'])
 
     const ui = await $.ui.mount({ ...LOG, surface: 'desktop' })
-    const art = await ui.find({ type: 'Svg' })
+    const art = (await inPanel(ui, 'Svg'))[0]
     expect(art?.props.alt).toBe('#5 Quest Log: the whole ticket · Medium · Boss: +100 XP · INT · ready-for-agent')
     expect(String(art?.props.source)).toMatch(/^<svg [^>]*viewBox="0 0 320 \d+" width="640"/)
     expect(lettered(String(art?.props.source))).toContain('QuestLog:thewholeticket')
@@ -548,7 +530,7 @@ describe('Quest Log: the Quest under way', () => {
     await settle()
 
     expect(toasts).toContain('Quest started: #5 · /quest for the brief')
-    expect(opened).not.toContain('quest-log')
+    expect(opened).toEqual([])
   })
 
   test('/quest opens it, reusing the ticket lookup\'s fetch, with the Quest\'s progress and no Take Quest', async ($, on) => {
@@ -589,52 +571,54 @@ describe('Quest Log: the Quest under way', () => {
   })
 })
 
-describe('Quest Log: opened from the other panes', () => {
+describe('Quest Log: opened from the other views', () => {
   test("the Quest Board's unrolled Scroll shows the description's start, and Read more opens the log", async ($, on) => {
     const { opened, views, settle } = world(on)
     await $.session.start(START)
     await run($, 'quest-board')
     await settle()
 
-    const ui = await $.ui.mount({ ...paneOf('quest-board'), surface: 'desktop' })
+    const ui = await $.ui.mount({ ...LOG, surface: 'desktop' })
     expect(await ui.find({ type: 'Button', key: 'log:#5' })).toBeUndefined()
     await ui.press({ key: 'scroll:#5' })
     await settle()
     expect(views).toEqual(['5'])
-    const art = (await ui.findAll({ type: 'Svg' })).find(svg => String(svg.props.alt).startsWith('#5 '))
+    const art = (await inPanel(ui, 'Svg')).find(svg => String(svg.props.alt).startsWith('#5 '))
     expect(lettered(String(art?.props.source))).toContain('ProblemThePlayerneverseesthedescription.Showitwhole')
-
-    await ui.press({ key: 'log:#5' })
-    await settle()
-    expect(opened).toContain('quest-log')
-    // Fetched on Unroll, the log asks nothing again.
-    expect(views).toEqual(['5'])
     await ui.unmount()
 
-    const terminal = await $.ui.mount({ ...paneOf('quest-board'), surface: 'terminal' })
+    const terminal = await $.ui.mount({ ...LOG, surface: 'terminal' })
     expect((await textsOf(terminal)).some(text => text.startsWith('│ Problem The Player never sees'))).toBe(true)
+    await terminal.press({ key: 'log:#5' })
+    await settle()
+    expect(opened).toEqual(['game', 'game'])
+    expect((await terminal.find({ type: 'Button', key: 'game-tab:log' }))?.props.variant).toBe('primary')
+    expect(await terminal.find({ type: 'Markdown' })).toBeDefined()
+    // Fetched on Unroll, the log asks nothing again.
+    expect(views).toEqual(['5'])
     await terminal.unmount()
   })
 
-  test("the Sage's pane is headed by the Quest, its Quest Log a press away", async ($, on) => {
+  test("the dialogue box is headed by the active Quest, its Quest Log a press away", async ($, on) => {
     const { opened, settle } = world(on)
     await $.session.start(START)
     await run($, 'mattpocock-skills:implement', '#5')
     await settle()
 
-    const ui = await $.ui.mount({ ...paneOf('sage'), surface: 'terminal' })
-    expect((await textsOf(ui))[0]).toBe('Quest #5 Quest Log: the whole ticket')
+    const ui = await $.ui.mount({ ...LOG, surface: 'terminal' })
+    expect((await bandTexts(ui, 'game-dialogue'))[0]).toBe('Quest #5 Quest Log: the whole ticket')
     await ui.press({ key: 'quest-log-open' })
+    expect((await ui.find({ type: 'Button', key: 'game-tab:log' }))?.props.variant).toBe('primary')
     await ui.unmount()
 
-    expect(opened).toContain('quest-log')
+    expect(opened).toContain('game')
   })
 
-  test("between Quests the Sage's pane has no Quest header", async ($, on) => {
+  test('between Quests the dialogue box has no Quest header', async ($, on) => {
     world(on)
     await $.session.start(START)
 
-    const ui = await $.ui.mount({ ...paneOf('sage'), surface: 'terminal' })
+    const ui = await $.ui.mount({ ...LOG, surface: 'terminal' })
     expect(await ui.find({ type: 'Button', key: 'quest-log-open' })).toBeUndefined()
     await ui.unmount()
   })

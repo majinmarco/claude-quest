@@ -130,7 +130,7 @@ export const bossAnswerText = (fight: BossFight, exhausted = false): string => {
     : `${bossVerdictOf(answer, fight, exhausted && fight.status === 'fighting')}\n${answer.question.explanation}\n\n${next}`
 }
 
-/** The pane's header: the boss's HP and Questions while it is fought, how it ended once over. */
+/** The box's header: the boss's HP and Questions while it is fought, how it ended once over. */
 const bossHeaderOf = (fight: BossFight): string => {
   const boss = `The boss of Quest ${fight.ticket}`
   switch (fight.status) {
