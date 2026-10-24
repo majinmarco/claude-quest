@@ -146,6 +146,12 @@ async function play($: EngineInterface, event: GameEvent): Promise<void> {
         `Mana at ${effect.mana}%: the context will compact soon. Wrap up or start a fresh session.`,
       )
     }
+    if (effect.type === 'BATTLE_WON') {
+      const xp = effects.find(gained => gained.type === 'XP_GAINED' && gained.stat === 'strength')
+      $.ui.toast(
+        `Battle won! ${effect.check} is all green${xp?.type === 'XP_GAINED' ? `: +${xp.amount} XP (Strength)` : ''}`,
+      )
+    }
     if (effect.type === 'QUEST_ABANDONED') {
       $.ui.toast(`Quest abandoned: ${effect.ticket}`)
       await recordQuestAbandoned($, effect.ticket)

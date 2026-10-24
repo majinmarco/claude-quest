@@ -27,6 +27,9 @@ const SPRITES = {
   hero: 97,
   chest: 89,
   chestOpen: 91,
+  spider: 122,
+  slime: 108,
+  ghost: 121,
 }
 
 /** Decodes an 8-bit indexed PNG (the sheet's kind) into RGBA rows. */

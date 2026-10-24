@@ -4,9 +4,9 @@
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
-import { DISCOVERY_XP } from './engine'
-import type { Encounter } from './engine'
-import { sceneSvg } from './scene-art'
+import { BATTLE_XP_PER_HP, DISCOVERY_XP } from './engine'
+import type { BattleEncounter, CheckKind, Encounter } from './engine'
+import { MONSTERS, sceneSvg } from './scene-art'
 
 /** How wide the scene is drawn, in CSS pixels: its 128 pixels at 3x. */
 const ART_WIDTH = 384
@@ -23,10 +23,51 @@ const whereIn = (module: string | null): string => {
   return module === '.' ? 'in the project root' : `in ${module}`
 }
 
+
+const plural = (count: number, one: string, many = `${one}s`) =>
+  `${count} ${count === 1 ? one : many}`
+
+/** What a check's failures are called: `3 failing`, `1 error`, `2 type errors`. */
+const failuresNamed = (kind: CheckKind, count: number): string => {
+  switch (kind) {
+    case 'test':
+      return `${count} failing`
+    case 'lint':
+      return plural(count, 'error')
+    case 'typecheck':
+      return plural(count, 'type error')
+  }
+}
+
+/** A Battle in one line. */
+export const describeBattle = (battle: BattleEncounter): string => {
+  const monster = MONSTERS[battle.foe].name
+  const hp = `${battle.hp}/${battle.maxHp} HP`
+
+  switch (battle.outcome) {
+    case 'spawned':
+      return battle.isCounted
+        ? `A ${monster} appears: ${battle.check}, ${failuresNamed(battle.foe, battle.hp)} · ${hp}`
+        : `A ${monster} appears: ${battle.check} failed, its failures unread · ${hp}`
+    case 'hit':
+      return `${plural(battle.hits, 'hit')} on the ${monster}: ${battle.check} · ${hp}`
+    case 'stands':
+      return `The ${monster} stands: ${battle.check} · ${hp}`
+    case 'grew':
+      return `The ${monster} grows: ${battle.check} · ${hp}`
+    case 'won':
+      return `Battle won: ${battle.check} all green · +${BATTLE_XP_PER_HP * battle.maxHp} XP (Strength)`
+  }
+}
+
 /** The Encounter in one line, as the terminal shows it and the art's alt says. */
 export const describeScene = (encounter: Encounter | null): string => {
   if (encounter === null) {
     return IDLE
+  }
+
+  if (encounter.kind === 'Battle') {
+    return describeBattle(encounter)
   }
 
   const where = `Exploring ${nameOf(encounter.target)} ${whereIn(encounter.module)}`

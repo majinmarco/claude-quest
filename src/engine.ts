@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Difficulty, Encounter, GameState, Player, Quest, StatName, Vitals } from '../types'
+import type { Battle, BattleEncounter, CheckKind, Difficulty, Encounter, GameState, Player, Quest, StatName, Vitals } from '../types'
 
-export type { Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
+export type { Battle, BattleEncounter, CheckKind, Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
 
 export type GameEvent =
   /**
@@ -19,9 +19,21 @@ export type GameEvent =
       spendUsd?: number
     }
   | { type: 'QUEST_START'; ticket: string }
+  /**
+   * A check (a test run, lint or type-check) failed: `failures` is how many
+   * its output counts, null when it counts none that can be read.
+   */
+  | { type: 'TEST_FAIL'; check: string; kind: CheckKind; failures: number | null }
+  /** A check passed: nothing failing. */
+  | { type: 'TEST_PASS'; check: string; kind: CheckKind }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
+  /** The Encounter under way moved on: a Battle's monster was hit, grew or fell. */
+  | { type: 'ENCOUNTER_UPDATED'; encounter: Encounter }
+  /** Newly passing tests (or cleared errors) struck the check's monster. */
+  | { type: 'MONSTER_HIT'; check: string; hits: number; hp: number }
+  | { type: 'BATTLE_WON'; check: string; foe: CheckKind }
   /** XP earned; `stat` is the Stat whose kind of work earned it, if any. */
   | { type: 'XP_GAINED'; amount: number; stat?: StatName }
   /** The Player's first visit to a Module in this Region. */
@@ -39,6 +51,12 @@ const EXPLORATION_XP = 5
  * Stat grows from it yet.
  */
 export const DISCOVERY_XP = 10
+
+/**
+ * The Strength XP a Battle won earns, per HP of its monster at its largest:
+ * the more that was failing, the bigger the win.
+ */
+export const BATTLE_XP_PER_HP = 10
 
 /** How full Mana is: it turns `filling`, then `warning` before compaction. */
 export type ManaLevel = 'calm' | 'filling' | 'warning'
@@ -95,6 +113,7 @@ export const newGame = (player: Player = newPlayer()): GameState => ({
   vitals: { mana: null, model: null, spendUsd: null },
   quest: null,
   visitedModules: [],
+  battles: [],
 })
 
 export const step = (
@@ -108,6 +127,10 @@ export const step = (
       return measure(state, event)
     case 'QUEST_START':
       return startQuest(state, event.ticket)
+    case 'TEST_FAIL':
+      return checkFailed(state, event)
+    case 'TEST_PASS':
+      return checkPassed(state, event.check)
   }
 }
 
@@ -211,5 +234,109 @@ const startQuest = (
   return {
     state: { ...state, quest },
     effects: [...abandoned, { type: 'QUEST_STARTED', ticket }],
+  }
+}
+
+/** The game with `battle`'s Encounter played: current, and on the Quest. */
+const playBattle = (
+  state: GameState,
+  encounter: BattleEncounter,
+  battles: Battle[],
+): GameState => ({
+  ...state,
+  encounter,
+  quest: attach(state.quest, encounter),
+  battles,
+})
+
+const encounterOf = (
+  battle: Battle,
+  hits: number,
+  outcome: BattleEncounter['outcome'],
+): BattleEncounter => ({ kind: 'Battle', ...battle, hits, outcome })
+
+// A Battle is against one Check: the same command run again. Its
+// monster's HP is the failures the check last counted; each failure fewer on
+// the next run is a hit. A run that counts none readable spawns a one-HP
+// monster, or leaves the one standing as it was. Another Check has its own
+// Battle.
+const checkFailed = (
+  state: GameState,
+  event: Extract<GameEvent, { type: 'TEST_FAIL' }>,
+): { state: GameState; effects: Effect[] } => {
+  const { check, failures } = event
+  const open = state.battles.find(battle => battle.check === check)
+
+  if (open === undefined) {
+    const hp = failures ?? 1
+    const battle: Battle = { check, foe: event.kind, hp, maxHp: hp, isCounted: failures !== null }
+    const encounter = encounterOf(battle, 0, 'spawned')
+
+    return {
+      state: playBattle(state, encounter, [...state.battles, battle]),
+      effects: [{ type: 'ENCOUNTER_STARTED', encounter }],
+    }
+  }
+
+  const hp = failures ?? open.hp
+  const hits = Math.max(0, open.hp - hp)
+  const battle: Battle = {
+    ...open,
+    hp,
+    maxHp: Math.max(open.maxHp, hp),
+    isCounted: failures === null ? open.isCounted : true,
+  }
+  const outcome = hits > 0 ? 'hit' : hp > open.hp ? 'grew' : 'stands'
+  const encounter = encounterOf(battle, hits, outcome)
+
+  return {
+    state: playBattle(
+      state,
+      encounter,
+      state.battles.map(each => (each === open ? battle : each)),
+    ),
+    effects: [
+      { type: 'ENCOUNTER_UPDATED', encounter },
+      ...(hits > 0 ? [{ type: 'MONSTER_HIT', check, hits, hp } as const] : []),
+    ],
+  }
+}
+
+// All green wins: the monster takes its last hits and falls, and the Player
+// earns Strength XP for it, by the monster's largest HP. A check passing with
+// no Battle against it plays nothing.
+const checkPassed = (
+  state: GameState,
+  check: string,
+): { state: GameState; effects: Effect[] } => {
+  const open = state.battles.find(battle => battle.check === check)
+  if (open === undefined) {
+    return { state, effects: [] }
+  }
+
+  const encounter = encounterOf({ ...open, hp: 0 }, open.hp, 'won')
+  const amount = BATTLE_XP_PER_HP * open.maxHp
+  const gained = gainXp(state.player, amount)
+  const player = {
+    ...gained.player,
+    stats: { ...gained.player.stats, strength: gained.player.stats.strength + amount },
+  }
+
+  return {
+    state: {
+      ...playBattle(
+        state,
+        encounter,
+        state.battles.filter(battle => battle !== open),
+      ),
+      player,
+    },
+    effects: [
+      { type: 'ENCOUNTER_UPDATED', encounter },
+      { type: 'MONSTER_HIT', check, hits: open.hp, hp: 0 },
+      { type: 'BATTLE_WON', check, foe: open.foe },
+      { type: 'XP_GAINED', amount, stat: 'strength' },
+      ...gained.effects,
+    ],
   }
 }

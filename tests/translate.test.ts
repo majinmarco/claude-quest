@@ -3,6 +3,8 @@ import type { SessionUsage } from 'claude-code'
 
 import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
+import * as bash from './fixtures/bash-calls'
+import { CLAUDE_PLUGIN_TEST_FAILING, vitestFailing3 } from './fixtures/bash-calls'
 
 /** The project's root, as `$.session.root()` answers in the recorded session. */
 const ROOT = '/work/claude-quest'
@@ -199,5 +201,203 @@ describe('Event translator: command.run', () => {
 
   test('another command with a ticket reference is no game event', () => {
     expect(translateCommand(implement('#4', 'mattpocock-skills:triage'))).toBeNull()
+  })
+})
+
+describe('Event translator: a Bash check', () => {
+  test('a failing vitest run becomes a TEST_FAIL of its failures', () => {
+    expect(translateToolCall(vitestFailing3.input, vitestFailing3.result, ROOT)).toEqual({
+      type: 'TEST_FAIL',
+      check: 'vitest run',
+      kind: 'test',
+      failures: 3,
+    })
+  })
+})
+
+describe('Event translator: real runner output', () => {
+  const RUNS = [
+    ['vitestFailing3', { type: 'TEST_FAIL', check: 'vitest run', kind: 'test', failures: 3 }],
+    ['vitestFailing1', { type: 'TEST_FAIL', check: 'vitest run', kind: 'test', failures: 1 }],
+    ['vitestPassing', { type: 'TEST_PASS', check: 'vitest run', kind: 'test' }],
+    ['npmTestFailing', { type: 'TEST_FAIL', check: 'npm test', kind: 'test', failures: 3 }],
+    ['vitestNoTestFiles', { type: 'TEST_FAIL', check: 'vitest run nothing', kind: 'test', failures: null }],
+    ['jestFailing', { type: 'TEST_FAIL', check: 'jest', kind: 'test', failures: 3 }],
+    ['jestPassing', { type: 'TEST_PASS', check: 'jest', kind: 'test' }],
+    ['jestSuiteBroken', { type: 'TEST_FAIL', check: 'jest', kind: 'test', failures: null }],
+    ['pytestFailing', { type: 'TEST_FAIL', check: 'pytest', kind: 'test', failures: 3 }],
+    ['pytestPassing', { type: 'TEST_PASS', check: 'pytest -q', kind: 'test' }],
+    ['pytestCollectionError', { type: 'TEST_FAIL', check: 'pytest', kind: 'test', failures: 1 }],
+    ['tscFailing3', { type: 'TEST_FAIL', check: 'tsc --noEmit bad3.ts', kind: 'typecheck', failures: 3 }],
+    ['tscFailing1', { type: 'TEST_FAIL', check: 'tsc --noEmit bad1.ts', kind: 'typecheck', failures: 1 }],
+    ['tscPassing', { type: 'TEST_PASS', check: 'tsc --noEmit good.ts', kind: 'typecheck' }],
+    ['eslintFailing', { type: 'TEST_FAIL', check: 'eslint bad.js', kind: 'lint', failures: 3 }],
+    ['eslintPassing', { type: 'TEST_PASS', check: 'eslint good.js', kind: 'lint' }],
+    ['eslintCrashed', { type: 'TEST_FAIL', check: 'eslint --config missing.mjs bad.js', kind: 'lint', failures: null }],
+    ['biomeFailing', { type: 'TEST_FAIL', check: 'biome lint bad.js', kind: 'lint', failures: 3 }],
+    ['biomePassing', { type: 'TEST_PASS', check: 'biome lint good.js', kind: 'lint' }],
+    ['ruffFailing', { type: 'TEST_FAIL', check: 'ruff check bad.py', kind: 'lint', failures: 5 }],
+    ['ruffPassing', { type: 'TEST_PASS', check: 'ruff check good.py', kind: 'lint' }],
+  ] as const
+
+  for (const [name, event] of RUNS) {
+    test(`${name}: ${bash[name].input.command.replace(/^cd \S+ && /, '')}`, () => {
+      const { input, result } = bash[name]
+
+      expect(translateToolCall(input, result, ROOT)).toEqual(event)
+    })
+  }
+})
+
+describe('Event translator: which Bash commands are checks', () => {
+  /** A Bash call of `command` that exited `code`, its output `output`. */
+  const ran = (command: string, output: string, code = 1) => [
+    { tool: 'Bash', tool_use_id: 'toolu_x', command },
+    code === 0
+      ? { result: { stdout: output, stderr: '', interrupted: false } }
+      : { result: `Error: Exit code ${code}\n${output}`, text: `Exit code ${code}\n${output}`, isError: true as const },
+  ] as const
+
+  const VITEST_3 = ' Test Files  1 failed (1)\n      Tests  3 failed | 2 passed (5)\n'
+
+  const CHECKS = [
+    ['npx vitest run', 'vitest run', 'test'],
+    ['vitest', 'vitest', 'test'],
+    ['./node_modules/.bin/vitest run', 'vitest run', 'test'],
+    ['pnpm test', 'pnpm test', 'test'],
+    ['npm run test', 'npm test', 'test'],
+    ['npm t', 'npm test', 'test'],
+    ['yarn test --watch=false', 'yarn test --watch=false', 'test'],
+    ['pnpm exec jest src', 'jest src', 'test'],
+    ['uv run pytest -x', 'pytest -x', 'test'],
+    ['python -m pytest tests', 'pytest tests', 'test'],
+    ['bun test', 'bun test', 'test'],
+    ['npx tsc -p .', 'tsc -p .', 'typecheck'],
+    ['npm run typecheck', 'npm run typecheck', 'typecheck'],
+    ['npx eslint src', 'eslint src', 'lint'],
+    ['npx biome check .', 'biome check .', 'lint'],
+    ['ruff check .', 'ruff check .', 'lint'],
+    ['ruff', 'ruff', 'lint'],
+    ['npm run lint', 'npm run lint', 'lint'],
+    ['cd app && CI=1 npx vitest run 2>&1', 'vitest run', 'test'],
+    ['npm run test:unit', 'npm run test:unit', 'test'],
+    ['(cd app; npx --yes vitest run > out.txt)', 'vitest run', 'test'],
+  ] as const
+
+  for (const [command, check, kind] of CHECKS) {
+    test(`${command} is the ${kind} check ${check}`, () => {
+      const [input, outcome] = ran(command, 'boom')
+
+      expect(translateToolCall(input, outcome, ROOT)).toEqual({
+        type: 'TEST_FAIL',
+        check,
+        kind,
+        failures: null,
+      })
+    })
+  }
+
+  const NOT_CHECKS = [
+    'ls',
+    'grep -r vitest src',
+    'cat jest.config.js',
+    'npm install vitest',
+    'npm run build',
+    'echo tsc',
+    'git commit -m "fix eslint errors"',
+    'ruff format .',
+    'biome format .',
+    'bun install',
+  ]
+
+  for (const command of NOT_CHECKS) {
+    test(`${command} is no check`, () => {
+      const [input, outcome] = ran(command, 'boom')
+
+      expect(translateToolCall(input, outcome, ROOT)).toBeNull()
+    })
+  }
+
+  test('a failing run piped into tail exits 0, and its counts still fail it', () => {
+    const [input, outcome] = ran('npx vitest run | tail -5', VITEST_3, 0)
+
+    expect(translateToolCall(input, outcome, ROOT)).toEqual({
+      type: 'TEST_FAIL',
+      check: 'vitest run',
+      kind: 'test',
+      failures: 3,
+    })
+  })
+
+  test('a check piped through a filter that drops its counts is no event: the exit is the filter\'s', () => {
+    const [input, outcome] = ran('npx vitest run 2>&1 | grep FAIL', ' FAIL  math.test.ts > add\n', 0)
+
+    expect(translateToolCall(input, outcome, ROOT)).toBeNull()
+  })
+
+  for (const command of ['npx vitest run || true', 'npx vitest run; echo done']) {
+    test(`${command}: another command's exit, no counts: no event`, () => {
+      const [input, outcome] = ran(command, 'done\n', 0)
+
+      expect(translateToolCall(input, outcome, ROOT)).toBeNull()
+    })
+  }
+
+  test('a check piped with its counts kept is read by them, whatever the exit', () => {
+    const [input, outcome] = ran('npx vitest run | head -40', VITEST_3, 0)
+
+    expect(translateToolCall(input, outcome, ROOT)).toMatchObject({ type: 'TEST_FAIL', failures: 3 })
+  })
+
+  test('a check passing with nothing to read passes', () => {
+    const [input, outcome] = ran('npm test', '', 0)
+
+    expect(translateToolCall(input, outcome, ROOT)).toEqual({
+      type: 'TEST_PASS',
+      check: 'npm test',
+      kind: 'test',
+    })
+  })
+
+  test('colour codes do not hide the counts', () => {
+    const coloured = '\u001b[2m      Tests \u001b[22m \u001b[1m\u001b[31m2 failed\u001b[39m\u001b[22m\u001b[2m | \u001b[22m\u001b[1m\u001b[32m3 passed\u001b[39m\u001b[22m\u001b[90m (5)\u001b[39m\n'
+    const [input, outcome] = ran('npx vitest run', coloured)
+
+    expect(translateToolCall(input, outcome, ROOT)).toMatchObject({ failures: 2 })
+  })
+
+  test('npm test reads the summary of the runner it ran: here, claude plugin test', () => {
+    const [input, outcome] = ran('npm test', CLAUDE_PLUGIN_TEST_FAILING)
+
+    expect(translateToolCall(input, outcome, ROOT)).toMatchObject({ check: 'npm test', failures: 1 })
+  })
+
+  test('an interrupted check never finished: no event', () => {
+    const input = { tool: 'Bash', tool_use_id: 'toolu_x', command: 'npx vitest run' }
+    const outcome = { result: { stdout: '', stderr: '', interrupted: true } }
+
+    expect(translateToolCall(input, outcome, ROOT)).toBeNull()
+  })
+
+  test('a check sent to the background has not finished: no event', () => {
+    const input = { tool: 'Bash', tool_use_id: 'toolu_x', command: 'npx vitest run' }
+    const outcome = {
+      result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' },
+    }
+
+    expect(translateToolCall(input, outcome, ROOT)).toBeNull()
+  })
+
+  test('an error with no exit code (it could not run) is no event', () => {
+    const input = { tool: 'Bash', tool_use_id: 'toolu_x', command: 'npx vitest run' }
+    const outcome = { result: 'Error: sandbox refused', text: 'sandbox refused', isError: true as const }
+
+    expect(translateToolCall(input, outcome, ROOT)).toBeNull()
+  })
+
+  test('a check a hook denied is no event', () => {
+    const input = { tool: 'Bash', tool_use_id: 'toolu_x', command: 'npx vitest run' }
+
+    expect(translateToolCall(input, { deny: 'no tests now' }, ROOT)).toBeNull()
   })
 })

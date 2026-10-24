@@ -2,7 +2,7 @@
 // the bundled 16-bit sprites (src/sprites.ts). The animation is SMIL, so the
 // surface plays it with no script and no redraw from the mod.
 
-import type { Encounter } from '../types'
+import type { BattleEncounter, CheckKind, Encounter } from '../types'
 import { SPRITE_SIZE, SPRITES } from './sprites'
 import type { Sprite, SpriteName } from './sprites'
 
@@ -158,6 +158,88 @@ const BESIDE_CHEST = 5 * SPRITE_SIZE
 const REACHES_CHEST = 0.7
 
 /**
+ * The monster each kind of Check's failures make: what it is called, and its
+ * sprite. A failing test is a bug.
+ */
+export const MONSTERS: Record<CheckKind, { name: string; sprite: SpriteName }> = {
+  test: { name: 'bug', sprite: 'spider' },
+  lint: { name: 'slime', sprite: 'slime' },
+  typecheck: { name: 'ghost', sprite: 'ghost' },
+}
+
+/** Where the Battle's two stand, in pixels from the left. */
+const HERO_X = 2 * SPRITE_SIZE
+const MONSTER_X = 5 * SPRITE_SIZE
+
+/** A Battle's beat, in seconds: the strike, then the rest of the cycle. */
+const BEAT = 2
+const STRIKES_AT = 0.2
+
+/** One animation over the Battle's beat: `values` at `keyTimes`, held between. */
+const beat = (attribute: string, values: string, keyTimes: string): string =>
+  `<animate attributeName="${attribute}" values="${values}" keyTimes="${keyTimes}" calcMode="discrete" dur="${BEAT}s" repeatCount="indefinite"/>`
+
+/**
+ * The monster's HP bar over its head: dark where HP is lost, red where it
+ * remains. A hit drains it from what the monster had to what it has.
+ */
+const hpBar = (battle: BattleEncounter): string => {
+  const x = MONSTER_X + 1
+  const y = PATH_Y - 4
+  const full = SPRITE_SIZE - 2
+  const share = (hp: number) => Math.round((full * hp) / Math.max(1, battle.maxHp))
+  const now = share(battle.hp)
+  const before = share(battle.hp + battle.hits)
+  const fill =
+    before === now
+      ? `<rect x="${x}" y="${y}" width="${now}" height="2" fill="#e43b44"/>`
+      : `<rect x="${x}" y="${y}" width="${before}" height="2" fill="#e43b44">${beat('width', `${before};${now}`, `0;${STRIKES_AT}`)}</rect>`
+
+  return (
+    `<rect x="${x - 1}" y="${y - 1}" width="${full + 2}" height="4" fill="#181425"/>` +
+    `<rect x="${x}" y="${y}" width="${full}" height="2" fill="#3a4466"/>` +
+    fill
+  )
+}
+
+/**
+ * A Battle: the hero faces the check's monster, its HP over its head. A hit
+ * is the hero's lunge, the monster's flash and its HP draining; a win, the
+ * monster falling under sparkles; otherwise the two square off.
+ */
+const battle = (encounter: BattleEncounter): string => {
+  const monster = drawSprite(MONSTERS[encounter.foe].sprite, MONSTER_X, PATH_Y)
+  const bob = (period: number) =>
+    `<animateTransform attributeName="transform" type="translate" values="0 0;0 -1" calcMode="discrete" dur="${period}s" repeatCount="indefinite"/>`
+  const strikes = encounter.hits > 0
+  const lunge = strikes
+    ? `<animateTransform attributeName="transform" type="translate" values="${HERO_X} ${PATH_Y};${MONSTER_X - 10} ${PATH_Y};${HERO_X} ${PATH_Y}" keyTimes="0;${STRIKES_AT};${STRIKES_AT * 2}" dur="${BEAT}s" repeatCount="indefinite"/>`
+    : ''
+  const theHero =
+    `<g transform="translate(${HERO_X} ${PATH_Y})">${lunge}` +
+    `<g>${drawSprite('hero')}${bob(0.5)}</g></g>`
+
+  if (encounter.outcome === 'won') {
+    const sparkles = SPARKLES.map(
+      ({ x: left, y: top, begin }) =>
+        `<rect x="${left - 20}" y="${top + 2}" width="1" height="1" fill="#fee761">` +
+        `<animate attributeName="opacity" values="0;1;0" calcMode="discrete" dur="0.9s" begin="${begin}s" repeatCount="indefinite"/></rect>`,
+    ).join('')
+
+    return (
+      `<g>${monster}${beat('opacity', '1;0.5;0', `0;${STRIKES_AT};${STRIKES_AT * 2}`)}</g>` +
+      hpBar(encounter) +
+      sparkles +
+      theHero
+    )
+  }
+
+  const flash = strikes ? beat('opacity', '1;0.2;1', `0;${STRIKES_AT};${STRIKES_AT * 1.5}`) : ''
+
+  return `<g><g>${monster}${bob(0.7)}</g>${flash}</g>` + hpBar(encounter) + theHero
+}
+
+/**
  * The Scene for the current Encounter, as an SVG document `width` CSS pixels
  * wide. No Encounter yet: the hero waits at the corridor's start.
  */
@@ -166,9 +248,11 @@ export const sceneSvg = (encounter: Encounter | null, width: number): string => 
   const actors =
     encounter === null
       ? hero(SPRITE_SIZE, SPRITE_SIZE)
-      : encounter.isFirstVisit
-        ? discovery(REACHES_CHEST) + hero(0, BESIDE_CHEST, REACHES_CHEST)
-        : hero(0, WIDTH - SPRITE_SIZE)
+      : encounter.kind === 'Battle'
+        ? battle(encounter)
+        : encounter.isFirstVisit
+          ? discovery(REACHES_CHEST) + hero(0, BESIDE_CHEST, REACHES_CHEST)
+          : hero(0, WIDTH - SPRITE_SIZE)
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${width}" height="${height}" shape-rendering="crispEdges">` +

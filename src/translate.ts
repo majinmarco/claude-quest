@@ -1,6 +1,7 @@
 // The event translator: turns what the mod sees of a session into game
 // events for the Game Engine, or null when nothing in the game happened.
 
+import { failuresOf, readCheck } from './checks'
 import type { GameEvent } from './engine'
 
 /** The part of a `tool.call` input the translator reads. */
@@ -8,10 +9,16 @@ export type ToolCallSeen = {
   tool: string
   file_path?: unknown
   path?: unknown
+  command?: unknown
 }
 
 /** The part of what `next(e)` resolved to that the translator reads. */
-export type ToolCallOutcome = { result?: unknown; deny?: string; isError?: true }
+export type ToolCallOutcome = {
+  result?: unknown
+  deny?: string
+  isError?: true
+  text?: string
+}
 
 const SEARCHES = new Set(['Grep', 'Glob'])
 
@@ -69,7 +76,15 @@ export const translateToolCall = (
   /** The project's root, absolute; null when it cannot be read. */
   root: string | null,
 ): GameEvent | null => {
-  if (outcome.deny !== undefined || outcome.isError === true) {
+  if (outcome.deny !== undefined) {
+    return null
+  }
+
+  if (input.tool === 'Bash' && typeof input.command === 'string') {
+    return translateCheck(input.command, outcome)
+  }
+
+  if (outcome.isError === true) {
     return null
   }
 
@@ -87,6 +102,54 @@ export const translateToolCall = (
   }
 
   return null
+}
+
+/** A Bash call's output and exit code, or null when it did not run to an exit. */
+const finished = (outcome: ToolCallOutcome): { output: string; exitCode: number } | null => {
+  // Claude Code 2.1.308 hands a non-zero exit over as an error whose text is
+  // `Exit code N`, then stdout and stderr; an error without one (the call was
+  // interrupted, or could not run) has no exit to read.
+  if (outcome.isError === true) {
+    const exited = /^Exit code (\d+)\n?/.exec(outcome.text ?? '')
+
+    return exited === null
+      ? null
+      : { output: (outcome.text ?? '').slice(exited[0].length), exitCode: Number(exited[1]) }
+  }
+
+  // An exit of 0 hands over the tool's record, which names no exit code. A
+  // command sent to the background, or interrupted, has not finished.
+  const record = outcome.result
+  if (typeof record !== 'object' || record === null) {
+    return null
+  }
+  const { stdout, stderr, interrupted, backgroundTaskId } = record as Record<string, unknown>
+  if (interrupted === true || backgroundTaskId !== undefined || typeof stdout !== 'string') {
+    return null
+  }
+
+  return { output: `${stdout}\n${typeof stderr === 'string' ? stderr : ''}`, exitCode: 0 }
+}
+
+/**
+ * A Bash call that ran a check (a test run, a lint, a type-check) becomes a
+ * TEST_FAIL of the failures it counts, or a TEST_PASS; any other, no event.
+ */
+const translateCheck = (command: string, outcome: ToolCallOutcome): GameEvent | null => {
+  const check = readCheck(command)
+  const run = check === null ? null : finished(outcome)
+  if (check === null || run === null) {
+    return null
+  }
+
+  const failures = failuresOf(check, run.output, run.exitCode)
+  if (failures === undefined) {
+    return null
+  }
+
+  return failures === 0
+    ? { type: 'TEST_PASS', check: check.command, kind: check.kind }
+    : { type: 'TEST_FAIL', check: check.command, kind: check.kind, failures }
 }
 
 /** The part of a `session.measure` input, or of `$.session.usage()`, it reads. */

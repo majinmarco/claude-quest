@@ -52,6 +52,14 @@ _Avoid_: Ticket list, backlog view
 A game moment produced by real session activity during a Quest (Exploration, Battle, Crafting, Puzzle, Trap, Rest).
 _Avoid_: Event (that's the raw session activity), scene
 
+**Battle**:
+The Encounter a failing Check plays: a monster (a bug for tests, a slime for lint, a ghost for type errors) whose HP is the failures the Check counts, or one HP when its output counts none readable. The next run of the same Check failing fewer lands a hit per failure gone; the Check passing wins, for Strength XP.
+_Avoid_: Fight, test encounter
+
+**Check**:
+A test run, lint or type-check, read from a Bash command by its runner (vitest, jest, pytest, bun test, tsc, eslint, biome, ruff, or a package's test, lint or typecheck script) and kept as the command to rerun it, launchers and environment left out (`vitest run`, `npm test`). A Battle is against one Check.
+_Avoid_: Test suite, job (outside the event translator)
+
 **Scene**:
 The pane that plays the current Encounter: animated pixel art where the surface draws it, one line of text in the terminal.
 _Avoid_: Encounter view, animation pane

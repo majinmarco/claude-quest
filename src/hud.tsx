@@ -6,6 +6,7 @@ import type { EngineInterface, RenderInput } from 'claude-code'
 
 import { manaLevel, xpToClear } from './engine'
 import type { Encounter, GameState, ManaLevel } from './engine'
+import { MONSTERS } from './scene-art'
 
 const BAR_CELLS = 10
 
@@ -22,6 +23,12 @@ const MANA_COLOR: Record<ManaLevel, string> = {
 }
 
 const describeEncounter = (encounter: Encounter): string => {
+  if (encounter.kind === 'Battle') {
+    return encounter.outcome === 'won'
+      ? 'Battle won'
+      : `Battle: ${MONSTERS[encounter.foe].name} ${encounter.hp}/${encounter.maxHp} HP`
+  }
+
   const name = encounter.target.split(/[\\/]/).filter(Boolean).pop() ?? '.'
 
   return `Exploring ${name}`

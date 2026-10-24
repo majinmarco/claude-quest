@@ -336,3 +336,137 @@ describe('Game Engine: Quest rewards', () => {
     expect(questXp('Unrated')).toBe(50)
   })
 })
+
+describe('Game Engine: Battle', () => {
+  const fail = (failures: number | null, check = 'vitest run') =>
+    ({ type: 'TEST_FAIL', check, kind: 'test', failures }) as const
+  const pass = (check = 'vitest run') => ({ type: 'TEST_PASS', check, kind: 'test' }) as const
+
+  /** Steps a new game through `events`, answering the last step. */
+  const play = (...events: Parameters<typeof step>[1][]) => {
+    let state = newGame()
+    let effects: ReturnType<typeof step>['effects'] = []
+    for (const event of events) {
+      ;({ state, effects } = step(state, event))
+    }
+
+    return { state, effects }
+  }
+
+  test('a failing check spawns a monster whose HP is its failures', () => {
+    const { state, effects } = play(fail(3))
+
+    const encounter = {
+      kind: 'Battle',
+      check: 'vitest run',
+      foe: 'test',
+      hp: 3,
+      maxHp: 3,
+      hits: 0,
+      outcome: 'spawned',
+      isCounted: true,
+    }
+    expect(state.encounter).toEqual(encounter)
+    expect(effects).toEqual([{ type: 'ENCOUNTER_STARTED', encounter }])
+  })
+
+  test('a failure with no readable counts spawns a one-HP monster', () => {
+    const { state } = play(fail(null))
+
+    expect(state.encounter).toMatchObject({ hp: 1, maxHp: 1, isCounted: false })
+  })
+
+  test('the next run of the same check failing fewer lands a hit per newly passing test', () => {
+    const { state, effects } = play(fail(3), fail(1))
+
+    expect(state.encounter).toMatchObject({ hp: 1, maxHp: 3, hits: 2, outcome: 'hit' })
+    expect(effects).toContainEqual({ type: 'MONSTER_HIT', check: 'vitest run', hits: 2, hp: 1 })
+    expect(effects[0]).toMatchObject({ type: 'ENCOUNTER_UPDATED' })
+  })
+
+  test('the same failures again: the monster stands, unhurt', () => {
+    const { state, effects } = play(fail(3), fail(3))
+
+    expect(state.encounter).toMatchObject({ hp: 3, hits: 0, outcome: 'stands' })
+    expect(effects.some(effect => effect.type === 'MONSTER_HIT')).toBe(false)
+  })
+
+  test('more failures than before: the monster grows', () => {
+    const { state } = play(fail(2), fail(5))
+
+    expect(state.encounter).toMatchObject({ hp: 5, maxHp: 5, hits: 0, outcome: 'grew' })
+  })
+
+  test('a failure with no counts mid-Battle leaves the monster as it was', () => {
+    const { state } = play(fail(3), fail(null))
+
+    expect(state.encounter).toMatchObject({ hp: 3, hits: 0, outcome: 'stands' })
+  })
+
+  test('all green wins: the last hits land and Strength XP is earned, 10 per HP', () => {
+    const { state, effects } = play(fail(3), fail(1), pass())
+
+    expect(state.encounter).toMatchObject({ hp: 0, maxHp: 3, hits: 1, outcome: 'won' })
+    expect(effects).toEqual([
+      { type: 'ENCOUNTER_UPDATED', encounter: state.encounter },
+      { type: 'MONSTER_HIT', check: 'vitest run', hits: 1, hp: 0 },
+      { type: 'BATTLE_WON', check: 'vitest run', foe: 'test' },
+      { type: 'XP_GAINED', amount: 30, stat: 'strength' },
+    ])
+    expect(state.player.xp).toBe(30)
+    expect(state.player.stats.strength).toBe(30)
+  })
+
+  test('a one-HP monster won earns 10 Strength XP', () => {
+    const { state } = play(fail(null), pass())
+
+    expect(state.player.xp).toBe(10)
+    expect(state.player.stats.strength).toBe(10)
+  })
+
+  test('a won Battle is over: the check failing again spawns a new monster', () => {
+    const { state } = play(fail(3), pass(), fail(2))
+
+    expect(state.encounter).toMatchObject({ hp: 2, maxHp: 2, outcome: 'spawned' })
+  })
+
+  test('a check passing with no Battle against it is no Encounter', () => {
+    const before = newGame()
+    const { state, effects } = step(before, pass())
+
+    expect(state).toEqual(before)
+    expect(effects).toEqual([])
+  })
+
+  test('another Check has its own Battle; the first waits for its own run', () => {
+    const { state } = play(fail(3), fail(2, 'tsc -p .'), fail(1))
+
+    expect(state.encounter).toMatchObject({ check: 'vitest run', hp: 1, hits: 2 })
+    expect(play(fail(3), fail(2, 'tsc -p .'), pass('tsc -p .')).state.encounter).toMatchObject({
+      check: 'tsc -p .',
+      outcome: 'won',
+      hits: 2,
+    })
+  })
+
+  test('a lint or type-check monster is that kind of foe', () => {
+    const { state } = play({ type: 'TEST_FAIL', check: 'eslint src', kind: 'lint', failures: 4 })
+
+    expect(state.encounter).toMatchObject({ foe: 'lint', hp: 4 })
+  })
+
+  test('a Battle during a Quest is attached to it', () => {
+    const { state } = play({ type: 'QUEST_START', ticket: '#8' }, fail(2), pass())
+
+    expect(state.quest?.encounters.map(encounter => encounter.kind === 'Battle' && encounter.outcome)).toEqual([
+      'spawned',
+      'won',
+    ])
+  })
+
+  test('winning can level the Player up', () => {
+    const { effects } = play(fail(10), pass())
+
+    expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
+  })
+})

@@ -25,12 +25,49 @@ export type Player = {
  * (see `GameState.visitedModules`), null outside the project, `isFirstVisit`
  * whether the Player had never been in that Module before.
  */
-export type Encounter = {
-  kind: 'Exploration'
-  target: string
-  module: string | null
-  isFirstVisit: boolean
+export type Encounter =
+  | {
+      kind: 'Exploration'
+      target: string
+      module: string | null
+      isFirstVisit: boolean
+    }
+  | BattleEncounter
+
+/**
+ * A Battle against a failing check, as one run of it played: the monster's HP
+ * after the run, the hits it landed and what came of it.
+ */
+export type BattleEncounter = {
+  kind: 'Battle'
+  /** The Check the Battle is against, as rerun: `vitest run`, `npm test`, `tsc -p .`. */
+  check: string
+  /** The kind of monster: what the check found failing. */
+  foe: CheckKind
+  hp: number
+  maxHp: number
+  /** The hits this run landed: the tests (or errors) newly passing. */
+  hits: number
+  /**
+   * `spawned`: the check failed with no Battle against it; `hit`: it failed
+   * fewer; `stands`: as many, or uncounted; `grew`: more; `won`: it passed.
+   */
+  outcome: 'spawned' | 'hit' | 'stands' | 'grew' | 'won'
+  /** False when the failing run counted nothing readable: a one-HP monster. */
+  isCounted: boolean
 }
+
+/** A Battle under way: a monster standing against one check. */
+export type Battle = {
+  check: string
+  foe: CheckKind
+  hp: number
+  maxHp: number
+  isCounted: boolean
+}
+
+/** What a check finds: failing tests, lint errors or type errors. */
+export type CheckKind = 'test' | 'lint' | 'typecheck'
 
 /** The session's vitals, as the engine last measured them; null until then. */
 export type Vitals = {
@@ -64,6 +101,11 @@ export type GameState = {
    * session start.
    */
   visitedModules: string[]
+  /**
+   * The Battles under way, one per failing check, oldest first. A Battle ends
+   * when its check passes.
+   */
+  battles: Battle[]
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */
