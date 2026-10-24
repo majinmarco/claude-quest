@@ -54,6 +54,11 @@ export type GameEvent =
   | { type: 'QUESTION_ANSWERED'; id: string; choice: number; at: number }
   /** The Player moved on from their last answer's explanation. */
   | { type: 'ANSWER_DISMISSED' }
+  /**
+   * Haiku is about to be called for `purpose`: granted while its budget lasts
+   * (and counted), refused once spent. Ask before each call, never after.
+   */
+  | { type: 'HAIKU_CALL_REQUESTED'; purpose: HaikuPurpose }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
@@ -81,6 +86,50 @@ export type Effect =
   | { type: 'COMPACTION_WARNING'; mana: number }
   | { type: 'QUEST_STARTED'; ticket: string }
   | { type: 'QUEST_ABANDONED'; ticket: string }
+  /** A Haiku call for `purpose` may go ahead: the `used`th of `limit`. */
+  | { type: 'HAIKU_CALL_GRANTED'; purpose: HaikuPurpose; used: number; limit: number }
+  /** The budget for `purpose` is spent (`used` of `limit`): no call is made. */
+  | { type: 'HAIKU_CALL_REFUSED'; purpose: HaikuPurpose; used: number; limit: number }
+
+/**
+ * What a Haiku call is for: the Sage's Question after a code-changing
+ * Encounter, or the Boss Fight's review Questions at a Quest's end. Each has
+ * a budget of its own per Quest.
+ */
+export type HaikuPurpose = 'sage' | 'boss'
+
+/**
+ * The game's rules the Player can tune (the mod's settings): the Haiku
+ * budget, and when a right answer is too hasty for full XP.
+ */
+export type Rules = {
+  /** Haiku calls the Sage may make per Quest. */
+  sageCallsPerQuest: number
+  /** Haiku calls the Boss Fight may make per Quest. */
+  bossFightCallsPerQuest: number
+  /**
+   * Haiku calls the Sage may make outside any Quest, for the whole session:
+   * a small allowance, so work done between Quests is still asked about.
+   */
+  sageCallsOutsideQuest: number
+  /** A right answer quicker than this, from when it was shown, is hasty: ms. */
+  hastyAnswerMs: number
+  /** A Question pointing at this many source lines or more is non-trivial. */
+  nonTrivialLines: number
+}
+
+/**
+ * The defaults: ten Sage calls and three Boss Fight calls per Quest, as the
+ * spec bounds Haiku; five Sage calls between Quests; a right answer within
+ * five seconds to a Question of three lines or more is hasty.
+ */
+export const DEFAULT_RULES: Rules = {
+  sageCallsPerQuest: 10,
+  bossFightCallsPerQuest: 3,
+  sageCallsOutsideQuest: 5,
+  hastyAnswerMs: 5000,
+  nonTrivialLines: 3,
+}
 
 const EXPLORATION_XP = 5
 
@@ -119,6 +168,14 @@ export const CRAFTING_XP = 10
  * volume: a wrong answer earns nothing and costs HP.
  */
 export const QUESTION_XP = 20
+
+/**
+ * The XP a hasty right answer earns: a quarter of QUESTION_XP. A right answer
+ * is hasty when it came quicker than the Player could have read a non-trivial
+ * Question (Rules.hastyAnswerMs, Rules.nonTrivialLines), so guessing fast pays
+ * little; it still pays something, as a quick reader may well be right.
+ */
+export const HASTY_ANSWER_XP = QUESTION_XP / 4
 
 /**
  * The HP a wrong answer costs: a tenth of a new Player's 100, so guessing
@@ -223,11 +280,13 @@ export const newGame = (player: Player = newPlayer()): GameState => ({
   questions: [],
   questionsAsked: 0,
   lastAnswer: null,
+  sageCallsOutsideQuest: 0,
 })
 
 export const step = (
   state: GameState,
   event: GameEvent,
+  rules: Rules = DEFAULT_RULES,
 ): { state: GameState; effects: Effect[] } => {
   switch (event.type) {
     case 'FILE_READ':
@@ -247,9 +306,61 @@ export const step = (
     case 'QUESTION_SHOWN':
       return showQuestion(state, event.id, event.at)
     case 'QUESTION_ANSWERED':
-      return answerQuestion(state, event)
+      return answerQuestion(state, event, rules)
     case 'ANSWER_DISMISSED':
       return { state: { ...state, lastAnswer: null }, effects: [] }
+    case 'HAIKU_CALL_REQUESTED':
+      return requestHaikuCall(state, event.purpose, rules)
+  }
+}
+
+/** A purpose's Haiku calls so far, and its limit. */
+type Budget = { used: number; limit: number }
+
+/** The active Quest's budget: the Sage's and the Boss Fight's, each its own. */
+const questBudget = (quest: Quest, rules: Rules): Record<HaikuPurpose, Budget> => ({
+  sage: { used: quest.haikuCalls?.sage ?? 0, limit: rules.sageCallsPerQuest },
+  boss: { used: quest.haikuCalls?.boss ?? 0, limit: rules.bossFightCallsPerQuest },
+})
+
+/** The session's budget between Quests: the Sage's allowance; no Boss Fight. */
+const outsideQuestBudget = (state: GameState, rules: Rules): Record<HaikuPurpose, Budget> => ({
+  sage: { used: state.sageCallsOutsideQuest ?? 0, limit: rules.sageCallsOutsideQuest },
+  boss: { used: 0, limit: 0 },
+})
+
+// Haiku is bounded per Quest: the Sage's calls and the Boss Fight's are
+// counted on the active Quest, each against its own limit, so a new Quest
+// starts with its whole budget. Between Quests the Sage has a small allowance
+// for the session, counted on the game; the Boss Fight, which ends a Quest,
+// has none. A refused call is no failure: what would have used it is skipped.
+const requestHaikuCall = (
+  state: GameState,
+  purpose: HaikuPurpose,
+  rules: Rules,
+): { state: GameState; effects: Effect[] } => {
+  const { quest } = state
+  const { used, limit } =
+    quest !== null ? questBudget(quest, rules)[purpose] : outsideQuestBudget(state, rules)[purpose]
+
+  if (used >= limit) {
+    return { state, effects: [{ type: 'HAIKU_CALL_REFUSED', purpose, used, limit }] }
+  }
+
+  const spent: GameState =
+    quest !== null
+      ? {
+          ...state,
+          quest: {
+            ...quest,
+            haikuCalls: { sage: 0, boss: 0, ...quest.haikuCalls, [purpose]: used + 1 },
+          },
+        }
+      : { ...state, sageCallsOutsideQuest: used + 1 }
+
+  return {
+    state: spent,
+    effects: [{ type: 'HAIKU_CALL_GRANTED', purpose, used: used + 1, limit }],
   }
 }
 
@@ -575,13 +686,26 @@ const showQuestion = (
   effects: [],
 })
 
+/**
+ * Whether a right answer came too fast for the Question: shown, answered in
+ * under `hastyAnswerMs`, and the Question non-trivial (it points at
+ * `nonTrivialLines` source lines or more). With no answer time (answered
+ * without being shown first, as from a pane the game did not time) its speed
+ * is unknown, so it is never hasty.
+ */
+const isHasty = (question: Question, answerMs: number | null, rules: Rules): boolean =>
+  answerMs !== null &&
+  answerMs < rules.hastyAnswerMs &&
+  question.source.lines.length >= rules.nonTrivialLines
+
 // A right answer earns QUESTION_XP of Intelligence, the Stat in play for
-// understanding code, whatever the Question's tag; a wrong one costs
-// WRONG_ANSWER_HP, never below zero. Either way the Question leaves the queue
-// and its explanation shows.
+// understanding code, whatever the Question's tag, or HASTY_ANSWER_XP when it
+// came too fast; a wrong one costs WRONG_ANSWER_HP, never below zero. Either
+// way the Question leaves the queue and its explanation shows.
 const answerQuestion = (
   state: GameState,
   { id, choice, at }: Extract<GameEvent, { type: 'QUESTION_ANSWERED' }>,
+  rules: Rules,
 ): { state: GameState; effects: Effect[] } => {
   const question = state.questions.find(each => each.id === id)
   if (question === undefined || !Number.isInteger(choice) || choice < 0 || choice >= question.options.length) {
@@ -589,14 +713,17 @@ const answerQuestion = (
   }
 
   const isCorrect = choice === question.answer
-  const xp = isCorrect ? QUESTION_XP : 0
+  const answerMs = question.shownAt === null ? null : at - question.shownAt
+  const hasty = isCorrect && isHasty(question, answerMs, rules)
+  const xp = isCorrect ? (hasty ? HASTY_ANSWER_XP : QUESTION_XP) : 0
   const hpLost = isCorrect ? 0 : Math.min(WRONG_ANSWER_HP, state.player.hp)
   const answer: QuestionAnswer = {
     question,
     choice,
     isCorrect,
     answeredAt: at,
-    answerMs: question.shownAt === null ? null : at - question.shownAt,
+    answerMs,
+    isHasty: hasty,
     xp,
     hpLost,
   }

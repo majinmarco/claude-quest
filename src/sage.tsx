@@ -7,6 +7,7 @@
 import type { EngineInterface, RenderInput } from 'claude-code'
 
 import type { GameState, Question, QuestionAnswer } from '../types'
+import { QUESTION_XP } from './engine'
 import { portraitSvg } from './scene-art'
 
 export type SageActions = {
@@ -43,10 +44,15 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '
 export const NO_QUESTION =
   'The Sage has no Question for you yet. One comes after each Crafting, or a Battle won.'
 
-/** What an answer earned or cost, in one line. */
-export const verdictOf = ({ isCorrect, xp, hpLost, question }: QuestionAnswer): string =>
+/**
+ * What an answer earned or cost, in one line. A hasty right answer says what
+ * a closer read would have earned.
+ */
+export const verdictOf = ({ isCorrect, isHasty, xp, hpLost, question }: QuestionAnswer): string =>
   isCorrect
-    ? `Right! +${xp} XP (Intelligence)`
+    ? isHasty
+      ? `Right, but hasty: +${xp} XP (Intelligence). A closer read earns the full ${QUESTION_XP}.`
+      : `Right! +${xp} XP (Intelligence)`
     : `Not quite: -${hpLost} HP. The answer was ${LETTERS[question.answer]}: ${question.options[question.answer]}`
 
 /**

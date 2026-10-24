@@ -6,5 +6,42 @@
   "types": "./types/index.d.ts",
   "author": {
     "name": "majinmarco"
+  },
+  "userConfig": {
+    "sageCallsPerQuest": {
+      "type": "number",
+      "title": "Sage calls per Quest",
+      "description": "How many times per Quest the Sage may ask Haiku for a Question. Over budget, Questions are skipped.",
+      "default": 10,
+      "min": 0
+    },
+    "bossFightCallsPerQuest": {
+      "type": "number",
+      "title": "Boss Fight calls per Quest",
+      "description": "How many Haiku calls the Boss Fight may make per Quest, beside the Sage's.",
+      "default": 3,
+      "min": 0
+    },
+    "sageCallsOutsideQuest": {
+      "type": "number",
+      "title": "Sage calls outside a Quest",
+      "description": "How many times per session the Sage may ask Haiku for a Question while no Quest is active.",
+      "default": 5,
+      "min": 0
+    },
+    "hastyAnswerSeconds": {
+      "type": "number",
+      "title": "Hasty answer (seconds)",
+      "description": "A right answer quicker than this, from when the Question was shown, to a non-trivial Question is hasty: it earns a quarter of the XP.",
+      "default": 5,
+      "min": 0
+    },
+    "nonTrivialLines": {
+      "type": "number",
+      "title": "Non-trivial Question (lines)",
+      "description": "A Question pointing at this many source lines or more is non-trivial, so a hasty right answer to it earns reduced XP.",
+      "default": 3,
+      "min": 0
+    }
   }
 }

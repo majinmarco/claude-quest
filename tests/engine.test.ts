@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
+import { DEFAULT_RULES, HASTY_ANSWER_XP, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
 import type { GameState, QuestionContent } from '../types'
 
 describe('Game Engine: a new Player', () => {
@@ -813,6 +813,7 @@ describe('Game Engine: the Question Queue', () => {
       isCorrect: true,
       answeredAt: T + 72_000,
       answerMs: 12_000,
+      isHasty: false,
       xp: 20,
       hpLost: 0,
     }
@@ -856,6 +857,7 @@ describe('Game Engine: the Question Queue', () => {
           isCorrect: false,
           answeredAt: T + 4000,
           answerMs: 3000,
+          isHasty: false,
           xp: 0,
           hpLost: 10,
         },
@@ -945,5 +947,140 @@ describe('Game Engine: the Question Queue', () => {
 
     expect(state.player).toMatchObject({ level: 2, xp: 10 })
     expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
+  })
+})
+
+describe('Game Engine: the Haiku budget', () => {
+  const rules = { ...DEFAULT_RULES, sageCallsPerQuest: 2, bossFightCallsPerQuest: 1, sageCallsOutsideQuest: 1 }
+  const sage = { type: 'HAIKU_CALL_REQUESTED', purpose: 'sage' } as const
+  const boss = { type: 'HAIKU_CALL_REQUESTED', purpose: 'boss' } as const
+  const questing = step(newGame(), { type: 'QUEST_START', ticket: '#11' }).state
+
+  /** Steps `state` through `events` under `rules`, keeping every effect. */
+  const requests = (state: GameState, ...events: Parameters<typeof step>[1][]) => {
+    const effects: ReturnType<typeof step>['effects'] = []
+    for (const event of events) {
+      const stepped = step(state, event, rules)
+      state = stepped.state
+      effects.push(...stepped.effects)
+    }
+
+    return { state, effects }
+  }
+
+  test('a Quest grants the Sage its calls, then refuses the one over the limit', () => {
+    const { effects } = requests(questing, sage, sage, sage)
+
+    expect(effects).toEqual([
+      { type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 1, limit: 2 },
+      { type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 2, limit: 2 },
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'sage', used: 2, limit: 2 },
+    ])
+  })
+
+  test('the Boss Fight has an allowance of its own, beside the Sage\'s', () => {
+    const { effects } = requests(questing, sage, sage, boss, boss)
+
+    expect(effects.slice(2)).toEqual([
+      { type: 'HAIKU_CALL_GRANTED', purpose: 'boss', used: 1, limit: 1 },
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'boss', used: 1, limit: 1 },
+    ])
+  })
+
+  test('a new Quest starts with its whole budget', () => {
+    const spent = requests(questing, sage, sage).state
+
+    const { effects } = requests(spent, { type: 'QUEST_START', ticket: '#12' }, sage)
+
+    expect(effects).toContainEqual({ type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 1, limit: 2 })
+  })
+
+  test('outside a Quest the Sage has a small allowance for the session, and the Boss Fight none', () => {
+    const { effects } = requests(newGame(), sage, sage, boss)
+
+    expect(effects).toEqual([
+      { type: 'HAIKU_CALL_GRANTED', purpose: 'sage', used: 1, limit: 1 },
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'sage', used: 1, limit: 1 },
+      { type: 'HAIKU_CALL_REFUSED', purpose: 'boss', used: 0, limit: 0 },
+    ])
+  })
+
+  test('the default budget is ten Sage calls and three Boss Fight calls per Quest', () => {
+    expect(DEFAULT_RULES).toMatchObject({ sageCallsPerQuest: 10, bossFightCallsPerQuest: 3 })
+  })
+})
+
+describe('Game Engine: hasty answers', () => {
+  const T = Date.UTC(2026, 9, 23, 20, 0)
+  const lines = ['  const subtotal = sum(lines)', '  if (subtotal >= BULK_THRESHOLD) {', '    return subtotal * 0.9']
+  const content: QuestionContent = {
+    prompt: 'When does total() apply the bulk discount?',
+    options: ['At or above the threshold', 'Below it', 'Always', 'Never'],
+    answer: 0,
+    explanation: 'The new branch checks subtotal >= BULK_THRESHOLD before discounting.',
+    stat: 'intelligence',
+    source: { path: 'src/order-ledger.ts', lines },
+  }
+
+  /** A Question pointing at `source` lines, shown at T, answered right after `ms`. */
+  const answeredAfter = (ms: number | null, source = lines) => {
+    let state = step(newGame(), {
+      type: 'QUESTION_READY',
+      question: { ...content, source: { ...content.source, lines: source } },
+      at: T,
+    }).state
+    if (ms !== null) {
+      state = step(state, { type: 'QUESTION_SHOWN', id: 'sage-1', at: T }).state
+    }
+
+    return step(state, { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 0, at: T + (ms ?? 9000) })
+  }
+
+  test(`a right answer within 5 s to a Question of 3 lines earns ${HASTY_ANSWER_XP} XP, not ${QUESTION_XP}`, () => {
+    const { state, effects } = answeredAfter(4999)
+
+    expect(state.lastAnswer).toMatchObject({ isCorrect: true, isHasty: true, xp: 5 })
+    expect(state.player.stats.intelligence).toBe(5)
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 5, stat: 'intelligence' })
+  })
+
+  test('a right answer taking 5 s or more earns full XP', () => {
+    const { state } = answeredAfter(5000)
+
+    expect(state.lastAnswer).toMatchObject({ isHasty: false, xp: 20 })
+  })
+
+  test('a quick right answer to a trivial Question, under 3 lines, earns full XP', () => {
+    const { state } = answeredAfter(1000, lines.slice(0, 2))
+
+    expect(state.lastAnswer).toMatchObject({ isHasty: false, xp: 20 })
+  })
+
+  test('an answer with no answer time (never shown first) earns full XP: its speed is unknown', () => {
+    const { state } = answeredAfter(null)
+
+    expect(state.lastAnswer).toMatchObject({ answerMs: null, isHasty: false, xp: 20 })
+  })
+
+  test('the thresholds are the Player\'s rules', () => {
+    let state = step(newGame(), { type: 'QUESTION_READY', question: content, at: T }).state
+    state = step(state, { type: 'QUESTION_SHOWN', id: 'sage-1', at: T }).state
+
+    const strict = step(state, { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 0, at: T + 9000 }, {
+      ...DEFAULT_RULES,
+      hastyAnswerMs: 10_000,
+      nonTrivialLines: 1,
+    })
+
+    expect(strict.state.lastAnswer).toMatchObject({ isHasty: true, xp: 5 })
+  })
+
+  test('a quick wrong answer still costs HP, and is not hasty: haste only trims a reward', () => {
+    let state = step(newGame(), { type: 'QUESTION_READY', question: content, at: T }).state
+    state = step(state, { type: 'QUESTION_SHOWN', id: 'sage-1', at: T }).state
+
+    const { state: after } = step(state, { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 1, at: T + 1000 })
+
+    expect(after.lastAnswer).toMatchObject({ isCorrect: false, isHasty: false, xp: 0, hpLost: 10 })
   })
 })

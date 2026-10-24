@@ -137,14 +137,15 @@ describe('The Sage', () => {
 
     const outcome = await $.tool.call(recorded(writeNewFile))
 
-    // The tool call is back while Haiku is still thinking: nothing waits on it.
+    // The tool call is back before Haiku has answered: nothing waits on it.
     expect(outcome).toEqual(writeNewFile.result)
-    expect(asked).toHaveLength(1)
-    expect(asked[0]?.model).toBe('claude-haiku-5-5')
-    expect(asked[0]?.prompt).toContain('user-profile-card.tsx')
     expect((await hudQuestions($)).text).toBeUndefined()
 
     await clock.advance(HAIKU_MS)
+
+    expect(asked).toHaveLength(1)
+    expect(asked[0]?.model).toBe('claude-haiku-5-5')
+    expect(asked[0]?.prompt).toContain('user-profile-card.tsx')
 
     expect((await hudQuestions($)).text).toBe('1 Question waiting · /sage')
     expect(toasts).toContain('The Sage has a Question for you: /sage')
@@ -276,6 +277,22 @@ describe('The Sage', () => {
       'Right! +20 XP (Intelligence)\nIt trims the email, then lowercases it.',
     )
     expect(player()).toMatchObject({ stats: { intelligence: 20 } })
+  })
+
+  test('a right answer quicker than the Question can be read earns a quarter of the XP, and says why', { options: { nonTrivialLines: 1 } }, async ($, on) => {
+    const { recorded, clock, player } = engine(on)
+    await $.session.start({ ...START, surface: 'terminal' })
+    await $.tool.call(recorded(writeNewFile))
+    await clock.advance(HAIKU_MS)
+
+    await sage($)
+    await clock.advance(2000)
+    const answered = await sage($, 'A')
+
+    expect(answered.text).toBe(
+      'Right, but hasty: +5 XP (Intelligence). A closer read earns the full 20.\nIt trims the email, then lowercases it.',
+    )
+    expect(player()).toMatchObject({ stats: { intelligence: 5 } })
   })
 
   test('with nothing queued /sage says so, and a letter answers nothing', async ($, on) => {

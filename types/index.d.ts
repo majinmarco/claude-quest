@@ -107,6 +107,12 @@ export type Quest = {
   ticket: string
   /** The Encounters played during the Quest, oldest first. */
   encounters: Encounter[]
+  /**
+   * The Haiku calls made for the Quest so far, by purpose: the Sage's and the
+   * Boss Fight's, each against its own limit. Absent until the first call,
+   * and in a Quest kept by an older mod.
+   */
+  haikuCalls?: { sage: number; boss: number }
 }
 
 /** A file's change, as unified-diff hunks (`@@ -1,3 +1,3 @@` and the lines under it). */
@@ -157,7 +163,13 @@ export type QuestionAnswer = {
   answeredAt: number
   /** How long the answer took from `question.shownAt`; null when never shown first. */
   answerMs: number | null
-  /** The Intelligence XP it earned; 0 when wrong. */
+  /**
+   * A right answer quicker than the Question could be read (see the mod's
+   * hasty-answer settings): it earned reduced XP. False when wrong, or when
+   * its time is unknown.
+   */
+  isHasty: boolean
+  /** The Intelligence XP it earned; 0 when wrong, less when hasty. */
   xp: number
   /** The HP it cost; 0 when right. */
   hpLost: number
@@ -191,6 +203,11 @@ export type GameState = {
   questionsAsked: number
   /** The Player's last answer, its explanation shown until they move on; null when none. */
   lastAnswer: QuestionAnswer | null
+  /**
+   * The Haiku calls the Sage made outside any Quest this session, against
+   * its allowance between Quests.
+   */
+  sageCallsOutsideQuest: number
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */
@@ -292,6 +309,11 @@ export type QuestBoard = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'quest-mod': { game: GameState | null; board: QuestBoard }
+    'quest-mod': {
+      game: GameState | null
+      board: QuestBoard
+      /** Questions made, by their change's hash: see src/question-cache.ts. */
+      questionCache: { key: string; question: QuestionContent }[]
+    }
   }
 }

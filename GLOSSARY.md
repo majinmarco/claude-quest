@@ -83,12 +83,24 @@ A persona (Sage, Cartographer, Merchant, Rival, Scribe, Quest Giver) that speaks
 _Avoid_: Character, bot
 
 **Question**:
-A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle). A right answer earns Intelligence XP, a wrong one costs HP; both show the explanation.
+A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle). A right answer earns Intelligence XP (a quarter of it when hasty), a wrong one costs HP; both show the explanation.
 _Avoid_: Quiz, prompt
 
 **Content Generator**:
 What asks Haiku for a Question about a change and checks the reply against the contract; a reply that breaks it is skipped, never queued.
 _Avoid_: Question generator, LLM client
+
+**Hasty answer**:
+A right answer given quicker than a non-trivial Question can be read: under 5 seconds from when it was shown, to a Question pointing at 3 source lines or more (both settings). It earns a quarter of the XP. An answer with no time (the Question never shown first) is never hasty.
+_Avoid_: Fast answer, guess
+
+**Haiku budget**:
+How many Haiku calls the game may make: per Quest, 10 for the Sage and 3 for the Boss Fight, each counted apart; between Quests, 5 for the Sage per session. Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing. The limits are settings, in `/config`.
+_Avoid_: Quota, rate limit
+
+**Question cache**:
+The Questions the Sage made, kept by a hash of the change they are about (each file's path and diff), so an identical diff reuses its Question instead of calling Haiku. It holds the latest 50, for the session, surviving a reload of the mod.
+_Avoid_: Memo, store
 
 **Question Queue**:
 The Questions waiting for the Player; they never interrupt the session, the Player answers them when they choose, in the Sage's dialogue box (`/sage`). The HUD counts them.

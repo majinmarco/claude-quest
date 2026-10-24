@@ -4,7 +4,7 @@ import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 import { generateQuestion, QUESTION_MODEL } from '../src/content-generator'
 import type { Model, QuestionInput } from '../src/content-generator'
 import { newGame, step } from '../src/engine'
-import type { Effect, FileChange, GameEvent } from '../src/engine'
+import type { Effect, FileChange, GameEvent, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
 import { drawHud } from '../src/hud'
 import {
   discoveredModulesOf,
@@ -17,11 +17,14 @@ import {
 } from '../src/persistence'
 import { drawQuestBoard, noFilters } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
+import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
+import type { QuestionCache } from '../src/question-cache'
 import type { QuestSource } from '../src/quest-source'
 import { questSourceFor, questSourceSettingOf, unavailable } from '../src/quest-source-setting'
 import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
+import { rulesOf } from '../src/settings'
 import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard } from '../types'
@@ -34,6 +37,16 @@ const board = atom({ plugin: 'quest-mod', key: 'board' } as const, {
   listing: { state: 'loading' },
   filters: noFilters(),
 } satisfies QuestBoard)
+
+/**
+ * The Questions the Sage made, by the hash of their change: an identical diff
+ * reuses one instead of calling Haiku. Kept beside the game, so it survives a
+ * reload.
+ */
+const questionCache = atom(
+  { plugin: 'quest-mod', key: 'questionCache' } as const,
+  [] as QuestionCache,
+)
 
 const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 
@@ -80,13 +93,50 @@ async function activeTicket($: EngineInterface): Promise<string | null> {
 }
 
 /**
- * The Sage's one Question about a code-changing Encounter's change: Haiku
- * makes it, the Content Generator checks it, and it joins the Question Queue.
- * Started unawaited after the tool call has returned, so the session never
- * waits on it; a Question that could not be made is skipped, logged to the
- * debug log alone.
+ * Asks the Game Engine for one Haiku call for `purpose`, against the active
+ * Quest's budget (the session's allowance between Quests): true when granted,
+ * and counted; false when the budget is spent, logged to the debug log alone.
+ * The Boss Fight (#12) asks with `'boss'` before each of its calls, while its
+ * Quest is still active: outside a Quest the Boss Fight has no budget.
  */
-async function askSage($: EngineInterface, changes: FileChange[]): Promise<void> {
+async function spendHaikuCall(
+  $: EngineInterface,
+  purpose: HaikuPurpose,
+  rules: Rules,
+): Promise<boolean> {
+  // It changes no Player and plays nothing, so the game is only stepped.
+  const effects = await stepGame($, { type: 'HAIKU_CALL_REQUESTED', purpose }, rules)
+  const refused = effects.find(effect => effect.type === 'HAIKU_CALL_REFUSED')
+  if (refused?.type === 'HAIKU_CALL_REFUSED') {
+    $.ui.log(
+      `No Haiku call for the ${purpose === 'sage' ? 'Sage' : 'Boss Fight'}: its budget is spent (${refused.used} of ${refused.limit}).`,
+      { to: 'debug' },
+    )
+  }
+
+  return effects.some(effect => effect.type === 'HAIKU_CALL_GRANTED')
+}
+
+/**
+ * The Sage's one Question about a code-changing Encounter's change: from the
+ * cache when the same change was asked about before, at no cost; else, while
+ * the budget lasts, Haiku makes it and the Content Generator checks it. It
+ * joins the Question Queue. Started unawaited after the tool call has
+ * returned, so the session never waits on it; a Question that could not be
+ * made, or was over budget, is skipped, logged to the debug log alone.
+ */
+async function askSage($: EngineInterface, changes: FileChange[], rules: Rules): Promise<void> {
+  const key = await cacheKeyOf(changes)
+  const cached = cachedQuestion(await read($, questionCache), key)
+  if (cached !== undefined) {
+    await queueQuestion($, cached, rules)
+    return
+  }
+
+  if (!(await spendHaikuCall($, 'sage', rules))) {
+    return
+  }
+
   const input: QuestionInput = { changes, ticket: await activeTicket($) }
   const generated = await generateQuestion(input, haikuModel($))
 
@@ -95,44 +145,66 @@ async function askSage($: EngineInterface, changes: FileChange[]): Promise<void>
     return
   }
 
-  await play($, { type: 'QUESTION_READY', question: generated.question, at: await $.clock.now() })
-  await showIfInView($)
+  await update($, questionCache, cache => remember(cache, key, generated.question))
+  await queueQuestion($, generated.question, rules)
+}
+
+/**
+ * Queues a Question the Sage made, unless the same one is already waiting
+ * (an identical change, cached, made again before it was answered).
+ */
+async function queueQuestion(
+  $: EngineInterface,
+  question: QuestionContent,
+  rules: Rules,
+): Promise<void> {
+  const waiting = (await read($, game))?.questions ?? []
+  const isWaiting = waiting.some(
+    each => each.prompt === question.prompt && each.source.path === question.source.path,
+  )
+  if (isWaiting) {
+    $.ui.log('The Sage skipped a Question (already-waiting).', { to: 'debug' })
+    return
+  }
+
+  await play($, { type: 'QUESTION_READY', question, at: await $.clock.now() }, rules)
+  await showIfInView($, rules)
 }
 
 /**
  * Times the first Question from now when the Sage's pane is up and showing
  * it: one that arrives while the Player looks at the dialogue box.
  */
-async function showIfInView($: EngineInterface): Promise<void> {
+async function showIfInView($: EngineInterface, rules: Rules): Promise<void> {
   const panes = await $.ui.panes().catch(() => [])
   if (panes.some(pane => pane.id === SAGE.id && pane.isShown && pane.isPlaced)) {
-    await showFirstQuestion($)
+    await showFirstQuestion($, rules)
   }
 }
 
 /** Records that the Player has the Question Queue's first Question in front of them. */
-async function showFirstQuestion($: EngineInterface): Promise<void> {
+async function showFirstQuestion($: EngineInterface, rules: Rules): Promise<void> {
   const current = await read($, game)
   const first = current?.questions[0]
   if (current === null || current.lastAnswer !== null || first === undefined) {
     return
   }
 
-  await play($, { type: 'QUESTION_SHOWN', id: first.id, at: await $.clock.now() })
+  await play($, { type: 'QUESTION_SHOWN', id: first.id, at: await $.clock.now() }, rules)
 }
 
-/** Answers Question `id` with option `choice`, now. */
-async function answer($: EngineInterface, id: string, choice: number): Promise<void> {
-  await play($, { type: 'QUESTION_ANSWERED', id, choice, at: await $.clock.now() })
+/** Answers Question `id` with option `choice`, now, under the Player's rules. */
+async function answer($: EngineInterface, id: string, choice: number, rules: Rules): Promise<void> {
+  await play($, { type: 'QUESTION_ANSWERED', id, choice, at: await $.clock.now() }, rules)
 }
 
 /** What the dialogue box's buttons do. */
-const sageActions = ($: EngineInterface): SageActions => ({
+const sageActions = ($: EngineInterface, rules: Rules): SageActions => ({
   answer: (id, choice) => {
-    void answer($, id, choice)
+    void answer($, id, choice, rules)
   },
   dismiss: () => {
-    void play($, { type: 'ANSWER_DISMISSED' }).then(() => showFirstQuestion($))
+    void play($, { type: 'ANSWER_DISMISSED' }, rules).then(() => showFirstQuestion($, rules))
   },
 })
 
@@ -213,18 +285,28 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
   },
 })
 
-/** Steps the session's game by one event, keeps the Player, plays the effects. */
-async function play($: EngineInterface, event: GameEvent): Promise<void> {
+/**
+ * Steps the session's game by one event under the Player's rules (the mod's
+ * settings), in one update, and returns the effects.
+ */
+async function stepGame($: EngineInterface, event: GameEvent, rules: Rules): Promise<Effect[]> {
   // Before session.start has set the game up, start from the kept Player,
   // never a new one that would overwrite it.
   const before = (await read($, game)) ?? newGame(await loadPlayer($))
   let effects: Effect[] = []
   await update($, game, current => {
-    const stepped = step(current ?? before, event)
+    const stepped = step(current ?? before, event, rules)
     effects = stepped.effects
 
     return stepped.state
   })
+
+  return effects
+}
+
+/** Steps the session's game by one event, keeps the Player, plays the effects. */
+async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
+  const effects = await stepGame($, event, rules)
 
   const saved = await read($, game)
   if (saved !== null) {
@@ -249,7 +331,7 @@ async function play($: EngineInterface, event: GameEvent): Promise<void> {
     }
     if (effect.type === 'CODE_CHANGED') {
       // Never awaited: the tool call that changed the code returns at once.
-      void askSage($, effect.changes).catch(() => undefined)
+      void askSage($, effect.changes, rules).catch(() => undefined)
     }
     if (effect.type === 'QUESTION_QUEUED') {
       $.ui.toast('The Sage has a Question for you: /sage')
@@ -272,11 +354,15 @@ async function play($: EngineInterface, event: GameEvent): Promise<void> {
 }
 
 /** Plays a reading of the session's vitals, with the model it runs on. */
-async function measure($: EngineInterface, usage: MeasureSeen): Promise<void> {
-  await play($, translateMeasure(usage, await $.session.model()))
+async function measure($: EngineInterface, usage: MeasureSeen, rules: Rules): Promise<void> {
+  await play($, translateMeasure(usage, await $.session.model()), rules)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  // The Player's settings, from /config: a change there reloads the mod, and
+  // register runs again with the new values.
+  const rules = rulesOf(options)
+
   on('session.start', async ($, e, next) => {
     // After a reload of the mod the session's game is still in $.state; one
     // kept by an older version of the mod gains the fields it lacks.
@@ -317,7 +403,7 @@ export const register: Register = on => {
     // reading leaves them blank until the next measurement.
     const usage = await $.session.usage().catch(() => null)
     if (usage !== null) {
-      await measure($, usage)
+      await measure($, usage, rules)
     }
 
     return started
@@ -330,7 +416,7 @@ export const register: Register = on => {
     const event = translateToolCall(e, outcome, root)
 
     if (event !== null) {
-      await play($, event)
+      await play($, event, rules)
     }
 
     return outcome
@@ -378,7 +464,7 @@ export const register: Register = on => {
     }
 
     if (choice !== undefined) {
-      await answer($, first.id, choice)
+      await answer($, first.id, choice, rules)
       const answered = (await read($, game))?.lastAnswer
 
       return { text: answered == null ? 'The Sage did not hear that answer.' : answerText(answered) }
@@ -386,10 +472,10 @@ export const register: Register = on => {
 
     // An explanation still showing is put away: the Player asked for a Question.
     if (current?.lastAnswer != null) {
-      await play($, { type: 'ANSWER_DISMISSED' })
+      await play($, { type: 'ANSWER_DISMISSED' }, rules)
     }
     await $.ui.open(SAGE).catch(() => undefined)
-    await showFirstQuestion($)
+    await showFirstQuestion($, rules)
 
     return { text: questionText(first, current?.questions.length ?? 1) }
   })
@@ -407,7 +493,7 @@ export const register: Register = on => {
     const event = translateCommand(e)
 
     if (event !== null) {
-      await play($, event)
+      await play($, event, rules)
     }
 
     return next(e)
@@ -416,7 +502,7 @@ export const register: Register = on => {
     .catch(($, e, next) => next(e))
 
   on('session.measure', async ($, e, next) => {
-    await measure($, e)
+    await measure($, e, rules)
 
     return next(e)
   })
@@ -440,7 +526,7 @@ export const register: Register = on => {
       $,
       e,
       { questions: current?.questions ?? [], lastAnswer: current?.lastAnswer ?? null },
-      sageActions($),
+      sageActions($, rules),
     )
   })
 
