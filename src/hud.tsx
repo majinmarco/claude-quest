@@ -386,14 +386,17 @@ export function drawHud($: EngineInterface, e: RenderInput<'AbovePrompt'>, state
     lastDrawn.set(e.surface, { level: player.level, hp: player.hp, totalXp: player.totalXp, xpShare: player.xp / xpToClear(player.level) })
     const strip = hudStrip(layOutStrip(parts, room), room, motion)
 
+    // Centred in the band; the strip is only as wide as its segments.
     return (
-      <Svg
-        source={strip.svg}
-        alt={(rows[0] ?? []).map(piece => piece.text).join(' '.repeat(GAP))}
-        width={strip.width}
-        height={STRIP_HEIGHT}
-        isInteractive
-      />
+      <Box flexDirection="row" justifyContent="center" flexGrow={1}>
+        <Svg
+          source={strip.svg}
+          alt={(rows[0] ?? []).map(piece => piece.text).join(' '.repeat(GAP))}
+          width={strip.width}
+          height={STRIP_HEIGHT}
+          isInteractive
+        />
+      </Box>
     )
   }
 

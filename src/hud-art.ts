@@ -43,7 +43,6 @@ const SPRITE_Y = 4
 /** The strip's colours, from the sprites' palette. */
 const COLORS = {
   panel: '#181425',
-  panelInner: '#262b44',
   frame: '#3a4466',
   text: '#c0cbdc',
   dim: '#8b9bb4',
@@ -181,6 +180,13 @@ export const segmentWidth = (segment: StripSegment): number => {
 const filledOf = (width: number, share: number): number => Math.round(width * Math.max(0, Math.min(1, share)))
 
 /**
+ * `text` with a dark shadow one pixel down and right, so it reads on a light
+ * theme and a dark one alike, the strip having no background of its own.
+ */
+const shadowed = (lettering: Lettering, text: string, x: number, y: number, color: string): string =>
+  lettering.text(text, x + 1, y + 1, COLORS.panel) + lettering.text(text, x, y, color)
+
+/**
  * A bar `width` across at `x`, dark, outlined; filled by `share` in `color`
  * unless `color` is null, when the caller draws the fill. Its fill's width.
  */
@@ -212,7 +218,7 @@ const draw = (
 
       return (
         `<g transform="translate(${x} 0) scale(1.5)">${portrait.svg()}</g>` +
-        lettering.text(segment.text, x + HEIGHT + 4, LINE_Y, COLORS.gold)
+        shadowed(lettering, segment.text, x + HEIGHT + 4, LINE_Y, COLORS.gold)
       )
     }
     case 'hp': {
@@ -223,7 +229,7 @@ const draw = (
           '<animate attributeName="opacity" values="0.9;0" dur="0.4s" fill="freeze"/></rect>'
         : ''
 
-      return lettering.text(label, x, LABEL_Y, isExhausted || segment.isLow ? COLORS.red : COLORS.text) + flash
+      return shadowed(lettering, label, x, LABEL_Y, isExhausted || segment.isLow ? COLORS.red : COLORS.text) + flash
     }
     case 'xp': {
       const share = segment.xp / Math.max(1, segment.toClear)
@@ -235,20 +241,20 @@ const draw = (
           `<animate attributeName="width" values="${from};${fill}" dur="0.6s" fill="freeze"/></rect>`
         : ''
 
-      return lettering.text(label, x, LABEL_Y, COLORS.text) + filling
+      return shadowed(lettering, label, x, LABEL_Y, COLORS.text) + filling
     }
     case 'mana': {
       const color = MANA_COLORS[segment.level]
       const barWidth = manaBarWidth(segment)
       bar(canvas, x, barWidth, (segment.mana ?? 0) / 100, color)
-      const warning = segment.level === 'warning' ? lettering.text(COMPACTION_WARNING, x + barWidth + 4, LINE_Y, COLORS.red) : ''
+      const warning = segment.level === 'warning' ? shadowed(lettering, COMPACTION_WARNING, x + barWidth + 4, LINE_Y, COLORS.red) : ''
 
-      return lettering.text(label, x, LABEL_Y, color) + warning
+      return shadowed(lettering, label, x, LABEL_Y, color) + warning
     }
     case 'badges':
       mark(canvas, STAR, x, LINE_Y, COLORS.gold)
 
-      return lettering.text(label, x + STAR.length + 2, LINE_Y, COLORS.gold)
+      return shadowed(lettering, label, x + STAR.length + 2, LINE_Y, COLORS.gold)
     case 'quest': {
       const right = x + width - ROLLER_WIDTH
       canvas.rect(x + 4, 4, width - 8, HEIGHT - 8, SCROLL_COLORS.paper)
@@ -270,7 +276,7 @@ const draw = (
         const shadow = new Canvas()
         shadow.sprite(SPRITES.boss, x, SPRITE_Y)
 
-        return `<g opacity="0.5">${shadow.svg()}</g>` + lettering.text(label, x + 18, LINE_Y, COLORS.red)
+        return `<g opacity="0.5">${shadow.svg()}</g>` + shadowed(lettering, label, x + 18, LINE_Y, COLORS.red)
       }
       sprite('boss')
       for (let at = 0; at < segment.maxHp; at++) {
@@ -282,13 +288,13 @@ const draw = (
     case 'questions':
       sprite('sage')
 
-      return lettering.text(label, x + 18, LINE_Y, COLORS.green)
+      return shadowed(lettering, label, x + 18, LINE_Y, COLORS.green)
     case 'encounter':
       sprite(segment.sprite)
 
-      return lettering.text(label, x + 18, LINE_Y, COLORS.dim)
+      return shadowed(lettering, label, x + 18, LINE_Y, COLORS.dim)
     default:
-      return lettering.text(label, x, LINE_Y, COLORS.dim)
+      return shadowed(lettering, label, x, LINE_Y, COLORS.dim)
   }
 }
 
@@ -298,7 +304,7 @@ export const stripWidth = (segments: readonly StripSegment[]): number =>
 
 /**
  * The strip as an SVG document 48 CSS px tall, and its width in CSS px:
- * `segments` left to right on a dark panel, at most `maxWidth` strip pixels
+ * `segments` left to right on a clear background, at most `maxWidth` strip pixels
  * across. `motion` adds the HP bar's flash or the XP bar's fill, each played
  * once; nothing else moves.
  */
@@ -319,7 +325,6 @@ export const hudStrip = (
 
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${HEIGHT}" width="${width * SCALE}" height="${STRIP_HEIGHT}" shape-rendering="crispEdges">` +
-    `<rect width="${width}" height="${HEIGHT}" fill="${COLORS.panelInner}"/>` +
     lettering.defs() +
     canvas.svg() +
     markup +
