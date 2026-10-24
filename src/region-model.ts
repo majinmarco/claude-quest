@@ -58,6 +58,9 @@ export type LiveRegion = {
   discovered: readonly string[]
 }
 
+/** The Wilds of a Region, holding these Rooms. */
+const wildsOf = (rooms: Room[]): Site => ({ key: WILDS_KEY, name: 'The Wilds', kind: 'wilds', rooms })
+
 const collator = new Intl.Collator('en', { numeric: true })
 
 /** Tickets and keys in their natural order: `#5` before `#12`, `ABC-2` before `ABC-10`. */
@@ -88,7 +91,7 @@ export const liveRegion = (live: LiveRegion): RegionModel => {
   }
 
   const dungeons = new Map<string, Site>()
-  const wilds: Site = { key: WILDS_KEY, name: 'The Wilds', kind: 'wilds', rooms: [] }
+  const wilds = wildsOf([])
   for (const quest of [...cards.values()].sort((a, b) => naturalOrder(a.ticket, b.ticket))) {
     const room: Room = {
       quest,
@@ -142,12 +145,7 @@ const countedRooms = (total: number, cleared: number): Room[] =>
 
 /** Another Region, from its Snapshot: its sites and its Modules by count alone. */
 export const snapshotRegion = (snapshot: RegionSnapshot): RegionModel => {
-  const wilds: Site = {
-    key: WILDS_KEY,
-    name: 'The Wilds',
-    kind: 'wilds',
-    rooms: countedRooms(snapshot.wilds.total, snapshot.wilds.cleared),
-  }
+  const wilds = wildsOf(countedRooms(snapshot.wilds.total, snapshot.wilds.cleared))
   const dungeons = snapshot.dungeons.map(
     (dungeon): Site => ({
       key: dungeon.key,

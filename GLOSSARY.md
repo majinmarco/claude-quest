@@ -42,13 +42,17 @@ _Avoid_: Level, zone, project map
 The pane (`/map`) that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second view of the same pane. From it a Quest is started the way the Quest Board starts one. It never opens itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
 _Avoid_: Minimap, level select
 
+**Overworld**:
+The Region map's first view: the Region's open land with a gate per Dungeon, a camp for the Wilds and Fog past the last of them, laid out from the Region's id and its Dungeons' keys so it is the same for every Player and every session. Choosing a gate or the camp opens its Floors.
+_Avoid_: World (that's every Region), level select
+
 **Dungeon**:
 One epic within a Region (a Jira ticket's parent, never a subtask's; a GitHub milestone), drawn as Floors of Rooms; cleared when all its Quests are done, and then it flies a banner.
 _Avoid_: Epic (outside the Jira adapter), area
 
 **Wilds**:
 The part of a Region holding the Quests that belong to no Dungeon, drawn as camps on open land, and all of a Region whose Quest Source knows no epics. Its camps are Rooms in all but name.
-_Avoid_: Backlog, unassigned, overworld
+_Avoid_: Backlog, unassigned, overworld (that is the whole Region's view)
 
 **Room**:
 One Quest as a Dungeon draws it: dark when its ticket is still open, lit when cleared (its ticket closed in the Quest Source, or its Quest won here), showing its difficulty as the Scroll does. Choosing an open Room starts its Quest as Take Quest does.

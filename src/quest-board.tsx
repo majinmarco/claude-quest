@@ -1,6 +1,6 @@
 // The Quest Board pane: the current Region's open Quests as cards, with
-// filters by status (and tag, and Dungeon) and difficulty, under a header of the Player's
-// trophies and Badges, six cards a page. Each card is a scroll: pixel art
+// filters by status (and tag, and Dungeon) and difficulty, under a header of
+// the Player's trophies and Badges, six cards a page. Each card is a scroll: pixel art
 // where the surface draws SVG (src/scroll-art.ts), a scroll framed in text in
 // the terminal; rolled, or unrolled to show the whole card. Under each, Take
 // Quest (the caller's: it fills the prompt with an implement command for the
