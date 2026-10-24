@@ -56,6 +56,15 @@ describe('Scroll art: cards', () => {
     expect(svg).not.toContain('<animate')
   })
 
+  test('a rolled card fits about 26 characters of the title beside its gems, 30 for an Unrated one', () => {
+    const rated = scrollCardSvg(card({ ticket: '#5', title: 'Quest Board from GitHub Issues', difficulty: 'Medium' }), { unrolled: false, xp: 100 })
+    const unrated = scrollCardSvg(card({ ticket: 'ABC-123', title: "Haiku budget: cache the Sage's questions per change", difficulty: 'Unrated' }), { unrolled: false, xp: 80 })
+
+    // "Quest Board from GitHub Is" and "Haiku budget: cache the Sage's", spaces not lettered.
+    expect(lettered(rated)).toBe('#5QuestBoardfromGitHubIs...')
+    expect(lettered(unrated)).toBe("ABC-123Haikubudget:cachetheSage's...?")
+  })
+
   test('an unrolled card says its Quest, reward, Stats, status and tags, and unrolls once', () => {
     const svg = scrollCardSvg(card({ tags: ['bug'] }), { unrolled: true, xp: 140 })
     const letters = lettered(svg)
@@ -74,14 +83,19 @@ describe('Scroll art: cards', () => {
     expect(svg.match(/href="#g71"/g)?.length).toBe(12)
   })
 
-  test('the difficulty is five gems: Hard fills four, Unrated none and says ?', () => {
+  test('the difficulty is five gems, Hard filling four; Unrated draws a ? alone, no gems', () => {
     const gold = /fill="#ffb600"/
+    const grey = /fill="#999999"/
     const hard = scrollCardSvg(card(), { unrolled: false, xp: 140 })
-    const unrated = scrollCardSvg(card({ difficulty: 'Unrated', title: 'x' }), { unrolled: false, xp: 80 })
 
     expect(hard).toMatch(gold)
-    expect(unrated).not.toMatch(gold)
-    expect(lettered(unrated)).toBe('#6x?')
+    expect(hard).toMatch(grey)
+    for (const unrolled of [false, true]) {
+      const unrated = scrollCardSvg(card({ difficulty: 'Unrated', title: 'x' }), { unrolled, xp: 80 })
+      expect(unrated).not.toMatch(gold)
+      expect(unrated).not.toMatch(grey)
+      expect(lettered(unrated).startsWith(unrolled ? 'Quest#6?' : '#6x?')).toBe(true)
+    }
   })
 
   test('no card outgrows the Svg limit, a 120-character title and many tags included', () => {

@@ -552,3 +552,145 @@ describe('HUD: the Player\'s progress', () => {
     await ui.unmount()
   })
 })
+
+/** A Question as the HUD counts it. */
+const waiting = (id: string, npc: 'Sage' | 'Boss') => ({
+  id,
+  npc,
+  queuedAt: 0,
+  shownAt: null,
+  prompt: 'Q?',
+  options: ['a', 'b', 'c', 'd'],
+  answer: 0,
+  explanation: '',
+  stat: 'intelligence',
+  source: { path: 'src/a.ts', lines: [] },
+})
+
+/**
+ * The HUD's worst case: Exhausted, three Badges, a Quest with a long title,
+ * its Boss Fight under way, two Questions waiting, a Crafting, every vital.
+ */
+const WORST_CASE = {
+  player: {
+    ...SCHOLAR,
+    xp: 275,
+    totalXp: 525,
+    stats: { ...SCHOLAR.stats, intelligence: 120, wisdom: 45, strength: 30 },
+    badges: [...SCHOLAR.badges, { id: 'sage-friend', name: 'Sage Friend' }],
+  },
+  encounter: { kind: 'Crafting', target: 'src/order-ledger.ts', module: 'src', item: 'Order Ledger', isNewFile: true, linesAdded: 40, linesRemoved: 0 },
+  vitals: { mana: 62, model: 'claude-opus-5-5', spendUsd: 3.47 },
+  quest: { ticket: '#6', encounters: [], title: 'Jira Quest Source: read the project, its statuses and story points' },
+  visitedModules: [],
+  battles: [],
+  questions: [waiting('sage-1', 'Sage'), waiting('sage-2', 'Sage')],
+  questionsAsked: 2,
+  lastAnswer: null,
+  sageCallsOutsideQuest: 0,
+  bossFight: {
+    ticket: '#6',
+    sha: 'abc1234',
+    cwd: null,
+    status: 'fighting',
+    hp: 2,
+    maxHp: 2,
+    questions: [waiting('boss-1', 'Boss'), waiting('boss-2', 'Boss'), waiting('boss-3', 'Boss')],
+    lastAnswer: null,
+    questionCount: 3,
+  },
+  answeredKeys: [],
+  region: 'claude-quest',
+}
+
+/** The session's game, as `$.state` holds it, answered from `game`. */
+const keptGame = (on: On, game: unknown) =>
+  on('state.get', (_, e, next) => (e.key === 'game' ? { value: { value: game, version: 1 } } : next(e)))
+
+type Node = { type: string; text?: string; props?: Record<string, unknown>; children?: (Node | string)[] }
+
+/** The cells a node takes across: its text, a row's children with their gaps between. */
+const cellsOf = (node: Node | string): number => {
+  if (typeof node === 'string') {
+    return [...node].length
+  }
+  const children = node.children ?? []
+  if (node.type === 'Box' && node.props?.flexDirection === 'row') {
+    const gap = Number(node.props.gap ?? 0)
+
+    return children.reduce<number>((sum, child) => sum + cellsOf(child), 0) + gap * Math.max(children.length - 1, 0)
+  }
+
+  return children.reduce<number>((sum, child) => sum + cellsOf(child), 0)
+}
+
+/** The HUD's rows as drawn at `bodyColumns`: each row's texts, and its width in cells. */
+const hudRows = async ($: Engine, surface: 'terminal' | 'desktop', bodyColumns: number) => {
+  const ui = await $.ui.mount({ ...HUD, surface, props: { ...HUD.props, bodyColumns } })
+  const [band] = (await ui.findAll({ type: 'Box' })) as unknown as Node[]
+  await ui.unmount()
+
+  return (band?.children ?? []).map(row => ({
+    cells: cellsOf(row),
+    texts: typeof row === 'string' ? [row] : (row.children ?? []).map(child => (typeof child === 'string' ? child : (child.children ?? []).join(''))),
+  }))
+}
+
+describe('HUD: laid out by the band\'s width', () => {
+  test('the worst case fits 80 columns in three rows, every part kept, the Quest\'s title shortened', async ($, on) => {
+    keptGame(on, WORST_CASE)
+
+    for (const surface of SURFACES) {
+      const rows = await hudRows($, surface, 80)
+
+      expect(rows.length).toBeLessThanOrEqual(3)
+      for (const row of rows) {
+        expect(row.cells).toBeLessThanOrEqual(80)
+      }
+      const shown = rows.flatMap(row => row.texts)
+      expect(shown).toContain('Lv 4 Scholar')
+      expect(shown).toContain('Exhausted')
+      expect(shown).toContain('XP 275/550')
+      expect(shown).toContain('Quest #6 Jira Quest Source…')
+      expect(shown).toContain('Boss 2/2 HP · /boss')
+      expect(shown).toContain('2 Questions waiting · /sage')
+      expect(shown).toContain('Crafting: Order Ledger')
+      expect(shown).toContain('Mana 62%')
+      expect(shown).toContain('$3.47')
+      expect(shown).toContain('INT 120 · WIS 45 · STR 30')
+      expect(shown).toContain('★3')
+    }
+  })
+
+  test('at 40 columns the Quest shortens to its reference and the lesser parts give way, every row inside', async ($, on) => {
+    keptGame(on, WORST_CASE)
+
+    const rows = await hudRows($, 'terminal', 40)
+    const shown = rows.flatMap(row => row.texts)
+
+    expect(rows.length).toBeLessThanOrEqual(3)
+    for (const row of rows) {
+      expect(row.cells).toBeLessThanOrEqual(40)
+    }
+    expect(shown).toContain('Lv 4 Scholar')
+    expect(shown).toContain('Exhausted')
+    expect(shown).toContain('Quest #6')
+    expect(shown).toContain('Boss 2/2 HP · /boss')
+    expect(shown).toContain('2 Questions waiting · /sage')
+    expect(shown).not.toContain('INT 120 · WIS 45 · STR 30')
+  })
+
+  test('a wide band shows every part, the Quest\'s title whole up to its cut', async ($, on) => {
+    keptGame(on, WORST_CASE)
+
+    const shown = (await hudRows($, 'desktop', 200)).flatMap(row => row.texts)
+
+    expect(shown).toContain('Quest #6 Jira Quest Source: read the p…')
+    expect(shown).toContain('★3')
+    expect(shown).toContain('Crafting: Order Ledger')
+    expect(shown).toContain('Mana 62%')
+    expect(shown).toContain('claude-opus-5-5')
+    expect(shown).toContain('$3.47')
+    expect(shown).toContain('INT 120 · WIS 45 · STR 30')
+  })
+})

@@ -127,9 +127,9 @@ const FRAME_MAX = 64
 let headerArt: string | undefined
 const headerArtOf = (): string => (headerArt ??= boardHeaderSvg('QUEST BOARD'))
 
-/** The difficulty as five pips, `◆` filled; Unrated fills none and says `?`. */
+/** The difficulty as five pips, `◆` filled; Unrated, a `?` alone. */
 const pipsOf = (difficulty: Difficulty): string =>
-  `${difficulty === 'Unrated' ? '?' : ''}${'◆'.repeat(PIPS[difficulty])}${'◇'.repeat(5 - PIPS[difficulty])}`
+  difficulty === 'Unrated' ? '?' : `${'◆'.repeat(PIPS[difficulty])}${'◇'.repeat(5 - PIPS[difficulty])}`
 
 /** A run of a text scroll's row, in its colour. */
 type TextRun = { text: string; color: string }

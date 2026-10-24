@@ -479,6 +479,9 @@ describe('Quest Board: the Region chooses its Quest Source', () => {
         const shown = await texts(ui)
         expect(shown.some(text => /^│ CPI-12 Dashboard filters +◆◆◆◇◇ │$/.test(text))).toBe(true)
         expect(shown.some(text => /^│ Unrated · Boss: \+80 XP +│$/.test(text))).toBe(true)
+        // Unrated: a ? alone where the pips go, no empty pips after it.
+        expect(shown.some(text => /^│ Quest CPI-9 +\? │$/.test(text))).toBe(true)
+        expect(shown.some(text => text.includes('◇') && text.includes('CPI-9'))).toBe(false)
         expect(shown.some(text => /^│ Status: In Progress +│$/.test(text))).toBe(true)
       }
       await ui.press({ key: 'scroll:CPI-9' })

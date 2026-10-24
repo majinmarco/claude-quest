@@ -592,6 +592,43 @@ describe('The Boss Fight', () => {
     await ui.unmount()
   })
 
+  test('once the boss falls, its pane says so without the HP, the portrait dimmed', async ($, on) => {
+    const { call } = engine(on)
+    await $.session.start({ ...START, surface: 'desktop' })
+    await startQuest($)
+    await call($, commitAfterAdd)
+    const fighting = await $.ui.mount({ ...BOSS, surface: 'desktop' })
+    const before = String((await fighting.find({ type: 'Svg' }))?.props.source)
+    await fighting.unmount()
+
+    for (let answer = 0; answer < 3; answer++) {
+      await run($, 'boss', 'A')
+    }
+
+    const ui = await $.ui.mount({ ...BOSS, surface: 'desktop' })
+    const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
+    expect(texts[0]).toBe('The boss of Quest #12 has fallen')
+    expect(texts.some(text => /\d\/\d HP|Questions$/.test(text))).toBe(false)
+    const portrait = await ui.find({ type: 'Svg' })
+    expect(portrait?.props.alt).toBe('The boss of Quest #12 has fallen')
+    expect(String(portrait?.props.source)).toContain('opacity="0.35"')
+    expect(before).not.toContain('opacity')
+    await ui.unmount()
+  })
+
+  test('a skipped Boss Fight\'s pane says the boss was skipped, without the HP', async ($, on) => {
+    const { call } = engine(on)
+    await $.session.start(START)
+    await startQuest($)
+    await call($, commitAfterAdd)
+
+    const ui = await $.ui.mount({ ...BOSS, surface: 'terminal' })
+    await ui.press({ key: 'boss-skip' })
+    await ui.redraw()
+    expect((await ui.find({ type: 'Text', text: /^The boss of Quest/ }))?.text).toBe('The boss of Quest #12 was skipped')
+    await ui.unmount()
+  })
+
   test('the Scene plays the Boss Fight: the boss on the desktop, one line in the terminal', async ($, on) => {
     const { call } = engine(on)
     await $.session.start(START)

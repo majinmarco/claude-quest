@@ -61,7 +61,7 @@ The view listing the available Quests of the current Region, from which the Play
 _Avoid_: Ticket list, backlog view
 
 **Scroll**:
-A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: none filled, and a `?`); unrolled, the title whole (up to three lines), the Quest reward, recommended Stats, status and tags. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
+A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: a `?` alone, no gems); unrolled, the title whole (up to three lines), the Quest reward, recommended Stats, status and tags. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
 _Avoid_: Card art, tile
 
 **Tag**:
@@ -149,7 +149,7 @@ _Avoid_: Inbox, backlog
 ## The HUD
 
 **HUD**:
-The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, the session's vitals, and the Stats in play.
+The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, the session's vitals, and the Stats in play. At most three rows of the band's width: when it is narrow the Quest's title shortens first, then the lesser parts give way.
 _Avoid_: Status bar, header
 
 **Mana**:

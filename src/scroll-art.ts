@@ -32,11 +32,11 @@ const { paper: PAPER, edge: EDGE, edgeDark: EDGE_DARK, ink: INK, ticket: TICKET,
 /** Between two lines of text, in pixels. */
 const LINE = GLYPH_HEIGHT + 2
 
-/** The paper's left and right edges; the text starts 4 pixels in. */
-const LEFT = 10
-const RIGHT = WIDTH - 10
-const TEXT_X = LEFT + 4
-const TEXT_WIDTH = RIGHT - LEFT - 8
+/** The paper's left and right edges, inside the rollers' caps; the text starts 3 pixels in. */
+const LEFT = 6
+const RIGHT = WIDTH - 6
+const TEXT_X = LEFT + 3
+const TEXT_WIDTH = RIGHT - LEFT - 6
 
 /** A roller's height, and a rolled card's. */
 const ROLLER = 10
@@ -251,20 +251,29 @@ const roller = (canvas: Canvas, y: number): void => {
   canvas.sprite(SPRITES.rodCap, right - 14, y, { mirrored: true })
 }
 
-/** The five gems, their right end at `right`; filled by difficulty. */
-const gems = (canvas: Canvas, difficulty: Difficulty, right: number, y: number): void => {
-  for (let at = 0; at < 5; at++) {
-    canvas.sprite(at < PIPS[difficulty] ? SPRITES.gem : SPRITES.gemEmpty, right - (5 - at) * 9, y)
+/** A gem's width, its rounded corners keeping the five apart. */
+const GEM = 8
+
+/** Where the gems end, a pixel of paper before the card's right edge. */
+const GEMS_RIGHT = RIGHT - 2
+
+/**
+ * The difficulty at the card's right: five gems filled by difficulty, their
+ * right end at GEMS_RIGHT; Unrated, a `?` alone in their place.
+ */
+const difficultyMark = (canvas: Canvas, lettering: Lettering, difficulty: Difficulty, y: number): string => {
+  if (difficulty === 'Unrated') {
+    return lettering.text('?', GEMS_RIGHT - pixelWidth('?'), y + 1, TICKET)
   }
+  for (let at = 0; at < 5; at++) {
+    canvas.sprite(at < PIPS[difficulty] ? SPRITES.gem : SPRITES.gemEmpty, GEMS_RIGHT - (5 - at) * GEM, y)
+  }
+
+  return ''
 }
 
-/** Where the gems end, at the card's right, and how wide the five are. */
-const GEMS_RIGHT = RIGHT - 2
-const GEMS_WIDTH = 5 * 9
-
-/** The `?` an Unrated Quest shows before its gems. */
-const unratedMark = (lettering: Lettering, difficulty: Difficulty, y: number): string =>
-  difficulty === 'Unrated' ? lettering.text('?', GEMS_RIGHT - GEMS_WIDTH - pixelWidth('?') - 1, y, TICKET) : ''
+/** How wide the difficulty is drawn: the five gems, or an Unrated `?`. */
+const difficultyWidth = (difficulty: Difficulty): number => (difficulty === 'Unrated' ? pixelWidth('?') : 5 * GEM)
 
 /** The paper between `top` and `bottom`, its edges shaded. */
 const paper = (canvas: Canvas, top: number, bottom: number): void => {
@@ -292,9 +301,8 @@ export const cardDetails = (card: QuestCard, xp: number): string[] => {
   ]
 }
 
-/** The pixels left for a card's head line, before its gems (and an Unrated `?`). */
-const headRoom = (difficulty: Difficulty): number =>
-  TEXT_WIDTH - GEMS_WIDTH - 4 - (difficulty === 'Unrated' ? pixelWidth('?') + 1 : 0)
+/** The pixels left for a card's head line, 3 before its gems (or an Unrated `?`). */
+const headRoom = (difficulty: Difficulty): number => GEMS_RIGHT - difficultyWidth(difficulty) - 3 - TEXT_X
 
 /** A rolled card: a strip between two rollers. */
 const rolledCard = (card: QuestCard): string => {
@@ -304,14 +312,14 @@ const rolledCard = (card: QuestCard): string => {
   paper(canvas, 8, 22)
   roller(canvas, 0)
   roller(canvas, ROLLED_HEIGHT - ROLLER)
-  gems(canvas, card.difficulty, GEMS_RIGHT, y - 1)
+  const mark = difficultyMark(canvas, lettering, card.difficulty, y - 1)
   const ticket = `${card.ticket} `
   const room = headRoom(card.difficulty)
   const shownTicket = truncate(ticket, room)
   const text =
     lettering.text(shownTicket, TEXT_X, y, TICKET) +
     lettering.text(truncate(card.title, room - pixelWidth(shownTicket)), TEXT_X + pixelWidth(shownTicket), y, INK) +
-    unratedMark(lettering, card.difficulty, y)
+    mark
 
   return svgOf(ROLLED_HEIGHT, lettering.defs() + canvas.svg() + text)
 }
@@ -330,15 +338,15 @@ const unrolledCard = (card: QuestCard, xp: number): string => {
   const height = paperBottom + ROLLER
 
   paper(canvas, 8, paperBottom)
-  for (let x = TEXT_X; x < RIGHT - 4; x += 3) {
+  for (let x = TEXT_X; x < TEXT_X + TEXT_WIDTH; x += 3) {
     canvas.set(x, divider, EDGE)
   }
   roller(canvas, 0)
-  gems(canvas, card.difficulty, GEMS_RIGHT, headY - 1)
+  const mark = difficultyMark(canvas, lettering, card.difficulty, headY - 1)
   const room = headRoom(card.difficulty)
   const text =
     lettering.text(truncate(`Quest ${card.ticket}`, room), TEXT_X, headY, TICKET) +
-    unratedMark(lettering, card.difficulty, headY) +
+    mark +
     title.map((line, at) => lettering.text(line, TEXT_X, titleY + at * LINE, INK)).join('') +
     details.map((line, at) => lettering.text(line, TEXT_X, detailsY + at * LINE, at === 0 ? TICKET : INK)).join('')
 
@@ -365,7 +373,7 @@ const unrolledCard = (card: QuestCard, xp: number): string => {
 /**
  * A Quest card as a scroll, an SVG document 384 CSS pixels wide. Rolled: its
  * ticket and title on one strip, the title cut to fit, and its difficulty as
- * five gems (Unrated: none filled, and a `?`). Unrolled: `Quest #6` and the
+ * five gems (Unrated: a `?` alone). Unrolled: `Quest #6` and the
  * gems, the title in up to three lines, then its difficulty and Quest reward
  * (`xp`), Stats, status and tags; it unrolls once as it is first drawn.
  */

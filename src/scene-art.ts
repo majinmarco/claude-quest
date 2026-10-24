@@ -426,16 +426,17 @@ export const bossSceneSvg = (fight: BossFight, width: number): string => {
 
 /**
  * An NPC's portrait for the dialogue box: their sprite on a dark frame, as an
- * SVG document `width` CSS pixels square.
+ * SVG document `width` CSS pixels square; `defeated`, the sprite dimmed.
  */
-export const portraitSvg = (name: SpriteName, width: number): string => {
+export const portraitSvg = (name: SpriteName, width: number, { defeated = false } = {}): string => {
   const frame = SPRITE_SIZE + 4
+  const sprite = drawSprite(name, 2, 2)
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${frame} ${frame}" width="${width}" height="${width}" shape-rendering="crispEdges">` +
     `<rect width="${frame}" height="${frame}" fill="#262b44"/>` +
     `<rect x="1" y="1" width="${frame - 2}" height="${frame - 2}" fill="#3a4466"/>` +
-    drawSprite(name, 2, 2) +
+    (defeated ? `<g opacity="0.35">${sprite}</g>` : sprite) +
     '</svg>'
   )
 }

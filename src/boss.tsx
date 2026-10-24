@@ -130,6 +130,25 @@ export const bossAnswerText = (fight: BossFight, exhausted = false): string => {
     : `${bossVerdictOf(answer, fight, exhausted && fight.status === 'fighting')}\n${answer.question.explanation}\n\n${next}`
 }
 
+/** The pane's header: the boss's HP and Questions while it is fought, how it ended once over. */
+const bossHeaderOf = (fight: BossFight): string => {
+  const boss = `The boss of Quest ${fight.ticket}`
+  switch (fight.status) {
+    case 'summoned':
+      return boss
+    case 'fighting':
+      return `${boss} · ${hpOf(fight)} · ${plural(questionCountOf(fight), 'Question')}`
+    case 'won':
+      return `${boss} has fallen`
+    case 'lost':
+      return `${boss} still stands`
+    case 'skipped':
+      return `${boss} was skipped`
+    case 'unfought':
+      return `${boss} went unfought`
+  }
+}
+
 /**
  * The boss's dialogue box for `fight`, or what `/boss` says with none: its
  * buttons answer and skip through `actions`.
@@ -188,9 +207,7 @@ export function drawBoss(
   const body = (
     <Box flexDirection="column" gap={1}>
       <Text bold color="red">
-        {fight.status === 'summoned'
-          ? `The boss of Quest ${fight.ticket}`
-          : `The boss of Quest ${fight.ticket} · ${hpOf(fight)} · ${plural(questionCountOf(fight), 'Question')}`}
+        {bossHeaderOf(fight)}
       </Text>
       {verdict}
       {question}
@@ -213,7 +230,10 @@ export function drawBoss(
 
   return (
     <Box flexDirection="row" gap={2}>
-      <Svg source={portraitSvg('boss', PORTRAIT_WIDTH)} alt={`The boss of Quest ${fight.ticket}`} />
+      <Svg
+        source={portraitSvg('boss', PORTRAIT_WIDTH, { defeated: fight.status === 'won' })}
+        alt={isUnderWay(fight) ? `The boss of Quest ${fight.ticket}` : bossHeaderOf(fight)}
+      />
       {body}
     </Box>
   )
