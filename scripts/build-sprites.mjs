@@ -38,6 +38,7 @@ const SPRITES = {
   axe: 118,
   dagger: 103,
   staff: 129,
+  sage: 84,
 }
 
 /** Decodes an 8-bit indexed PNG (the sheet's kind) into RGBA rows. */

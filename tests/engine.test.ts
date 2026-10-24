@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, REWRITE_SHARE, manaLevel, newGame, questXp, step } from '../src/engine'
+import { isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
+import type { GameState, QuestionContent } from '../types'
 
 describe('Game Engine: a new Player', () => {
   test('starts at level 1 with no XP, full HP and no Stats', () => {
@@ -518,12 +519,12 @@ describe('Game Engine: Crafting', () => {
       { type: 'ENCOUNTER_STARTED', encounter },
       {
         type: 'CODE_CHANGED',
-        path: '/work/forge/src/user-profile-card.tsx',
-        item: 'User Profile Card',
-        isNewFile: true,
-        linesAdded: 23,
-        linesRemoved: 0,
-        diff: '@@ -0,0 +1,23 @@\n+export type UserProfile = {',
+        changes: [
+          {
+            path: '/work/forge/src/user-profile-card.tsx',
+            diff: '@@ -0,0 +1,23 @@\n+export type UserProfile = {',
+          },
+        ],
       },
       { type: 'XP_GAINED', amount: 10 },
     ])
@@ -637,4 +638,312 @@ describe('Game Engine: the item forged is named after the component', () => {
       expect(itemNameOf(path)).toBe(item)
     })
   }
+})
+
+describe('Game Engine: what the Sage asks about', () => {
+  const fail = (failures: number) =>
+    ({ type: 'TEST_FAIL', check: 'npm test', kind: 'test', failures }) as const
+  const pass = { type: 'TEST_PASS', check: 'npm test', kind: 'test' } as const
+  /** A one-line edit: too small to forge, but part of a fix. */
+  const fix = (path: string, diff = `@@ -3,1 +3,1 @@\n-  return a - b\n+  return a + b`) => ({
+    type: 'FILE_EDIT' as const,
+    path,
+    module: 'src',
+    isNewFile: false,
+    linesBefore: 20,
+    linesAdded: 1,
+    linesRemoved: 1,
+    diff,
+  })
+
+  const play = (...events: Parameters<typeof step>[1][]) => {
+    let state = newGame()
+    let effects: ReturnType<typeof step>['effects'] = []
+    for (const event of events) {
+      ;({ state, effects } = step(state, event))
+    }
+
+    return { state, effects }
+  }
+
+  test('a Battle won asks about the edits made while it stood: the fix', () => {
+    const { effects } = play(
+      fail(2),
+      fix('src/sum.ts'),
+      fix('src/format.ts', '@@ -1,1 +1,1 @@\n-const sep = ","\n+const sep = ", "'),
+      pass,
+    )
+
+    expect(effects.filter(effect => effect.type === 'CODE_CHANGED')).toEqual([
+      {
+        type: 'CODE_CHANGED',
+        changes: [
+          { path: 'src/sum.ts', diff: '@@ -3,1 +3,1 @@\n-  return a - b\n+  return a + b' },
+          { path: 'src/format.ts', diff: '@@ -1,1 +1,1 @@\n-const sep = ","\n+const sep = ", "' },
+        ],
+      },
+    ])
+  })
+
+  test('a Battle won with no edit made while it stood asks nothing: no code changed', () => {
+    const { effects } = play(fail(2), pass)
+
+    expect(effects.some(effect => effect.type === 'CODE_CHANGED')).toBe(false)
+  })
+
+  test('an edit made before the Battle is no part of its fix', () => {
+    const { effects } = play(fix('src/old.ts'), fail(1), fix('src/sum.ts'), pass)
+
+    expect(effects.find(effect => effect.type === 'CODE_CHANGED')).toEqual({
+      type: 'CODE_CHANGED',
+      changes: [{ path: 'src/sum.ts', diff: '@@ -3,1 +3,1 @@\n-  return a - b\n+  return a + b' }],
+    })
+  })
+
+  test(`only the latest ${MAX_FIX_EDITS} edits of a long Battle are asked about`, () => {
+    const edits = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(name => fix(`src/${name}.ts`))
+
+    const { effects } = play(fail(1), ...edits, pass)
+
+    const changed = effects.find(effect => effect.type === 'CODE_CHANGED')
+    expect(changed?.type === 'CODE_CHANGED' && changed.changes.map(change => change.path)).toEqual([
+      'src/c.ts',
+      'src/d.ts',
+      'src/e.ts',
+      'src/f.ts',
+      'src/g.ts',
+    ])
+  })
+
+  test('the Battle Encounter shows the monster, not the edits', () => {
+    const { state } = play(fail(1), fix('src/sum.ts'), pass)
+
+    expect(state.encounter).toEqual({
+      kind: 'Battle',
+      check: 'npm test',
+      foe: 'test',
+      hp: 0,
+      maxHp: 1,
+      hits: 1,
+      outcome: 'won',
+      isCounted: true,
+    })
+  })
+})
+
+describe('Game Engine: the Question Queue', () => {
+  const content: QuestionContent = {
+    prompt: 'When does total() apply the bulk discount?',
+    options: ['At or above the threshold', 'Below it', 'Always', 'Never'],
+    answer: 0,
+    explanation: 'The new branch checks subtotal >= BULK_THRESHOLD before discounting.',
+    stat: 'intelligence',
+    source: { path: 'src/order-ledger.ts', lines: ['  if (subtotal >= BULK_THRESHOLD) {'] },
+  }
+  const T = Date.UTC(2026, 9, 23, 20, 0)
+  const ready = (at = T, question = content) => ({ type: 'QUESTION_READY', question, at }) as const
+
+  /** Steps `state` through `events`, answering the last step. */
+  const play = (state: GameState, ...events: Parameters<typeof step>[1][]) => {
+    let effects: ReturnType<typeof step>['effects'] = []
+    for (const event of events) {
+      ;({ state, effects } = step(state, event))
+    }
+
+    return { state, effects }
+  }
+
+  test('a new game has no Question waiting', () => {
+    expect(newGame().questions).toEqual([])
+    expect(newGame().lastAnswer).toBeNull()
+  })
+
+  test('a generated Question joins the queue as the Sage\'s, not yet shown', () => {
+    const { state, effects } = play(newGame(), ready())
+
+    expect(state.questions).toEqual([
+      { ...content, id: 'sage-1', npc: 'Sage', queuedAt: T, shownAt: null },
+    ])
+    expect(effects).toEqual([{ type: 'QUESTION_QUEUED', id: 'sage-1', waiting: 1 }])
+  })
+
+  test('Questions wait oldest first, each with an id of its own', () => {
+    const { state, effects } = play(newGame(), ready(T), ready(T + 1000, { ...content, prompt: 'Why?' }))
+
+    expect(state.questions.map(question => [question.id, question.prompt])).toEqual([
+      ['sage-1', 'When does total() apply the bulk discount?'],
+      ['sage-2', 'Why?'],
+    ])
+    expect(effects).toEqual([{ type: 'QUESTION_QUEUED', id: 'sage-2', waiting: 2 }])
+  })
+
+  test('an id is never reused, even once its Question is answered', () => {
+    const { state } = play(
+      newGame(),
+      ready(),
+      { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 0, at: T + 5000 },
+      ready(T + 6000),
+    )
+
+    expect(state.questions.map(question => question.id)).toEqual(['sage-2'])
+  })
+
+  test('showing a Question records when the Player first saw it', () => {
+    const { state } = play(
+      newGame(),
+      ready(),
+      { type: 'QUESTION_SHOWN', id: 'sage-1', at: T + 60_000 },
+      { type: 'QUESTION_SHOWN', id: 'sage-1', at: T + 90_000 },
+    )
+
+    expect(state.questions[0]?.shownAt).toBe(T + 60_000)
+  })
+
+  test(`a right answer earns ${QUESTION_XP} Intelligence XP and shows the explanation`, () => {
+    const { state, effects } = play(
+      newGame(),
+      ready(),
+      { type: 'QUESTION_SHOWN', id: 'sage-1', at: T + 60_000 },
+      { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 0, at: T + 72_000 },
+    )
+
+    const answer = {
+      question: { ...content, id: 'sage-1', npc: 'Sage', queuedAt: T, shownAt: T + 60_000 },
+      choice: 0,
+      isCorrect: true,
+      answeredAt: T + 72_000,
+      answerMs: 12_000,
+      xp: 20,
+      hpLost: 0,
+    }
+    expect(state.questions).toEqual([])
+    expect(state.lastAnswer).toEqual(answer)
+    expect(state.player.xp).toBe(20)
+    expect(state.player.stats.intelligence).toBe(20)
+    expect(state.player.hp).toBe(100)
+    expect(effects).toEqual([
+      { type: 'QUESTION_ANSWERED', answer },
+      { type: 'XP_GAINED', amount: 20, stat: 'intelligence' },
+    ])
+  })
+
+  test(`a wrong answer costs ${WRONG_ANSWER_HP} HP, earns nothing, and shows the explanation too`, () => {
+    const { state, effects } = play(
+      newGame(),
+      ready(),
+      { type: 'QUESTION_SHOWN', id: 'sage-1', at: T + 1000 },
+      { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 2, at: T + 4000 },
+    )
+
+    expect(state.questions).toEqual([])
+    expect(state.lastAnswer).toMatchObject({
+      choice: 2,
+      isCorrect: false,
+      answerMs: 3000,
+      xp: 0,
+      hpLost: 10,
+      question: { explanation: 'The new branch checks subtotal >= BULK_THRESHOLD before discounting.' },
+    })
+    expect(state.player.hp).toBe(90)
+    expect(state.player.xp).toBe(0)
+    expect(state.player.stats.intelligence).toBe(0)
+    expect(effects).toEqual([
+      {
+        type: 'QUESTION_ANSWERED',
+        answer: {
+          question: { ...content, id: 'sage-1', npc: 'Sage', queuedAt: T, shownAt: T + 1000 },
+          choice: 2,
+          isCorrect: false,
+          answeredAt: T + 4000,
+          answerMs: 3000,
+          xp: 0,
+          hpLost: 10,
+        },
+      },
+      { type: 'HP_LOST', amount: 10 },
+    ])
+  })
+
+  test('a Wisdom-tagged Question answered right still earns Intelligence XP, the Stat in play', () => {
+    const { state } = play(
+      newGame(),
+      ready(T, { ...content, stat: 'wisdom' }),
+      { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 0, at: T + 9000 },
+    )
+
+    expect(state.player.stats).toMatchObject({ intelligence: 20, wisdom: 0 })
+  })
+
+  test('HP never drops below zero', () => {
+    const worn = { ...newGame(), player: { ...newGame().player, hp: 4 } }
+
+    const { state, effects } = play(worn, ready(), {
+      type: 'QUESTION_ANSWERED',
+      id: 'sage-1',
+      choice: 1,
+      at: T + 9000,
+    })
+
+    expect(state.player.hp).toBe(0)
+    expect(effects).toContainEqual({ type: 'HP_LOST', amount: 4 })
+  })
+
+  test('a Question answered without being shown has no answer time', () => {
+    const { state } = play(newGame(), ready(), {
+      type: 'QUESTION_ANSWERED',
+      id: 'sage-1',
+      choice: 0,
+      at: T + 9000,
+    })
+
+    expect(state.lastAnswer?.answerMs).toBeNull()
+  })
+
+  test('any waiting Question may be answered, not only the oldest', () => {
+    const { state } = play(newGame(), ready(T), ready(T + 1), {
+      type: 'QUESTION_ANSWERED',
+      id: 'sage-2',
+      choice: 0,
+      at: T + 9000,
+    })
+
+    expect(state.questions.map(question => question.id)).toEqual(['sage-1'])
+  })
+
+  test('an answer to no waiting Question, or no option, changes nothing', () => {
+    const queued = play(newGame(), ready()).state
+
+    for (const event of [
+      { type: 'QUESTION_ANSWERED', id: 'sage-9', choice: 0, at: T } as const,
+      { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 4, at: T } as const,
+      { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: -1, at: T } as const,
+    ]) {
+      expect(step(queued, event)).toEqual({ state: queued, effects: [] })
+    }
+  })
+
+  test('moving on from an answer puts its explanation away', () => {
+    const { state } = play(
+      newGame(),
+      ready(),
+      { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 0, at: T + 9000 },
+      { type: 'ANSWER_DISMISSED' },
+    )
+
+    expect(state.lastAnswer).toBeNull()
+  })
+
+  test('a right answer can level the Player up', () => {
+    const near = { ...newGame(), player: { ...newGame().player, xp: 90 } }
+
+    const { state, effects } = play(near, ready(), {
+      type: 'QUESTION_ANSWERED',
+      id: 'sage-1',
+      choice: 0,
+      at: T + 9000,
+    })
+
+    expect(state.player).toMatchObject({ level: 2, xp: 10 })
+    expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
+  })
 })

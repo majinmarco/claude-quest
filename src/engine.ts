@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, GameState, Player, Quest, StatName, Vitals } from '../types'
+import type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, Question, QuestionAnswer, QuestionContent, StatName, Vitals } from '../types'
 
-export type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
+export type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, Question, QuestionAnswer, QuestionContent, Vitals } from '../types'
 
 export type GameEvent =
   /**
@@ -43,6 +43,17 @@ export type GameEvent =
   | { type: 'TEST_FAIL'; check: string; kind: CheckKind; failures: number | null }
   /** A check passed: nothing failing. */
   | { type: 'TEST_PASS'; check: string; kind: CheckKind }
+  /**
+   * The Content Generator made a Question about a code-changing Encounter's
+   * change, at `at` (ms since the epoch): the Sage queues it.
+   */
+  | { type: 'QUESTION_READY'; question: QuestionContent; at: number }
+  /** The dialogue box put a waiting Question in front of the Player, at `at`. */
+  | { type: 'QUESTION_SHOWN'; id: string; at: number }
+  /** The Player chose option `choice` of a waiting Question, at `at`. */
+  | { type: 'QUESTION_ANSWERED'; id: string; choice: number; at: number }
+  /** The Player moved on from their last answer's explanation. */
+  | { type: 'ANSWER_DISMISSED' }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
@@ -52,18 +63,16 @@ export type Effect =
   | { type: 'MONSTER_HIT'; check: string; hits: number; hp: number }
   | { type: 'BATTLE_WON'; check: string; foe: CheckKind }
   /**
-   * Code changed in a code-changing Encounter (a Crafting): what the Sage
-   * asks about. `diff` is the change as unified-diff hunks.
+   * Code changed in a code-changing Encounter: what the Sage asks one
+   * Question about. A Crafting's file, or the edits that won a Battle.
    */
-  | {
-      type: 'CODE_CHANGED'
-      path: string
-      item: string
-      isNewFile: boolean
-      linesAdded: number
-      linesRemoved: number
-      diff: string
-    }
+  | { type: 'CODE_CHANGED'; changes: FileChange[] }
+  /** A Question joined the Question Queue; `waiting` is how many wait now. */
+  | { type: 'QUESTION_QUEUED'; id: string; waiting: number }
+  /** The Player answered a Question: right or wrong, its explanation shows. */
+  | { type: 'QUESTION_ANSWERED'; answer: QuestionAnswer }
+  /** HP lost: a wrong answer's cost. */
+  | { type: 'HP_LOST'; amount: number }
   /** XP earned; `stat` is the Stat whose kind of work earned it, if any. */
   | { type: 'XP_GAINED'; amount: number; stat?: StatName }
   /** The Player's first visit to a Module in this Region. */
@@ -103,6 +112,25 @@ export const REWRITE_SHARE = 0.8
 
 /** The XP a Crafting earns: something made. */
 export const CRAFTING_XP = 10
+
+/**
+ * The Intelligence XP a right answer earns: twice a Crafting's, since reading
+ * and understanding the code is what the game is for. Accuracy pays, not
+ * volume: a wrong answer earns nothing and costs HP.
+ */
+export const QUESTION_XP = 20
+
+/**
+ * The HP a wrong answer costs: a tenth of a new Player's 100, so guessing
+ * hurts without ten wrong answers being far off.
+ */
+export const WRONG_ANSWER_HP = 10
+
+/**
+ * How many edits made during a Battle the Sage asks about once it is won:
+ * the latest, the fix; the earlier ones are often false starts.
+ */
+export const MAX_FIX_EDITS = 5
 
 /**
  * Whether an Encounter changed code, for the Sage to ask about: a Crafting,
@@ -192,6 +220,9 @@ export const newGame = (player: Player = newPlayer()): GameState => ({
   quest: null,
   visitedModules: [],
   battles: [],
+  questions: [],
+  questionsAsked: 0,
+  lastAnswer: null,
 })
 
 export const step = (
@@ -210,7 +241,15 @@ export const step = (
     case 'TEST_PASS':
       return checkPassed(state, event.check)
     case 'FILE_EDIT':
-      return craft(state, event)
+      return craft(withFix(state, event), event)
+    case 'QUESTION_READY':
+      return queueQuestion(state, event.question, event.at)
+    case 'QUESTION_SHOWN':
+      return showQuestion(state, event.id, event.at)
+    case 'QUESTION_ANSWERED':
+      return answerQuestion(state, event)
+    case 'ANSWER_DISMISSED':
+      return { state: { ...state, lastAnswer: null }, effects: [] }
   }
 }
 
@@ -251,7 +290,7 @@ const craft = (
     state: { ...state, player: gained.player, encounter, quest: attach(state.quest, encounter) },
     effects: [
       { type: 'ENCOUNTER_STARTED', encounter },
-      { type: 'CODE_CHANGED', path, item, isNewFile, linesAdded, linesRemoved, diff },
+      { type: 'CODE_CHANGED', changes: [{ path, diff }] },
       { type: 'XP_GAINED', amount: CRAFTING_XP },
       ...gained.effects,
     ],
@@ -315,6 +354,23 @@ const gainXp = (
   return { player: { ...player, level, xp }, effects }
 }
 
+/** XP earned by a Stat's kind of work: the Player's, and that Stat's. */
+const gainStatXp = (
+  player: Player,
+  stat: StatName,
+  amount: number,
+): { player: Player; effects: Effect[] } => {
+  const gained = gainXp(player, amount)
+
+  return {
+    player: {
+      ...gained.player,
+      stats: { ...gained.player.stats, [stat]: gained.player.stats[stat] + amount },
+    },
+    effects: gained.effects,
+  }
+}
+
 const measure = (
   state: GameState,
   event: Extract<GameEvent, { type: 'SESSION_MEASURED' }>,
@@ -374,10 +430,26 @@ const playBattle = (
 })
 
 const encounterOf = (
-  battle: Battle,
+  { check, foe, hp, maxHp, isCounted }: Battle,
   hits: number,
   outcome: BattleEncounter['outcome'],
-): BattleEncounter => ({ kind: 'Battle', ...battle, hits, outcome })
+): BattleEncounter => ({ kind: 'Battle', check, foe, hp, maxHp, isCounted, hits, outcome })
+
+// Every edit made while a Battle stands may be part of its fix, minor ones
+// above all: each Battle under way keeps the latest MAX_FIX_EDITS.
+const withFix = (
+  state: GameState,
+  { path, diff }: Extract<GameEvent, { type: 'FILE_EDIT' }>,
+): GameState =>
+  state.battles.length === 0
+    ? state
+    : {
+        ...state,
+        battles: state.battles.map(battle => ({
+          ...battle,
+          edits: [...(battle.edits ?? []), { path, diff }].slice(-MAX_FIX_EDITS),
+        })),
+      }
 
 // A Battle is against one Check: the same command run again. Its
 // monster's HP is the failures the check last counted; each failure fewer on
@@ -440,11 +512,10 @@ const checkPassed = (
 
   const encounter = encounterOf({ ...open, hp: 0 }, open.hp, 'won')
   const amount = BATTLE_XP_PER_HP * open.maxHp
-  const gained = gainXp(state.player, amount)
-  const player = {
-    ...gained.player,
-    stats: { ...gained.player.stats, strength: gained.player.stats.strength + amount },
-  }
+  // The Sage asks about the fix; a Battle won with no edit changed no code.
+  const fix = open.edits ?? []
+  const gained = gainStatXp(state.player, 'strength', amount)
+  const { player } = gained
 
   return {
     state: {
@@ -459,7 +530,100 @@ const checkPassed = (
       { type: 'ENCOUNTER_UPDATED', encounter },
       { type: 'MONSTER_HIT', check, hits: open.hp, hp: 0 },
       { type: 'BATTLE_WON', check, foe: open.foe },
+      ...(fix.length > 0 ? [{ type: 'CODE_CHANGED', changes: fix } as const] : []),
       { type: 'XP_GAINED', amount, stat: 'strength' },
+      ...gained.effects,
+    ],
+  }
+}
+
+// The Question Queue: Questions wait, oldest first, until the Player answers
+// them; nothing in it ever holds up the session.
+const queueQuestion = (
+  state: GameState,
+  content: QuestionContent,
+  at: number,
+): { state: GameState; effects: Effect[] } => {
+  const questionsAsked = state.questionsAsked + 1
+  const question: Question = {
+    ...content,
+    id: `sage-${questionsAsked}`,
+    npc: 'Sage',
+    queuedAt: at,
+    shownAt: null,
+  }
+  const questions = [...state.questions, question]
+
+  return {
+    state: { ...state, questions, questionsAsked },
+    effects: [{ type: 'QUESTION_QUEUED', id: question.id, waiting: questions.length }],
+  }
+}
+
+// An answer's time runs from the first time the Player saw the Question.
+const showQuestion = (
+  state: GameState,
+  id: string,
+  at: number,
+): { state: GameState; effects: Effect[] } => ({
+  state: {
+    ...state,
+    questions: state.questions.map(question =>
+      question.id === id && question.shownAt === null ? { ...question, shownAt: at } : question,
+    ),
+  },
+  effects: [],
+})
+
+// A right answer earns QUESTION_XP of Intelligence, the Stat in play for
+// understanding code, whatever the Question's tag; a wrong one costs
+// WRONG_ANSWER_HP, never below zero. Either way the Question leaves the queue
+// and its explanation shows.
+const answerQuestion = (
+  state: GameState,
+  { id, choice, at }: Extract<GameEvent, { type: 'QUESTION_ANSWERED' }>,
+): { state: GameState; effects: Effect[] } => {
+  const question = state.questions.find(each => each.id === id)
+  if (question === undefined || !Number.isInteger(choice) || choice < 0 || choice >= question.options.length) {
+    return { state, effects: [] }
+  }
+
+  const isCorrect = choice === question.answer
+  const xp = isCorrect ? QUESTION_XP : 0
+  const hpLost = isCorrect ? 0 : Math.min(WRONG_ANSWER_HP, state.player.hp)
+  const answer: QuestionAnswer = {
+    question,
+    choice,
+    isCorrect,
+    answeredAt: at,
+    answerMs: question.shownAt === null ? null : at - question.shownAt,
+    xp,
+    hpLost,
+  }
+  const questions = state.questions.filter(each => each !== question)
+
+  if (!isCorrect) {
+    return {
+      state: {
+        ...state,
+        questions,
+        lastAnswer: answer,
+        player: { ...state.player, hp: state.player.hp - hpLost },
+      },
+      effects: [
+        { type: 'QUESTION_ANSWERED', answer },
+        { type: 'HP_LOST', amount: hpLost },
+      ],
+    }
+  }
+
+  const gained = gainStatXp(state.player, 'intelligence', xp)
+
+  return {
+    state: { ...state, questions, lastAnswer: answer, player: gained.player },
+    effects: [
+      { type: 'QUESTION_ANSWERED', answer },
+      { type: 'XP_GAINED', amount: xp, stat: 'intelligence' },
       ...gained.effects,
     ],
   }

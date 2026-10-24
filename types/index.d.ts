@@ -81,6 +81,11 @@ export type Battle = {
   hp: number
   maxHp: number
   isCounted: boolean
+  /**
+   * The edits made while it stood, the latest few: the fix, which the Sage
+   * asks about once the Battle is won. Absent in a Battle kept by an older mod.
+   */
+  edits?: FileChange[]
 }
 
 /** What a check finds: failing tests, lint errors or type errors. */
@@ -104,6 +109,60 @@ export type Quest = {
   encounters: Encounter[]
 }
 
+/** A file's change, as unified-diff hunks (`@@ -1,3 +1,3 @@` and the lines under it). */
+export type FileChange = { path: string; diff: string }
+
+/**
+ * Where a Question points: the file, and the lines of its change the Question
+ * is about, as the diff shows them (without the diff's `+`, `-` or ` ` mark).
+ */
+export type SourceRef = { path: string; lines: string[] }
+
+/** What the Content Generator makes of a change: a Question's content. */
+export type QuestionContent = {
+  /** The question itself. */
+  prompt: string
+  /** Four options, exactly one right. */
+  options: string[]
+  /** The index of the right option in `options`. */
+  answer: number
+  /** One sentence telling why the right option is right. */
+  explanation: string
+  /** The Stat whose kind of understanding the Question tests. */
+  stat: StatName
+  source: SourceRef
+}
+
+/** A comprehension Question an NPC put to the Player, in the Question Queue. */
+export type Question = QuestionContent & {
+  /** Unique in the session: `sage-1`, `sage-2`, ... */
+  id: string
+  npc: 'Sage'
+  /** When it joined the Question Queue, in ms since the epoch. */
+  queuedAt: number
+  /**
+   * When the Player first had it in front of them in the dialogue box, in ms
+   * since the epoch; null until then. An answer's time runs from it.
+   */
+  shownAt: number | null
+}
+
+/** The Player's answer to a Question, and what it earned or cost. */
+export type QuestionAnswer = {
+  question: Question
+  /** The index of the option the Player chose. */
+  choice: number
+  isCorrect: boolean
+  /** When the Player answered, in ms since the epoch. */
+  answeredAt: number
+  /** How long the answer took from `question.shownAt`; null when never shown first. */
+  answerMs: number | null
+  /** The Intelligence XP it earned; 0 when wrong. */
+  xp: number
+  /** The HP it cost; 0 when right. */
+  hpLost: number
+}
+
 export type GameState = {
   player: Player
   encounter: Encounter | null
@@ -123,6 +182,15 @@ export type GameState = {
    * when its check passes.
    */
   battles: Battle[]
+  /**
+   * The Question Queue: the Questions waiting for the Player, oldest first.
+   * They never interrupt the session; the Player answers them when they choose.
+   */
+  questions: Question[]
+  /** How many Questions were queued this session, for the next one's id. */
+  questionsAsked: number
+  /** The Player's last answer, its explanation shown until they move on; null when none. */
+  lastAnswer: QuestionAnswer | null
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */

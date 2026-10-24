@@ -429,6 +429,28 @@ export const SPRITES = {
       '......aaaa......',
     ],
   },
+  /** Tile 84 of the sheet. */
+  sage: {
+    palette: ["#3f2631","#9b4ca3","#d176d0","#8b9bb4","#f7c282","#262b44","#c0cbdc","#bd6c4a","#aab7cc"],
+    rows: [
+      '...aaaaaa.......',
+      '..aaaaaaaaa.....',
+      '.aaabbbbaaaa....',
+      '.aababbbbbaaaa..',
+      '.aaaabbbbbbaaaa.',
+      '.aabccccccccbaa.',
+      '.aacbaaaaaabcaa.',
+      '.aabdeeeeeedbaa.',
+      '.aaadeffeffeaaa.',
+      '.aaaaeegggeaaa..',
+      'aaaabedeeedbaaa.',
+      'aaeebbgggggbeeaa',
+      'aaeebbgggggbeeaa',
+      'aabbahgggggabbaa',
+      'aabbabbggibabbaa',
+      '.aaabbgggbbaaaa.',
+    ],
+  },
 } as const satisfies Record<string, Sprite>
 
 export type SpriteName = keyof typeof SPRITES

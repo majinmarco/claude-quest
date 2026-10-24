@@ -83,11 +83,15 @@ A persona (Sage, Cartographer, Merchant, Rival, Scribe, Quest Giver) that speaks
 _Avoid_: Character, bot
 
 **Question**:
-A comprehension challenge tied to specific lines of code the Player can see.
+A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle). A right answer earns Intelligence XP, a wrong one costs HP; both show the explanation.
 _Avoid_: Quiz, prompt
 
+**Content Generator**:
+What asks Haiku for a Question about a change and checks the reply against the contract; a reply that breaks it is skipped, never queued.
+_Avoid_: Question generator, LLM client
+
 **Question Queue**:
-The Questions waiting for the Player; they never interrupt the session, the Player answers them when they choose.
+The Questions waiting for the Player; they never interrupt the session, the Player answers them when they choose, in the Sage's dialogue box (`/sage`). The HUD counts them.
 _Avoid_: Inbox, backlog
 
 ## The HUD

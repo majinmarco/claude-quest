@@ -8,6 +8,6 @@
 - Licence: Creative Commons Zero (CC0 1.0), http://creativecommons.org/publicdomain/zero/1.0/, as the pack's `License.txt` states. Crediting is not required; we credit Kenney anyway.
 
 The Scene pane draws a few of its 16 x 16 tiles (wall, banner, floors, hero,
-chests). `scripts/build-sprites.mjs` decodes the tilesheet into
+chests), and the Sage's portrait in the dialogue box. `scripts/build-sprites.mjs` decodes the tilesheet into
 `src/sprites.ts`, so no PNG is decoded while a session runs. To draw other
 tiles, change `SPRITES` in the script and run `node scripts/build-sprites.mjs`.

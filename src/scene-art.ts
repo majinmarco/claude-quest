@@ -335,3 +335,19 @@ export const sceneSvg = (encounter: Encounter | null, width: number): string => 
     '</svg>'
   )
 }
+
+/**
+ * An NPC's portrait for the dialogue box: their sprite on a dark frame, as an
+ * SVG document `width` CSS pixels square.
+ */
+export const portraitSvg = (name: SpriteName, width: number): string => {
+  const frame = SPRITE_SIZE + 4
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${frame} ${frame}" width="${width}" height="${width}" shape-rendering="crispEdges">` +
+    `<rect width="${frame}" height="${frame}" fill="#262b44"/>` +
+    `<rect x="1" y="1" width="${frame - 2}" height="${frame - 2}" fill="#3a4466"/>` +
+    drawSprite(name, 2, 2) +
+    '</svg>'
+  )
+}

@@ -1,6 +1,6 @@
-// The HUD band above the prompt: level, XP bar, the active Quest and the
-// current Encounter, and below them the session's vitals: Mana, the model and
-// the spend.
+// The HUD band above the prompt: level, HP, XP bar, the active Quest, the
+// Questions waiting and the current Encounter, and below them the session's
+// vitals: Mana, the model and the spend.
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
@@ -9,6 +9,9 @@ import type { Encounter, GameState, ManaLevel } from './engine'
 import { MONSTERS } from './scene-art'
 
 const BAR_CELLS = 10
+
+/** HP turns red at or below this share of its most: a few wrong answers left. */
+const LOW_HP = 0.3
 
 const bar = (share: number): string => {
   const filled = Math.max(0, Math.min(BAR_CELLS, Math.floor(share * BAR_CELLS)))
@@ -41,7 +44,7 @@ const describeEncounter = (encounter: Encounter): string => {
 export function drawHud(
   $: EngineInterface,
   e: RenderInput<'AbovePrompt'>,
-  { player, encounter, vitals, quest }: GameState,
+  { player, encounter, vitals, quest, questions }: GameState,
 ) {
   const { Box, Text } = $.ui.resolve(e)
   const toClear = xpToClear(player.level)
@@ -58,9 +61,17 @@ export function drawHud(
         <Text>
           XP {player.xp}/{toClear}
         </Text>
+        <Text color={player.hp <= player.maxHp * LOW_HP ? 'red' : 'green'}>
+          HP {player.hp}/{player.maxHp}
+        </Text>
         {quest !== null && (
           <Text bold color="magenta">
             Quest {quest.ticket}
+          </Text>
+        )}
+        {questions.length > 0 && (
+          <Text bold color="green">
+            {`${questions.length} Question${questions.length === 1 ? '' : 's'} waiting · /sage`}
           </Text>
         )}
         {encounter !== null && <Text dimColor>{describeEncounter(encounter)}</Text>}

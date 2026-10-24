@@ -1,8 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
+import { generateQuestion, QUESTION_MODEL } from '../src/content-generator'
+import type { Model, QuestionInput } from '../src/content-generator'
 import { newGame, step } from '../src/engine'
-import type { Effect, GameEvent } from '../src/engine'
+import type { Effect, FileChange, GameEvent } from '../src/engine'
 import { drawHud } from '../src/hud'
 import {
   discoveredModulesOf,
@@ -17,6 +19,8 @@ import { drawQuestBoard, noFilters } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
 import type { QuestSource } from '../src/quest-source'
 import { questSourceFor, questSourceSettingOf, unavailable } from '../src/quest-source-setting'
+import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
+import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
 import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
@@ -34,6 +38,103 @@ const board = atom({ plugin: 'quest-mod', key: 'board' } as const, {
 const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 
 const SCENE = { id: 'scene', title: 'Scene' } as const
+
+const SAGE = { id: 'sage', title: 'The Sage' } as const
+
+/**
+ * Haiku through the session's own client and credentials (`$.model.complete`):
+ * no tools, no history, text back. Low effort keeps a Question cheap and quick;
+ * the token cap leaves room for its thinking and the JSON; the time limit
+ * keeps a stuck call from hanging on for the rest of the session.
+ */
+const haikuModel =
+  ($: EngineInterface): Model =>
+  async ({ system, prompt }) => {
+    const reply = await $.model.complete({
+      model: QUESTION_MODEL,
+      system,
+      prompt,
+      maxTokens: 4096,
+      effort: 'low',
+      timeoutMs: 60_000,
+    })
+
+    return reply.isAnswered ? { ok: true, text: reply.text } : { ok: false, reason: reply.reason }
+  }
+
+/**
+ * The active Quest's ticket as the Sage reads it: its reference, and its
+ * title when the Quest Board listed it (`#7 Bulk discounts`).
+ */
+async function activeTicket($: EngineInterface): Promise<string | null> {
+  const ticket = (await read($, game))?.quest?.ticket
+  if (ticket === undefined) {
+    return null
+  }
+
+  const { listing } = await read($, board)
+  const card =
+    listing.state === 'listed' ? listing.quests.find(quest => quest.ticket === ticket) : undefined
+
+  return card === undefined ? ticket : `${ticket} ${card.title}`
+}
+
+/**
+ * The Sage's one Question about a code-changing Encounter's change: Haiku
+ * makes it, the Content Generator checks it, and it joins the Question Queue.
+ * Started unawaited after the tool call has returned, so the session never
+ * waits on it; a Question that could not be made is skipped, logged to the
+ * debug log alone.
+ */
+async function askSage($: EngineInterface, changes: FileChange[]): Promise<void> {
+  const input: QuestionInput = { changes, ticket: await activeTicket($) }
+  const generated = await generateQuestion(input, haikuModel($))
+
+  if (!generated.ok) {
+    $.ui.log(`The Sage skipped a Question (${generated.reason}): ${generated.detail}`, { to: 'debug' })
+    return
+  }
+
+  await play($, { type: 'QUESTION_READY', question: generated.question, at: await $.clock.now() })
+  await showIfInView($)
+}
+
+/**
+ * Times the first Question from now when the Sage's pane is up and showing
+ * it: one that arrives while the Player looks at the dialogue box.
+ */
+async function showIfInView($: EngineInterface): Promise<void> {
+  const panes = await $.ui.panes().catch(() => [])
+  if (panes.some(pane => pane.id === SAGE.id && pane.isShown && pane.isPlaced)) {
+    await showFirstQuestion($)
+  }
+}
+
+/** Records that the Player has the Question Queue's first Question in front of them. */
+async function showFirstQuestion($: EngineInterface): Promise<void> {
+  const current = await read($, game)
+  const first = current?.questions[0]
+  if (current === null || current.lastAnswer !== null || first === undefined) {
+    return
+  }
+
+  await play($, { type: 'QUESTION_SHOWN', id: first.id, at: await $.clock.now() })
+}
+
+/** Answers Question `id` with option `choice`, now. */
+async function answer($: EngineInterface, id: string, choice: number): Promise<void> {
+  await play($, { type: 'QUESTION_ANSWERED', id, choice, at: await $.clock.now() })
+}
+
+/** What the dialogue box's buttons do. */
+const sageActions = ($: EngineInterface): SageActions => ({
+  answer: (id, choice) => {
+    void answer($, id, choice)
+  },
+  dismiss: () => {
+    void play($, { type: 'ANSWER_DISMISSED' }).then(() => showFirstQuestion($))
+  },
+})
 
 /**
  * Opens the Scene, unasked, when one of `surfaces` draws its art. In the
@@ -146,6 +247,13 @@ async function play($: EngineInterface, event: GameEvent): Promise<void> {
         `Mana at ${effect.mana}%: the context will compact soon. Wrap up or start a fresh session.`,
       )
     }
+    if (effect.type === 'CODE_CHANGED') {
+      // Never awaited: the tool call that changed the code returns at once.
+      void askSage($, effect.changes).catch(() => undefined)
+    }
+    if (effect.type === 'QUESTION_QUEUED') {
+      $.ui.toast('The Sage has a Question for you: /sage')
+    }
     if (effect.type === 'BATTLE_WON') {
       const xp = effects.find(gained => gained.type === 'XP_GAINED' && gained.stat === 'strength')
       $.ui.toast(
@@ -193,6 +301,12 @@ export const register: Register = on => {
       .catch(() => undefined)
     await $.command
       .register({ name: 'scene', description: 'Open the Scene: the current Encounter, played' })
+      .catch(() => undefined)
+    await $.command
+      .register({
+        name: 'sage',
+        description: 'Answer the Sage\'s Questions; /sage A-D answers the first one',
+      })
       .catch(() => undefined)
 
     await openSceneForArt($, await $.session.surfaces().catch(() => []))
@@ -246,6 +360,40 @@ export const register: Register = on => {
     }
   })
 
+  // /sage opens the dialogue box and tells the first Question as text, for
+  // the terminal; /sage A to D answers it.
+  on('command.run', { command: 'sage' }, async ($, e) => {
+    const choice = e.args.trim() === '' ? undefined : choiceOf(e.args)
+    const current = await read($, game)
+    const first = current?.questions[0]
+
+    if (e.args.trim() !== '' && choice === undefined) {
+      return { text: 'Answer with /sage A, B, C or D.' }
+    }
+
+    if (first === undefined) {
+      await $.ui.open(SAGE).catch(() => undefined)
+
+      return { text: NO_QUESTION }
+    }
+
+    if (choice !== undefined) {
+      await answer($, first.id, choice)
+      const answered = (await read($, game))?.lastAnswer
+
+      return { text: answered == null ? 'The Sage did not hear that answer.' : answerText(answered) }
+    }
+
+    // An explanation still showing is put away: the Player asked for a Question.
+    if (current?.lastAnswer != null) {
+      await play($, { type: 'ANSWER_DISMISSED' })
+    }
+    await $.ui.open(SAGE).catch(() => undefined)
+    await showFirstQuestion($)
+
+    return { text: questionText(first, current?.questions.length ?? 1) }
+  })
+
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
     await openSceneForArt($, [e.surface])
@@ -284,6 +432,17 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: SCENE.id }, async ($, e) =>
     drawScene($, e, (await read($, game))?.encounter ?? null),
   )
+
+  on('ui.render', { component: 'Pane', requestId: SAGE.id }, async ($, e) => {
+    const current = await read($, game)
+
+    return drawSage(
+      $,
+      e,
+      { questions: current?.questions ?? [], lastAnswer: current?.lastAnswer ?? null },
+      sageActions($),
+    )
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, game)
