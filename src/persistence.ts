@@ -175,6 +175,21 @@ function changeQuests(
   return changeRegion($, region => ({ ...region, quests: change(region.quests) }))
 }
 
+const isRecord = (value: unknown): value is QuestRecord =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as QuestRecord).ticket === 'string' &&
+  typeof (value as QuestRecord).startedAt === 'string' &&
+  typeof (value as QuestRecord).status === 'string'
+
+/**
+ * The runs of `ticket`'s Quest a Region file's JSON (readRegionFile's value)
+ * records, oldest first, as the Quest Log shows them; none when it holds no
+ * Region.
+ */
+export const recordsOf = (region: unknown, ticket: string): QuestRecord[] =>
+  isRegion(region) ? region.quests.filter(isRecord).filter(record => record.ticket === ticket) : []
+
 /** The `$.store` key the Player keeps a project's discovered Modules under. */
 export const discoveredKey = (root: string): string =>
   `discovered:${root.replace(/\\/g, '/').replace(/(.)\/+$/, '$1')}`

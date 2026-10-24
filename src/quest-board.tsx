@@ -6,7 +6,7 @@
 // Quest (the caller's: it fills the prompt with an implement command for the
 // ticket) and Unroll or Roll up.
 
-import type { EngineInterface, RenderInput } from 'claude-code'
+import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 
 import { questXp } from './engine'
 import type { Player } from './engine'
@@ -30,6 +30,8 @@ export type QuestBoardActions = {
   select: (ticket: string | null) => void
   /** Show this page, from 0. */
   page: (page: number) => void
+  /** Open the Quest Log for this ticket. */
+  readMore: (ticket: string) => void
 }
 
 /** How many cards a page of the board shows. */
@@ -92,8 +94,8 @@ const describeCard = (quest: QuestCard): string =>
 const hasStatus = (quest: QuestCard, value: string): boolean =>
   quest.status === value || (quest.tags ?? []).includes(value)
 
-/** What to do about each kind of problem, one line under its message. */
-const PROBLEM_HINT: Record<QuestSourceProblem['kind'], string> = {
+/** What to do about each kind of problem, one line under its message; the Quest Log's too. */
+export const PROBLEM_HINT: Record<QuestSourceProblem['kind'], string> = {
   missing: 'Once it is installed or connected, press Refresh.',
   unauthenticated: 'Once signed in, press Refresh.',
   misconfigured: `Fix questSource in ${REGION_FILE}: { "kind": "github" }, or { "kind": "jira", "project": "KEY" }, then Refresh.`,
@@ -134,12 +136,24 @@ const pipsOf = (difficulty: Difficulty): string =>
 /** A run of a text scroll's row, in its colour. */
 type TextRun = { text: string; color: string }
 
+/** How an unrolled text scroll is drawn: its title in up to `titleLines` rows, an `excerpt` under it, `extra` rows after its details. */
+type TextScrollOptions = { titleLines?: number; excerpt?: string; extra?: readonly string[] }
+
+/** The most rows an excerpt of the description takes on an unrolled text scroll. */
+const EXCERPT_ROWS = 8
+
 /**
  * A card as the terminal's text scroll: a roller (`◖═══◗`), rows of paper
  * (`│ … │`), a roller. Rolled, one row: the ticket and title, cut to fit,
- * and the pips; unrolled, the whole card. `width` cells in all.
+ * and the pips; unrolled, the whole card, with the excerpt of its
+ * description when given. `width` cells in all.
  */
-const textScroll = (quest: QuestCard, unrolled: boolean, width: number): { roller: string; rows: TextRun[][] } => {
+const textScroll = (
+  quest: QuestCard,
+  unrolled: boolean,
+  width: number,
+  { titleLines = 3, excerpt, extra = [] }: TextScrollOptions = {},
+): { roller: string; rows: TextRun[][] } => {
   const inner = Math.max(width - 4, 8)
   const pips = pipsOf(quest.difficulty)
   const room = Math.max(inner - [...pips].length - 1, 1)
@@ -167,11 +181,57 @@ const textScroll = (quest: QuestCard, unrolled: boolean, width: number): { rolle
     roller,
     rows: [
       headRow(`Quest ${quest.ticket}`, ''),
-      ...wrapText(quest.title, inner, 3, CELLS).map(title => line(title)),
+      ...wrapText(quest.title, inner, titleLines, CELLS).map(title => line(title)),
+      ...(excerpt === undefined || excerpt === '' ? [] : wrapText(excerpt, inner, EXCERPT_ROWS, CELLS).map(row => line(row, edge))),
       line('┄'.repeat(inner), edge),
-      ...cardDetails(quest, questXp(quest.difficulty)).map((detail, at) => line(detail, at === 0 ? ticket : ink)),
+      ...[...cardDetails(quest, questXp(quest.difficulty)), ...extra].map((detail, at) => line(detail, at === 0 ? ticket : ink)),
     ],
   }
+}
+
+/** A text scroll drawn: its rollers and its rows of paper, each a Text. */
+function textScrollElement(
+  { Box, Text }: Pick<ReturnType<EngineInterface['ui']['resolve']>, 'Box' | 'Text'>,
+  { roller, rows }: { roller: string; rows: TextRun[][] },
+  children?: RenderChildren,
+) {
+  const { edgeDark, paper } = SCROLL_COLORS
+
+  return (
+    <Box flexDirection="column">
+      <Text color={edgeDark}>{roller}</Text>
+      {rows.map((runs, row) => (
+        <Text key={`row:${row}`}>
+          <Text color={edgeDark}>│</Text>
+          <Text backgroundColor={paper}> </Text>
+          {runs.map((run, at) => (
+            <Text key={`run:${at}`} backgroundColor={paper} color={run.color}>
+              {run.text}
+            </Text>
+          ))}
+          <Text backgroundColor={paper}> </Text>
+          <Text color={edgeDark}>│</Text>
+        </Text>
+      ))}
+      <Text color={edgeDark}>{roller}</Text>
+      {children}
+    </Box>
+  )
+}
+
+/**
+ * A card unrolled as the terminal's text scroll, `width` cells across: the
+ * Quest Log's, its title in up to `titleLines` rows and `extra` rows after
+ * its details.
+ */
+export function drawTextScroll(
+  $: EngineInterface,
+  e: RenderInput<'Pane'>,
+  quest: QuestCard,
+  width: number,
+  options: TextScrollOptions = {},
+) {
+  return textScrollElement($.ui.resolve(e), textScroll(quest, true, width, options))
 }
 
 export function drawQuestBoard(
@@ -180,6 +240,11 @@ export function drawQuestBoard(
   board: QuestBoard,
   actions: QuestBoardActions,
   player: Player | null = null,
+  /**
+   * What the unrolled card says of its description under its title: the
+   * excerpt, or that it is being fetched; absent, nothing.
+   */
+  excerpt?: string,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text, Button } = elements
@@ -280,14 +345,24 @@ export function drawQuestBoard(
         <Button key={`scroll:${quest.ticket}`} onPress={() => actions.select(unrolled ? null : quest.ticket)}>
           {unrolled ? 'Roll up' : 'Unroll'}
         </Button>
+        {unrolled && (
+          <Button key={`log:${quest.ticket}`} onPress={() => actions.readMore(quest.ticket)}>
+            Read more
+          </Button>
+        )}
       </Box>
     )
+    const shownExcerpt = unrolled ? excerpt : undefined
 
     if (Svg !== undefined) {
       return (
         <Box key={`card:${quest.ticket}`} flexDirection="column">
           <Svg
-            source={scrollCardSvg(quest, { unrolled, xp: questXp(quest.difficulty) })}
+            source={scrollCardSvg(quest, {
+              unrolled,
+              xp: questXp(quest.difficulty),
+              ...(shownExcerpt === undefined ? {} : { excerpt: shownExcerpt }),
+            })}
             alt={describeCard(quest)}
             width={SCROLL_WIDTH}
             {...(unrolled ? { isInteractive: true } : {})}
@@ -297,27 +372,11 @@ export function drawQuestBoard(
       )
     }
 
-    const { roller, rows } = textScroll(quest, unrolled, frameWidth)
-    const { edgeDark, paper } = SCROLL_COLORS
+    const scroll = textScroll(quest, unrolled, frameWidth, shownExcerpt === undefined ? {} : { excerpt: shownExcerpt })
 
     return (
       <Box key={`card:${quest.ticket}`} flexDirection="column">
-        <Text color={edgeDark}>{roller}</Text>
-        {rows.map((runs, row) => (
-          <Text key={`row:${row}`}>
-            <Text color={edgeDark}>│</Text>
-            <Text backgroundColor={paper}> </Text>
-            {runs.map((run, at) => (
-              <Text key={`run:${at}`} backgroundColor={paper} color={run.color}>
-                {run.text}
-              </Text>
-            ))}
-            <Text backgroundColor={paper}> </Text>
-            <Text color={edgeDark}>│</Text>
-          </Text>
-        ))}
-        <Text color={edgeDark}>{roller}</Text>
-        {buttons}
+        {textScrollElement(elements, scroll, buttons)}
       </Box>
     )
   }

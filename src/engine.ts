@@ -1230,9 +1230,14 @@ const answerQuestion = (
     ? paid.state
     : { ...paid.state, player: { ...player, tally: { ...player.tally, sageRight: player.tally.sageRight + 1 } } }
   const awarded = award(tallied, {}, at)
+  const { quest } = awarded.state
 
   return {
-    state: { ...awarded.state, lastAnswer: answer },
+    state: {
+      ...awarded.state,
+      quest: quest === null ? null : { ...quest, sageRight: (quest.sageRight ?? 0) + 1 },
+      lastAnswer: answer,
+    },
     effects: [{ type: 'QUESTION_ANSWERED', answer }, ...paid.effects, ...awarded.effects],
   }
 }
@@ -1549,3 +1554,90 @@ const closedState = (
           ...(trophy === undefined ? {} : { trophy: trophy.name }),
         },
 })
+
+/**
+ * The Boss Fight as the Quest Log tells it: none yet, approaching (its
+ * Questions being made), fighting (its HP and the Questions left), or how it
+ * ended, once its Quest closed.
+ */
+export type BossProgress =
+  | { status: 'none' }
+  | { status: 'approaching' }
+  | { status: 'fighting'; hp: number; maxHp: number; questionsLeft: number }
+  | { status: QuestOutcome }
+
+/** One XP pool as the Quest Log tells it: what the Quest paid into it, against its cap. */
+export type PoolProgress = { pool: XpPool; earned: number; cap: number; isFull: boolean }
+
+/**
+ * The active Quest's progress, as the Quest Log shows it: its Encounters so
+ * far (the Modules first discovered in it, in order, the items forged, the
+ * Battles won and those standing), its Sage Questions answered right and
+ * wrong and waiting, its Boss Fight, and the XP paid into each pool against
+ * the Quest's cap.
+ */
+export type QuestProgress = {
+  ticket: string
+  encounters: number
+  modulesDiscovered: string[]
+  itemsForged: string[]
+  battlesWon: number
+  battlesStanding: Pick<Battle, 'check' | 'foe' | 'hp' | 'maxHp'>[]
+  questions: { right: number; wrong: number; waiting: number }
+  boss: BossProgress
+  pools: PoolProgress[]
+}
+
+const POOLS: readonly XpPool[] = ['ambient', 'battle', 'sage']
+
+/** The Boss Fight of `ticket`'s Quest, as the Quest Log tells it. */
+const bossProgressOf = (fight: BossFight | null | undefined, ticket: string): BossProgress => {
+  if (fight == null || fight.ticket !== ticket) {
+    return { status: 'none' }
+  }
+  if (fight.status === 'summoned') {
+    return { status: 'approaching' }
+  }
+
+  return fight.status === 'fighting'
+    ? { status: 'fighting', hp: fight.hp, maxHp: fight.maxHp, questionsLeft: fight.questions.length }
+    : { status: fight.status }
+}
+
+/**
+ * The active Quest's progress, from the game alone; null between Quests.
+ * Deterministic: the same game, the same progress.
+ */
+export const questProgressOf = (state: GameState): QuestProgress | null => {
+  const { quest } = state
+  if (quest === null) {
+    return null
+  }
+
+  const pools = quest.pools ?? emptyPools()
+  const discovered = quest.encounters.flatMap(encounter =>
+    encounter.kind === 'Exploration' && encounter.isFirstVisit && encounter.module !== null ? [encounter.module] : [],
+  )
+  const forged = quest.encounters.flatMap(encounter => (encounter.kind === 'Crafting' ? [encounter.item] : []))
+
+  return {
+    ticket: quest.ticket,
+    encounters: quest.encounters.length,
+    modulesDiscovered: [...new Set(discovered)],
+    itemsForged: [...new Set(forged)],
+    battlesWon: quest.encounters.filter(encounter => encounter.kind === 'Battle' && encounter.outcome === 'won').length,
+    battlesStanding: state.battles.map(({ check, foe, hp, maxHp }) => ({ check, foe, hp, maxHp })),
+    questions: {
+      right: quest.sageRight ?? 0,
+      wrong: quest.sageWrong ?? 0,
+      waiting: state.questions.filter(question => question.npc === 'Sage').length,
+    },
+    boss: bossProgressOf(state.bossFight, quest.ticket),
+    pools: POOLS.map(pool => ({
+      pool,
+      earned: pools[pool],
+      cap: POOL_CAPS[pool],
+      isFull: pools[pool] >= POOL_CAPS[pool],
+    })),
+  }
+}

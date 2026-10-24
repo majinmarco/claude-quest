@@ -4,7 +4,7 @@
 // the terminal has the same box in text, Buttons included, and `/sage A`-`D`
 // answers there too.
 
-import type { EngineInterface, RenderInput } from 'claude-code'
+import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 
 import type { GameState, Question, QuestionAnswer } from '../types'
 import { QUESTION_XP, statOf } from './engine'
@@ -82,6 +82,8 @@ export function drawSage(
   e: RenderInput<'Pane'>,
   { questions, lastAnswer }: Pick<GameState, 'questions' | 'lastAnswer'>,
   actions: SageActions,
+  /** The active Quest's one-line header (src/quest-log.tsx drawQuestHeader), above the box; none between Quests. */
+  header: RenderChildren = null,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text, Button, Code } = elements
@@ -132,6 +134,7 @@ export function drawSage(
   if (e.surface === 'terminal' || !('Svg' in elements)) {
     return (
       <Box flexDirection="column" gap={1}>
+        {header}
         {heading}
         {body}
       </Box>
@@ -140,13 +143,22 @@ export function drawSage(
 
   const { Svg } = elements
 
-  return (
+  const box = (
     <Box flexDirection="row" gap={2}>
       <Svg source={portraitSvg('sage', PORTRAIT_WIDTH)} alt="The Sage" />
       <Box flexDirection="column" gap={1}>
         {heading}
         {body}
       </Box>
+    </Box>
+  )
+
+  return header === null ? (
+    box
+  ) : (
+    <Box flexDirection="column" gap={1}>
+      {header}
+      {box}
     </Box>
   )
 }

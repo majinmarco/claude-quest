@@ -487,7 +487,7 @@ const JIRA_URL = new RegExp(`^https?://\\S*/browse/${KEY}/?$`)
  * The ticket the arguments name, as its Quest Source writes it, or null. Only
  * the first word is read, so `/implement step 2 of the spec` names no ticket.
  */
-const ticketOf = (args: string): string | null => {
+export const ticketOf = (args: string): string | null => {
   const first = args.trim().split(/\s+/)[0] ?? ''
 
   const issue = GITHUB_ISSUE.exec(first) ?? GITHUB_ISSUE_URL.exec(first)

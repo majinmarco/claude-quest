@@ -240,6 +240,13 @@ describe('GitHub Issues adapter', () => {
     expect(result).toMatchObject({ ok: true, value: { summary: 'Orders of 10 or more.' } })
   })
 
+  test('an issue got by its reference keeps its body as Markdown, whole, as its description', async () => {
+    const body = '## Problem\n\nOrders of **10** or more get [10% off](https://example.com).\n\n- [ ] done'
+    const result = await githubIssues(fakeGh([{ ...issue([]), body }]).run).get('#7')
+
+    expect(result).toMatchObject({ ok: true, value: { description: body } })
+  })
+
   test('output gh did not write as JSON is unreachable, not a crash', async () => {
     const result = await githubIssues(async () => ran(0, 'not json')).list()
 

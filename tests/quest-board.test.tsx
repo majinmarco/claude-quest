@@ -981,7 +981,7 @@ describe('Quest Board: the started Quest\'s ticket is looked up', () => {
     await settle()
 
     expect(quest()).toMatchObject({ ticket: '#4', verified: 'unknown' })
-    expect(toasts).toEqual(['Quest started: #4'])
+    expect(toasts).toEqual(['Quest started: #4 · /quest for the brief'])
     expect(debug.some(line => line.includes('#4') && line.includes('error connecting to api.github.com'))).toBe(true)
   })
 

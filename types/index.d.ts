@@ -1,6 +1,8 @@
 // Claude Quest's contract: the game's data types, and the values the mod keeps
 // in `$.state` for the session.
 
+import type { StateFamily } from 'claude-code'
+
 export type Stats = {
   intelligence: number
   wisdom: number
@@ -213,6 +215,8 @@ export type Quest = {
   pools?: PoolCounters
   /** Wrong Sage answers during the Quest: any one spoils a Flawless win. */
   sageWrong?: number
+  /** Right Sage answers during the Quest, as the Quest Log counts them; absent until the first. */
+  sageRight?: number
   /** The ticket's title, as its Quest Source lists it; absent until known. */
   title?: string
   /**
@@ -504,9 +508,11 @@ export type QuestCard = {
 
 /**
  * One ticket as its Quest Source gets it by reference: its card, and its
- * description as plain text (`summary`), when it has one.
+ * description, when it has one: as plain text, cut for Haiku (`summary`), and
+ * whole (`description`: Markdown for GitHub Issues, plain text for Jira), as
+ * the Quest Log shows it.
  */
-export type TicketDetails = QuestCard & { summary?: string }
+export type TicketDetails = QuestCard & { summary?: string; description?: string }
 
 /** Why a Quest Source could not list its Quests. */
 export type QuestSourceProblem = {
@@ -550,11 +556,37 @@ export type QuestBoard = {
   page?: number
 }
 
+/**
+ * One ticket as the Quest Log and the Quest Board's Scroll fetched it from
+ * its Quest Source, once per ticket per session: `loading` while asked,
+ * `got` its details (null: no such ticket), `unavailable` the source could
+ * not be reached, its problem told (asked again on the next open).
+ */
+export type TicketFetch =
+  | { state: 'loading' }
+  | { state: 'got'; details: TicketDetails | null }
+  | { state: 'unavailable'; problem: QuestSourceProblem }
+
+/**
+ * The Quest Log pane: the ticket it shows (null before it was first opened),
+ * and the Region file's records of that ticket, read as it opened.
+ */
+export type QuestLog = { ticket: string | null; history: QuestRecord[] }
+
+/** The Quest Giver's briefing of a ticket, as its Briefing writes it for the Quest Log. */
+export type QuestBriefing = { text: string }
+
 declare module 'claude-code' {
   interface PluginState {
     'quest-mod': {
       game: GameState | null
       board: QuestBoard
+      /** The Quest Log pane: the ticket shown, its Region file history. */
+      questLog: QuestLog
+      /** Each ticket's details fetched this session, by ticket (`#21`, `ABC-123`): see TicketFetch. */
+      ticketDetails: StateFamily<TicketFetch>
+      /** The Quest Giver's briefing, by ticket; written by the Briefing (#19), read by the Quest Log. */
+      briefing: StateFamily<QuestBriefing>
       /** Questions made, by their change's hash: see src/question-cache.ts. */
       questionCache: { key: string; question: QuestionContent }[]
       /** Whether the Scene opened itself this session: once at most. */

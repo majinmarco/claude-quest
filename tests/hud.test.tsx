@@ -415,9 +415,9 @@ describe('Quests', () => {
     await implement($, '#5')
 
     expect(toasts).toEqual([
-      'Quest started: #4',
+      'Quest started: #4 · /quest for the brief',
       'Quest abandoned: #4',
-      'Quest started: #5',
+      'Quest started: #5 · /quest for the brief',
     ])
     expect(JSON.parse(files.get(REGION) ?? 'null')).toEqual({
       quests: [
