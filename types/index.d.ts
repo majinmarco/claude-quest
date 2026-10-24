@@ -522,7 +522,10 @@ export type QuestSourceProblem = {
   message: string
 }
 
-/** What the Quest Board shows: its Quests as last listed, and its filters. */
+/**
+ * What the Quest Board shows: its Quests as last listed, its filters, the
+ * card unrolled and the page shown.
+ */
 export type QuestBoard = {
   listing:
     | { state: 'loading' }
@@ -535,6 +538,16 @@ export type QuestBoard = {
     | { state: 'unavailable'; problem: QuestSourceProblem }
   /** null shows every status, or every difficulty. */
   filters: { status: string | null; difficulty: Difficulty | null }
+  /**
+   * The ticket whose card is unrolled; null when every card is rolled, as is
+   * a ticket no longer listed. Absent in a board kept by an older mod.
+   */
+  selected?: string | null
+  /**
+   * The page shown, from 0; a filter changed goes back to 0, and a page past
+   * the last shows the last. Absent in a board kept by an older mod.
+   */
+  page?: number
 }
 
 declare module 'claude-code' {

@@ -57,8 +57,12 @@ Where Quests come from: a Jira project or a repo's GitHub Issues, as the Region 
 _Avoid_: Tracker, backlog, provider
 
 **Quest Board**:
-The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, its difficulty, Quest reward, recommended Stats, status and tags, under a header of the Player's trophies and Badges. Picking a card fills the prompt with the session's implement command, never over a draft the Player is writing. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
+The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, each a Scroll, six to a page, under a red ribbon and a header of the Player's trophies and Badges. Take Quest on a card fills the prompt with the session's implement command in one click, never over a draft the Player is writing; Unroll beside it opens the Scroll. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
 _Avoid_: Ticket list, backlog view
+
+**Scroll**:
+A Quest card as the Quest Board draws it: pixel art where the surface draws SVG (Kenney's UI Pack rollers and gems, lettered in Kenney Mini), a frame of text in the terminal (`◖═══◗` rollers, `│ … │` paper, `◆◇` pips). Rolled, it shows the ticket, the title cut to fit and the difficulty as five gems (Unrated: none filled, and a `?`); unrolled, the title whole (up to three lines), the Quest reward, recommended Stats, status and tags. One Scroll is unrolled at a time; it unrolls once, animated, as it opens.
+_Avoid_: Card art, tile
 
 **Tag**:
 A ticket's triage label (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), shown on its Quest card beside its status; the Quest Board's status filter steps through statuses and tags alike. A GitHub issue, which has no status of its own, takes its first as its status.
@@ -101,7 +105,7 @@ The code-review challenge that ends a Quest, built from the Quest's actual diff:
 _Avoid_: Final review, boss battle
 
 **Quest reward**:
-The XP a Quest's Boss Fight won pays, by its ticket's difficulty alone (Trivial 40 to Epic 180, Unrated 80), shown on its Quest card, scaled down when fewer than three Questions could be made; half again when Flawless (every Boss answer right, finishing blows included, and no wrong Sage answer in the Quest). Paid once per Region and ticket, and never for a ticket its Quest Source did not find.
+The XP a Quest's Boss Fight won pays, by its ticket's difficulty alone (Trivial 40 to Epic 180, Unrated 80), shown on its Quest card, scaled down when fewer than three Questions could be made; half again when Flawless (every Boss answer right, finishing blows included, and no wrong Sage answer in the Quest). Paid once per Region and ticket, and never for a ticket its Quest Source did not find: such a Quest earns no Badge and counts for nothing toward the tally or the Boss streak either.
 _Avoid_: Bounty, Quest XP
 
 **Badge**:

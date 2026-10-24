@@ -1,8 +1,10 @@
 // The Quest Board pane: the current Region's open Quests as cards, with
 // filters by status (and tag) and difficulty, under a header of the Player's
-// trophies and Badges. Plain text and buttons on every surface, so the
-// terminal's board is the desktop's. A card's press is the caller's: it fills
-// the prompt with an implement command for the ticket.
+// trophies and Badges, six cards a page. Each card is a scroll: pixel art
+// where the surface draws SVG (src/scroll-art.ts), a scroll framed in text in
+// the terminal; rolled, or unrolled to show the whole card. Under each, Take
+// Quest (the caller's: it fills the prompt with an implement command for the
+// ticket) and Unroll or Roll up.
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
@@ -10,8 +12,10 @@ import { questXp } from './engine'
 import type { Player } from './engine'
 import { REGION_FILE } from './persistence'
 import { LISTING_CAP } from './quest-source'
+import { boardHeaderSvg, cardDetails, cutText, PIPS, SCROLL_COLORS, SCROLL_WIDTH, scrollCardSvg, STAT_ABBREVIATION, tagsOf, wrapText } from './scroll-art'
+import type { Measure } from './scroll-art'
 import { isImplementCommand } from './translate'
-import type { Difficulty, QuestBoard, QuestCard, QuestSourceProblem, QuestSourceSetting, StatName } from '../types'
+import type { Difficulty, QuestBoard, QuestCard, QuestSourceProblem, QuestSourceSetting } from '../types'
 
 export type QuestBoardActions = {
   /** The Player picked this Quest. */
@@ -22,7 +26,14 @@ export type QuestBoardActions = {
   filterDifficulty: (difficulty: Difficulty | null) => void
   /** Read the Quest Source again. */
   refresh: () => void
+  /** Unroll this ticket's card, rolling any other; or roll every card (null). */
+  select: (ticket: string | null) => void
+  /** Show this page, from 0. */
+  page: (page: number) => void
 }
+
+/** How many cards a page of the board shows. */
+export const PAGE_SIZE = 6
 
 /** The implement command the Quest Board fills when it is there. */
 export const PREFERRED_IMPLEMENT = 'mattpocock-skills:implement'
@@ -49,15 +60,6 @@ export const noFilters = (): QuestBoard['filters'] => ({ status: null, difficult
 
 const DIFFICULTIES: Difficulty[] = ['Trivial', 'Easy', 'Medium', 'Hard', 'Epic', 'Unrated']
 
-const STAT_ABBREVIATION: Record<StatName, string> = {
-  intelligence: 'INT',
-  wisdom: 'WIS',
-  dexterity: 'DEX',
-  strength: 'STR',
-  charisma: 'CHA',
-  constitution: 'CON',
-}
-
 /**
  * The filter's value after `current`, among the values the listing holds;
  * after the last, every value again (null). A value no longer listed goes
@@ -75,11 +77,10 @@ const nextFilter = <T,>(values: readonly T[], current: T | null): T | null => {
 
 const distinct = <T,>(values: readonly T[]): T[] => [...new Set(values)]
 
-/** A card's tags beside its status, the status itself left out. */
-const tagsOf = (quest: QuestCard): string[] => (quest.tags ?? []).filter(tag => tag !== quest.status)
-
+/** A card in one line, as its scroll's alt says it: its ticket and title, then what the scroll shows. */
 const describeCard = (quest: QuestCard): string =>
   [
+    `${quest.ticket} ${quest.title}`,
     quest.difficulty,
     `Boss: +${questXp(quest.difficulty)} XP`,
     quest.recommendedStats.map(stat => STAT_ABBREVIATION[stat]).join(' '),
@@ -116,15 +117,91 @@ const ratingHint = (source: QuestSourceSetting | undefined): string => {
 const headerOf = (player: Player | null): string =>
   `Trophies ${player?.trophies?.length ?? 0} · ★${player?.badges?.length ?? 0}`
 
+/** The terminal's measure: a cell a character, `…` its cut. */
+const CELLS: Measure = { width: text => [...text].length, ellipsis: '…' }
+
+/** The terminal's scroll is as wide as the pane, up to this many cells. */
+const FRAME_MAX = 64
+
+/** The header's ribbon, drawn once: its label never changes. */
+let headerArt: string | undefined
+const headerArtOf = (): string => (headerArt ??= boardHeaderSvg('QUEST BOARD'))
+
+/** The difficulty as five pips, `◆` filled; Unrated fills none and says `?`. */
+const pipsOf = (difficulty: Difficulty): string =>
+  `${difficulty === 'Unrated' ? '?' : ''}${'◆'.repeat(PIPS[difficulty])}${'◇'.repeat(5 - PIPS[difficulty])}`
+
+/** A run of a text scroll's row, in its colour. */
+type TextRun = { text: string; color: string }
+
+/**
+ * A card as the terminal's text scroll: a roller (`◖═══◗`), rows of paper
+ * (`│ … │`), a roller. Rolled, one row: the ticket and title, cut to fit,
+ * and the pips; unrolled, the whole card. `width` cells in all.
+ */
+const textScroll = (quest: QuestCard, unrolled: boolean, width: number): { roller: string; rows: TextRun[][] } => {
+  const inner = Math.max(width - 4, 8)
+  const pips = pipsOf(quest.difficulty)
+  const room = Math.max(inner - [...pips].length - 1, 1)
+  const pad = (text: string, cells: number) => text + ' '.repeat(Math.max(cells - [...text].length, 0))
+  const { ink, ticket, edge } = SCROLL_COLORS
+  const headRow = (lead: string, rest: string): TextRun[] => {
+    const head = cutText(`${lead}${rest}`, room, CELLS)
+    const isLeadWhole = head.startsWith(lead)
+
+    return [
+      { text: isLeadWhole ? lead : head, color: ticket },
+      { text: isLeadWhole ? pad(head.slice(lead.length), room - [...lead].length) : pad('', room - [...head].length), color: ink },
+      { text: ` ${pips}`, color: edge },
+    ]
+  }
+  const roller = `◖${'═'.repeat(inner + 2)}◗`
+
+  if (!unrolled) {
+    return { roller, rows: [headRow(`${quest.ticket} `, quest.title)] }
+  }
+
+  const line = (text: string, color: string = ink): TextRun[] => [{ text: pad(cutText(text, inner, CELLS), inner), color }]
+
+  return {
+    roller,
+    rows: [
+      headRow(`Quest ${quest.ticket}`, ''),
+      ...wrapText(quest.title, inner, 3, CELLS).map(title => line(title)),
+      line('┄'.repeat(inner), edge),
+      ...cardDetails(quest, questXp(quest.difficulty)).map((detail, at) => line(detail, at === 0 ? ticket : ink)),
+    ],
+  }
+}
+
 export function drawQuestBoard(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
-  { listing, filters }: QuestBoard,
+  board: QuestBoard,
   actions: QuestBoardActions,
   player: Player | null = null,
 ) {
-  const { Box, Text, Button } = $.ui.resolve(e)
-  const header = <Text color="yellow">{headerOf(player)}</Text>
+  const elements = $.ui.resolve(e)
+  const { Box, Text, Button } = elements
+  const { listing, filters } = board
+  // The terminal's table lists Svg too, as a fragment: it draws no SVG.
+  const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
+  const frameWidth = Math.min(e.props.bodyColumns, FRAME_MAX)
+  const bannerLabel = ' ✦ QUEST BOARD ✦ '
+  const bannerSide = Math.max(Math.floor((frameWidth - [...bannerLabel].length) / 2), 0)
+
+  const header = (
+    <Box flexDirection="column">
+      <Text color="yellow">{headerOf(player)}</Text>
+      {Svg === undefined ? (
+        <Text bold color={SCROLL_COLORS.ribbon}>
+          {`${'═'.repeat(bannerSide)}${bannerLabel}${'═'.repeat(bannerSide)}`}
+        </Text>
+      ) : (
+        <Svg source={headerArtOf()} alt="Quest Board" width={SCROLL_WIDTH} />
+      )}
+    </Box>
+  )
 
   const refresh = (
     <Button key="refresh" dimColor onPress={() => actions.refresh()}>
@@ -187,6 +264,63 @@ export function drawQuestBoard(
   const isUnrated = quests.every(quest => quest.difficulty === 'Unrated')
   // A listing as long as the cap may have been cut short.
   const total = quests.length >= LISTING_CAP ? `${quests.length}+` : `${quests.length}`
+  // A page past the last (the listing shrank) shows the last; a ticket no
+  // longer listed is no card to unroll.
+  const pages = Math.max(Math.ceil(shown.length / PAGE_SIZE), 1)
+  const page = Math.min(Math.max(board.page ?? 0, 0), pages - 1)
+  const selected = quests.some(quest => quest.ticket === board.selected) ? board.selected : null
+
+  const cardOf = (quest: QuestCard) => {
+    const unrolled = quest.ticket === selected
+    const buttons = (
+      <Box flexDirection="row" gap={1}>
+        <Button key={`quest:${quest.ticket}`} variant="primary" onPress={() => actions.pick(quest)}>
+          {`Take Quest ${quest.ticket}`}
+        </Button>
+        <Button key={`scroll:${quest.ticket}`} onPress={() => actions.select(unrolled ? null : quest.ticket)}>
+          {unrolled ? 'Roll up' : 'Unroll'}
+        </Button>
+      </Box>
+    )
+
+    if (Svg !== undefined) {
+      return (
+        <Box key={`card:${quest.ticket}`} flexDirection="column">
+          <Svg
+            source={scrollCardSvg(quest, { unrolled, xp: questXp(quest.difficulty) })}
+            alt={describeCard(quest)}
+            width={SCROLL_WIDTH}
+            {...(unrolled ? { isInteractive: true } : {})}
+          />
+          {buttons}
+        </Box>
+      )
+    }
+
+    const { roller, rows } = textScroll(quest, unrolled, frameWidth)
+    const { edgeDark, paper } = SCROLL_COLORS
+
+    return (
+      <Box key={`card:${quest.ticket}`} flexDirection="column">
+        <Text color={edgeDark}>{roller}</Text>
+        {rows.map((runs, row) => (
+          <Text key={`row:${row}`}>
+            <Text color={edgeDark}>│</Text>
+            <Text backgroundColor={paper}> </Text>
+            {runs.map((run, at) => (
+              <Text key={`run:${at}`} backgroundColor={paper} color={run.color}>
+                {run.text}
+              </Text>
+            ))}
+            <Text backgroundColor={paper}> </Text>
+            <Text color={edgeDark}>│</Text>
+          </Text>
+        ))}
+        <Text color={edgeDark}>{roller}</Text>
+        {buttons}
+      </Box>
+    )
+  }
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -213,14 +347,22 @@ export function drawQuestBoard(
       <Text dimColor>{`${shown.length} of ${total} Quests`}</Text>
       {isUnrated && <Text dimColor>{ratingHint(listing.source)}</Text>}
       {shown.length === 0 && <Text dimColor>No Quests match these filters.</Text>}
-      {shown.map(quest => (
-        <Box key={`card:${quest.ticket}`} flexDirection="column">
-          <Button key={`quest:${quest.ticket}`} plain onPress={() => actions.pick(quest)}>
-            {`${quest.ticket} ${quest.title}`}
-          </Button>
-          <Text dimColor>{describeCard(quest)}</Text>
+      {shown.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map(cardOf)}
+      {pages > 1 && (
+        <Box flexDirection="row" gap={1}>
+          {page > 0 && (
+            <Button key="page-prev" onPress={() => actions.page(page - 1)}>
+              ◂ Prev
+            </Button>
+          )}
+          <Text dimColor>{`Page ${page + 1} of ${pages}`}</Text>
+          {page < pages - 1 && (
+            <Button key="page-next" onPress={() => actions.page(page + 1)}>
+              Next ▸
+            </Button>
+          )}
         </Box>
-      ))}
+      )}
     </Box>
   )
 }

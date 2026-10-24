@@ -1451,7 +1451,8 @@ const isConsoled = (player: Player, region: string | null, ticket: string): bool
 // unfought, it pays UNFOUGHT_SHARE of the reward, once per (Region, ticket)
 // and never after a win; lost or skipped, nothing. A ticket its Quest Source
 // did not find (`verified` not-found) pays no reward and earns no trophy: the
-// answers' XP is all it earns. The tally and Badges follow. The Boss
+// answers' XP is all it earns, and the tally, Boss streak and Badges stay
+// as they were. Otherwise the tally and Badges follow. The Boss
 // Fight stays, ended, until the next Quest starts; the Encounter under way is
 // put away, so the Scene shows how the Quest ended until the next Encounter.
 // The Battles under way are cleared, paying nothing: the Quest's work is done.
@@ -1497,6 +1498,12 @@ const closeQuest = (
     effects.push(...earned.effects)
   }
 
+  // A ticket its Quest Source did not find counts for nothing: the tally,
+  // the Boss streak and the Badges stay as they were.
+  if (state.quest?.verified === 'not-found') {
+    return { state: closedState(played, fight, outcome, reward, flawless, trophy), effects: [...effects, { type: 'QUEST_CLOSED', ticket, outcome }] }
+  }
+
   const { tally } = played.player
   const counts = outcome !== 'skipped'
   const tallied: Tally = {
@@ -1513,22 +1520,32 @@ const closeQuest = (
   )
 
   return {
-    state: {
-      ...awarded.state,
-      quest: null,
-      encounter: null,
-      battles: [],
-      bossFight:
-        fight === null
-          ? null
-          : {
-              ...fight,
-              status: outcome,
-              reward,
-              ...(outcome === 'won' ? { flawless } : {}),
-              ...(trophy === undefined ? {} : { trophy: trophy.name }),
-            },
-    },
+    state: closedState(awarded.state, fight, outcome, reward, flawless, trophy),
     effects: [...effects, ...awarded.effects, { type: 'QUEST_CLOSED', ticket, outcome }],
   }
 }
+
+/** The game once its Quest closed: no Quest, Encounter or Battle; the Boss Fight ended. */
+const closedState = (
+  state: GameState,
+  fight: BossFight | null,
+  outcome: QuestOutcome,
+  reward: number,
+  flawless: boolean,
+  trophy: Trophy | undefined,
+): GameState => ({
+  ...state,
+  quest: null,
+  encounter: null,
+  battles: [],
+  bossFight:
+    fight === null
+      ? null
+      : {
+          ...fight,
+          status: outcome,
+          reward,
+          ...(outcome === 'won' ? { flawless } : {}),
+          ...(trophy === undefined ? {} : { trophy: trophy.name }),
+        },
+})

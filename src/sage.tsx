@@ -128,7 +128,8 @@ export function drawSage(
     </Text>
   )
 
-  if (!('Svg' in elements)) {
+  // The terminal's table lists Svg too, as a fragment: it draws no SVG.
+  if (e.surface === 'terminal' || !('Svg' in elements)) {
     return (
       <Box flexDirection="column" gap={1}>
         {heading}

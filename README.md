@@ -8,7 +8,7 @@ The vision is in [`docs/vision.md`](docs/vision.md), the words the game uses in 
 
 | Command | What it does |
 |---|---|
-| `/quest-board` | Opens the Quest Board: the Region's open tickets as Quest cards. Picking one fills the prompt with your implement command; you send it. |
+| `/quest-board` | Opens the Quest Board: the Region's open tickets as Quest cards, drawn as pixel scrolls (a text scroll in the terminal), six a page. Take Quest fills the prompt with your implement command; you send it. Unroll opens a card's details. |
 | `/scene` | Opens the Scene: the current Encounter, as pixel art on the desktop and one line in the terminal. |
 | `/sage` | Shows the Sage's first waiting Question; `/sage A` to `/sage D` answers it. |
 | `/boss` | Shows the Boss Fight's Question; `/boss A` to `/boss D` answers, `/boss skip` skips the fight. |
@@ -65,4 +65,6 @@ Your Player (level, XP, Badges, trophies, the Modules you've discovered) is kept
 
 ## Credits
 
-The pixel art is Kenney's Tiny Dungeon (CC0). See [`assets/CREDITS.md`](assets/CREDITS.md).
+The pixel art is Kenney's (all CC0): Tiny Dungeon for the Scene and the portraits, UI Pack – Pixel Adventure for the Quest Board's scrolls, and the Kenney Mini font for their lettering. See [`assets/CREDITS.md`](assets/CREDITS.md).
+
+The art is baked into TypeScript, so nothing decodes a PNG or loads a font while a session runs: `node scripts/build-sprites.mjs` writes `src/sprites.ts` from the tilesheets, `node scripts/build-font.mjs` writes `src/pixel-font.ts` from the font. `node scripts/render-art.mjs <dir>` renders the Scene, the Boss Fight, the portraits and a sample Quest Board to SVG files (and the board as `board.html`) for a look; `--snapshot` writes the scroll art's test snapshot again after a deliberate change.

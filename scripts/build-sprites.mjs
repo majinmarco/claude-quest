@@ -1,45 +1,70 @@
-// Builds src/sprites.ts, the Scene's sprites as pixel data, from the bundled
-// Kenney Tiny Dungeon tilesheet (CC0; see assets/CREDITS.md):
+// Builds src/sprites.ts, the sprites the mod draws as pixel data, from the
+// bundled Kenney tilesheets (CC0; see assets/CREDITS.md): Tiny Dungeon for the
+// Scene, UI Pack – Pixel Adventure for the Quest Board's scrolls:
 //
 //   node scripts/build-sprites.mjs
 //
-// The mod draws its Scene as SVG, so it needs pixels rather than a PNG: this
-// decodes the sheet once, here, so nothing decodes a PNG while a session runs.
-// Only Node's own zlib is used. Change SPRITES to pick other tiles.
+// The mod draws its art as SVG, so it needs pixels rather than a PNG: this
+// decodes the sheets once, here, so nothing decodes a PNG while a session
+// runs. Only Node's own zlib is used. Change SPRITES to pick other tiles.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { inflateSync } from 'node:zlib'
 
-const SHEET = new URL('../assets/kenney-tiny-dungeon/tilemap_packed.png', import.meta.url)
 const OUT = new URL('../src/sprites.ts', import.meta.url)
 
-/** The sheet: 12 tiles a row, 16 px square, no spacing (Tilesheet.txt). */
+/** A tile is 16 px square on every sheet, packed with no spacing. */
 const TILE = 16
-const COLUMNS = 12
 
-/** The tiles the Scene draws, by name, as their index on the sheet. */
+/** The sheets, each with its own count of tiles a row (its Tilesheet.txt). */
+const SHEETS = {
+  dungeon: { file: '../assets/kenney-tiny-dungeon/tilemap_packed.png', columns: 12, name: 'the sheet' },
+  ui: { file: '../assets/kenney-ui-pixel-adventure/tilemap_packed.png', columns: 23, name: 'the Pixel Adventure sheet' },
+}
+
+/** Turns a tile on its side: its columns become rows. */
+const transpose = rows => rows[0].map((_, x) => rows.map(row => row[x]))
+
+/** Cuts the `height` rows from `top`, and the `width` columns from `left`. */
+const crop = (left, top, width, height) => rows =>
+  rows.slice(top, top + height).map(row => row.slice(left, left + width))
+
+/**
+ * The tiles drawn, by name: their sheet, their index on it, and how the tile
+ * is cut or turned before it is drawn (`how` says so in the generated file).
+ */
 const SPRITES = {
-  wall: 40,
-  banner: 29,
-  floor: 48,
-  floorSpeckled: 49,
-  floorStones: 42,
-  hero: 97,
-  chest: 89,
-  chestOpen: 91,
-  spider: 122,
-  slime: 108,
-  ghost: 121,
-  blacksmith: 86,
-  anvil: 74,
-  hammer: 117,
-  sword: 104,
-  shield: 102,
-  axe: 118,
-  dagger: 103,
-  staff: 129,
-  sage: 84,
-  boss: 110,
+  wall: { sheet: 'dungeon', index: 40 },
+  banner: { sheet: 'dungeon', index: 29 },
+  floor: { sheet: 'dungeon', index: 48 },
+  floorSpeckled: { sheet: 'dungeon', index: 49 },
+  floorStones: { sheet: 'dungeon', index: 42 },
+  hero: { sheet: 'dungeon', index: 97 },
+  chest: { sheet: 'dungeon', index: 89 },
+  chestOpen: { sheet: 'dungeon', index: 91 },
+  spider: { sheet: 'dungeon', index: 122 },
+  slime: { sheet: 'dungeon', index: 108 },
+  ghost: { sheet: 'dungeon', index: 121 },
+  blacksmith: { sheet: 'dungeon', index: 86 },
+  anvil: { sheet: 'dungeon', index: 74 },
+  hammer: { sheet: 'dungeon', index: 117 },
+  sword: { sheet: 'dungeon', index: 104 },
+  shield: { sheet: 'dungeon', index: 102 },
+  axe: { sheet: 'dungeon', index: 118 },
+  dagger: { sheet: 'dungeon', index: 103 },
+  staff: { sheet: 'dungeon', index: 129 },
+  sage: { sheet: 'dungeon', index: 84 },
+  boss: { sheet: 'dungeon', index: 110 },
+  // A scroll's roller lies across the card: the rod's tiles turned on their
+  // side, the 10 rows the rod fills kept. The cap's rounded end is on the left.
+  rodCap: { sheet: 'ui', index: 115, how: 'turned on its side, rows 3-12', shape: rows => crop(0, 3, 16, 10)(transpose(rows)) },
+  rodBody: { sheet: 'ui', index: 138, how: 'turned on its side, rows 3-12', shape: rows => crop(0, 3, 16, 10)(transpose(rows)) },
+  ribbonLeft: { sheet: 'ui', index: 83 },
+  ribbonMid: { sheet: 'ui', index: 84 },
+  ribbonRight: { sheet: 'ui', index: 85 },
+  // A difficulty pip: the gem's 8 x 8 centre, gold filled, grey empty.
+  gem: { sheet: 'ui', index: 76, how: 'its 8 x 8 centre', shape: crop(4, 4, 8, 8) },
+  gemEmpty: { sheet: 'ui', index: 53, how: 'its 8 x 8 centre', shape: crop(4, 4, 8, 8) },
 }
 
 /** Decodes an 8-bit indexed PNG (the sheet's kind) into RGBA rows. */
@@ -108,49 +133,62 @@ function decode(png) {
 
 const hex = ([r, g, b]) => `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`
 
-/** A tile as a palette of colours and rows of palette letters, `.` clear. */
-function sprite(sheet, index) {
-  const left = (index % COLUMNS) * TILE
-  const top = Math.floor(index / COLUMNS) * TILE
-  const palette = []
-  const rows = []
-  for (let y = 0; y < TILE; y++) {
-    let row = ''
-    for (let x = 0; x < TILE; x++) {
+/** A tile as rows of colours, null clear. */
+function tile(sheet, columns, index) {
+  const left = (index % columns) * TILE
+  const top = Math.floor(index / columns) * TILE
+
+  return [...Array(TILE)].map((_, y) =>
+    [...Array(TILE)].map((_, x) => {
       const color = sheet.pixel(left + x, top + y)
-      if (color[3] < 128) {
-        row += '.'
-        continue
-      }
-      const name = hex(color)
-      let at = palette.indexOf(name)
-      if (at === -1) {
-        at = palette.push(name) - 1
-      }
-      row += 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'[at]
-    }
-    rows.push(row)
-  }
+
+      return color[3] < 128 ? null : hex(color)
+    }),
+  )
+}
+
+/** Rows of colours as a palette and rows of palette letters, `.` clear. */
+function sprite(pixels) {
+  const palette = []
+  const rows = pixels.map(row =>
+    row
+      .map(color => {
+        if (color === null) {
+          return '.'
+        }
+        let at = palette.indexOf(color)
+        if (at === -1) {
+          at = palette.push(color) - 1
+        }
+
+        return 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'[at]
+      })
+      .join(''),
+  )
 
   return { palette, rows }
 }
 
-const sheet = decode(readFileSync(SHEET))
-const entries = Object.entries(SPRITES).map(([name, index]) => {
-  const { palette, rows } = sprite(sheet, index)
+const sheets = Object.fromEntries(
+  Object.entries(SHEETS).map(([key, { file }]) => [key, decode(readFileSync(new URL(file, import.meta.url)))]),
+)
+const entries = Object.entries(SPRITES).map(([name, { sheet, index, how, shape = rows => rows }]) => {
+  const { palette, rows } = sprite(shape(tile(sheets[sheet], SHEETS[sheet].columns, index)))
 
-  return `  /** Tile ${index} of the sheet. */\n  ${name}: {\n    palette: ${JSON.stringify(palette)},\n    rows: [\n${rows.map(row => `      '${row}',`).join('\n')}\n    ],\n  },`
+  return `  /** Tile ${index} of ${SHEETS[sheet].name}${how === undefined ? '' : `, ${how}`}. */\n  ${name}: {\n    palette: ${JSON.stringify(palette)},\n    rows: [\n${rows.map(row => `      '${row}',`).join('\n')}\n    ],\n  },`
 })
 
 writeFileSync(
   OUT,
-  `// Generated by scripts/build-sprites.mjs from Kenney's Tiny Dungeon (CC0):
-// assets/kenney-tiny-dungeon, credited in assets/CREDITS.md. Do not edit;
-// change the script and run it again.
+  `// Generated by scripts/build-sprites.mjs from Kenney's Tiny Dungeon and UI
+// Pack – Pixel Adventure (both CC0): assets/kenney-tiny-dungeon and
+// assets/kenney-ui-pixel-adventure, credited in assets/CREDITS.md. Do not
+// edit; change the script and run it again.
 
 /**
- * A 16 x 16 sprite: each row a string of letters, each letter an index into
- * \`palette\` (\`a\` the first), \`.\` a clear pixel.
+ * A sprite: each row a string of letters, each letter an index into
+ * \`palette\` (\`a\` the first), \`.\` a clear pixel. A whole tile is 16 x 16;
+ * the scroll's pieces are cut smaller.
  */
 export type Sprite = { palette: readonly string[]; rows: readonly string[] }
 

@@ -204,7 +204,8 @@ export function drawBoss(
     </Box>
   )
 
-  if (!('Svg' in elements)) {
+  // The terminal's table lists Svg too, as a fragment: it draws no SVG.
+  if (e.surface === 'terminal' || !('Svg' in elements)) {
     return body
   }
 

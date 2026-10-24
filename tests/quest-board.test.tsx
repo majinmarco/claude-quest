@@ -140,7 +140,7 @@ const questBoard = ($: Engine) =>
   })
 
 type Drawn = {
-  findAll: (query: { type: string }) => Promise<{ key: string | undefined; text: string }[]>
+  findAll: (query: { type: string }) => Promise<{ key: string | undefined; text: string; props: Record<string, unknown> }[]>
 }
 
 /** Every Text the board shows, as shown. */
@@ -152,6 +152,9 @@ const cards = async (ui: Drawn) =>
     .map(found => found.key ?? '')
     .filter(key => key.startsWith('quest:'))
 
+/** The SVG the board draws for `ticket`'s card, by its alt. */
+const artOf = async (ui: Drawn, ticket: string) =>
+  (await ui.findAll({ type: 'Svg' })).find(art => String(art.props.alt).startsWith(`${ticket} `))?.props
 
 describe('Quest Board', () => {
   test('/quest-board opens the pane, listing the open issues as Quest cards', async ($, on) => {
@@ -164,17 +167,21 @@ describe('Quest Board', () => {
     expect(opened).toContain('quest-board')
     expect(runs[0]?.slice(0, 3)).toEqual(['gh', 'issue', 'list'])
 
-    for (const surface of SURFACES) {
-      const ui = await $.ui.mount({ ...BOARD, surface })
+    // Where the surface draws SVG, each card is said in its scroll's alt.
+    const desktop = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    expect(await cards(desktop)).toEqual(['quest:#5', 'quest:#6', 'quest:#9'])
+    expect((await artOf(desktop, '#5'))?.alt).toBe('#5 Quest Board from GitHub Issues · Medium · Boss: +100 XP · INT · ready-for-agent')
+    expect((await artOf(desktop, '#6'))?.alt).toBe('#6 Quest Board from Jira · Hard · Boss: +140 XP · INT · needs-triage')
+    expect((await artOf(desktop, '#9'))?.alt).toBe('#9 Crash on an empty Region file · Trivial · Boss: +40 XP · STR · ready-for-agent')
+    await desktop.unmount()
 
-      const card = await ui.find({ type: 'Button', key: 'quest:#5' })
-      expect(card?.text).toBe('#5 Quest Board from GitHub Issues')
-      const shown = await texts(ui)
-      expect(shown).toContain('Medium · Boss: +100 XP · INT · ready-for-agent')
-      expect(shown).toContain('Hard · Boss: +140 XP · INT · needs-triage')
-      expect(shown).toContain('Trivial · Boss: +40 XP · STR · ready-for-agent')
-      await ui.unmount()
-    }
+    // The terminal's text scroll, rolled: the ticket, the title and the pips.
+    const terminal = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    expect(await cards(terminal)).toEqual(['quest:#5', 'quest:#6', 'quest:#9'])
+    const shown = await texts(terminal)
+    expect(shown.some(text => /^│ #5 Quest Board from GitHub Issues +◆◆◆◇◇ │$/.test(text))).toBe(true)
+    expect(shown.some(text => /^│ #9 Crash on an empty Region file +◆◇◇◇◇ │$/.test(text))).toBe(true)
+    await terminal.unmount()
   })
 
   test('a Player of any level sees the same difficulty and reward', async ($, on) => {
@@ -198,8 +205,8 @@ describe('Quest Board', () => {
     await $.session.start(START)
     await questBoard($)
 
-    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
-    expect(await texts(ui)).toContain('Medium · Boss: +100 XP · INT · ready-for-agent')
+    const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    expect((await artOf(ui, '#5'))?.alt).toBe('#5 Quest Board from GitHub Issues · Medium · Boss: +100 XP · INT · ready-for-agent')
     await ui.unmount()
   })
 
@@ -463,12 +470,18 @@ describe('Quest Board: the Region chooses its Quest Source', () => {
 
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...BOARD, surface })
-      expect((await ui.find({ type: 'Button', key: 'quest:CPI-12' }))?.text).toBe(
-        'CPI-12 Dashboard filters',
-      )
-      const shown = await texts(ui)
-      expect(shown).toContain('Medium · Boss: +100 XP · INT · To Do · #ready-for-agent')
-      expect(shown).toContain('Unrated · Boss: +80 XP · STR · In Progress')
+      expect((await ui.find({ type: 'Button', key: 'quest:CPI-12' }))?.text).toBe('Take Quest CPI-12')
+      await ui.press({ key: 'scroll:CPI-9' })
+      if (surface === 'desktop') {
+        expect((await artOf(ui, 'CPI-12'))?.alt).toBe('CPI-12 Dashboard filters · Medium · Boss: +100 XP · INT · To Do · #ready-for-agent')
+        expect((await artOf(ui, 'CPI-9'))?.alt).toBe('CPI-9 Occupancy is off by one night · Unrated · Boss: +80 XP · STR · In Progress')
+      } else {
+        const shown = await texts(ui)
+        expect(shown.some(text => /^│ CPI-12 Dashboard filters +◆◆◆◇◇ │$/.test(text))).toBe(true)
+        expect(shown.some(text => /^│ Unrated · Boss: \+80 XP +│$/.test(text))).toBe(true)
+        expect(shown.some(text => /^│ Status: In Progress +│$/.test(text))).toBe(true)
+      }
+      await ui.press({ key: 'scroll:CPI-9' })
       await ui.unmount()
     }
   })
@@ -771,7 +784,8 @@ describe('Quest Board: hints, tags and the header', () => {
     await questBoard($)
 
     const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
-    expect(await texts(ui)).toContain('Medium · Boss: +100 XP · INT · To Do · #ready-for-agent')
+    await ui.press({ key: 'scroll:CPI-12' })
+    expect((await texts(ui)).some(text => /^│ Tags: #ready-for-agent +│$/.test(text))).toBe(true)
     const filter = async () => (await ui.find({ type: 'Button', key: 'filter-status' }))?.text
     await ui.press({ key: 'filter-status' })
     expect(await filter()).toBe('Status: To Do')
@@ -993,6 +1007,202 @@ describe('Quest Board: the started Quest\'s ticket is looked up', () => {
       },
     })
     expect((await ui.find({ type: 'Text', text: /^Quest / }))?.text).toBe('Quest #9 Crash on an empty Region file')
+    await ui.unmount()
+  })
+})
+
+/** The Svg element's limit, in characters. */
+const SVG_LIMIT = 131072
+
+/** `count` rated issues, #1 first. */
+const issues = (count: number) => Array.from({ length: count }, (_, at) => issue(at + 1, `Quest ${at + 1}`, ['size: S']))
+
+describe('Quest Board: scrolls', () => {
+  test('where the surface draws SVG, each card is a scroll, its alt the card in words', async ($, on) => {
+    engine(on)
+    gh(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    const five = await artOf(ui, '#5')
+    expect(five?.alt).toBe('#5 Quest Board from GitHub Issues · Medium · Boss: +100 XP · INT · ready-for-agent')
+    expect(String(five?.source)).toMatch(/^<svg [^>]*width="384"/)
+    expect(five?.isInteractive).toBeUndefined()
+    const header = (await ui.findAll({ type: 'Svg' }))[0]
+    expect(header?.props.alt).toBe('Quest Board')
+    // The words are the art's: no card is told again as plain text.
+    expect(await texts(ui)).not.toContain('Medium · Boss: +100 XP · INT · ready-for-agent')
+    await ui.unmount()
+  })
+
+  test('Take Quest fills the prompt in one click; Unroll is beside it', async ($, on) => {
+    const { filled } = engine(on)
+    gh(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...BOARD, surface })
+      const take = await ui.find({ type: 'Button', key: 'quest:#6' })
+      expect(take?.text).toBe('Take Quest #6')
+      expect(take?.props.variant).toBe('primary')
+      expect((await ui.find({ type: 'Button', key: 'scroll:#6' }))?.text).toBe('Unroll')
+      await ui.press({ key: 'quest:#6' })
+      await ui.unmount()
+    }
+
+    expect(filled.map(fill => fill.text)).toEqual(['/mattpocock-skills:implement #6', '/mattpocock-skills:implement #6'])
+  })
+
+  test('Unroll opens the card, animated; Roll up rolls it again; one card is open at a time', async ($, on) => {
+    engine(on)
+    gh(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    await ui.press({ key: 'scroll:#6' })
+    const six = await artOf(ui, '#6')
+    expect(six?.isInteractive).toBe(true)
+    expect(String(six?.source)).toContain('<animate attributeName="height"')
+    expect((await ui.find({ type: 'Button', key: 'scroll:#6' }))?.text).toBe('Roll up')
+
+    await ui.press({ key: 'scroll:#9' })
+    expect((await artOf(ui, '#6'))?.isInteractive).toBeUndefined()
+    expect((await artOf(ui, '#9'))?.isInteractive).toBe(true)
+
+    await ui.press({ key: 'scroll:#9' })
+    expect((await artOf(ui, '#9'))?.isInteractive).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'scroll:#9' }))?.text).toBe('Unroll')
+    await ui.unmount()
+  })
+
+  test('a card unrolled whose ticket a Refresh no longer lists stays rolled when it comes back', async ($, on) => {
+    engine(on)
+    let listed = ISSUES
+    gh(on, () => ran(0, JSON.stringify(listed)))
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    await ui.press({ key: 'scroll:#6' })
+    listed = ISSUES.filter(one => one.number !== 6)
+    await ui.press({ key: 'refresh' })
+    listed = ISSUES
+    await ui.press({ key: 'refresh' })
+    expect((await artOf(ui, '#6'))?.isInteractive).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'scroll:#6' }))?.text).toBe('Unroll')
+    await ui.unmount()
+  })
+
+  test('30 Quests are 5 pages of 6; Prev and Next step through them', async ($, on) => {
+    engine(on)
+    gh(on, () => ran(0, JSON.stringify(issues(30))))
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    expect(await cards(ui)).toEqual(['quest:#1', 'quest:#2', 'quest:#3', 'quest:#4', 'quest:#5', 'quest:#6'])
+    expect(await texts(ui)).toContain('30 of 30 Quests')
+    expect(await texts(ui)).toContain('Page 1 of 5')
+    expect(await ui.find({ type: 'Button', key: 'page-prev' })).toBeUndefined()
+    expect((await ui.find({ type: 'Button', key: 'page-next' }))?.text).toBe('Next ▸')
+
+    for (let page = 2; page <= 5; page++) {
+      await ui.press({ key: 'page-next' })
+    }
+    expect(await texts(ui)).toContain('Page 5 of 5')
+    expect(await cards(ui)).toEqual(['quest:#25', 'quest:#26', 'quest:#27', 'quest:#28', 'quest:#29', 'quest:#30'])
+    expect(await ui.find({ type: 'Button', key: 'page-next' })).toBeUndefined()
+
+    await ui.press({ key: 'page-prev' })
+    expect((await ui.find({ type: 'Button', key: 'page-prev' }))?.text).toBe('◂ Prev')
+    expect(await cards(ui)).toEqual(['quest:#19', 'quest:#20', 'quest:#21', 'quest:#22', 'quest:#23', 'quest:#24'])
+
+    // Every page's art fits the Svg element, the six cards and the header together.
+    const sources = (await ui.findAll({ type: 'Svg' })).map(art => String(art.props.source))
+    expect(sources).toHaveLength(7)
+    expect(sources.every(source => source.length < SVG_LIMIT)).toBe(true)
+    await ui.unmount()
+  })
+
+  test('a filter changed goes back to the first page', async ($, on) => {
+    engine(on)
+    const mixed = [...issues(12), issue(13, 'Big one', ['size: XL'])]
+    gh(on, () => ran(0, JSON.stringify(mixed)))
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
+    await ui.press({ key: 'page-next' })
+    expect(await texts(ui)).toContain('Page 2 of 3')
+    await ui.press({ key: 'filter-difficulty' })
+    expect(await texts(ui)).toContain('Page 1 of 2')
+    expect((await cards(ui))[0]).toBe('quest:#1')
+    await ui.unmount()
+  })
+
+  test('a card whose title the font cannot letter draws ?, while its alt keeps the title', async ($, on) => {
+    engine(on)
+    gh(on, () => ran(0, JSON.stringify([issue(4, 'Café crash', ['size: S'])])))
+    await $.session.start(START)
+    await questBoard($)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    const four = await artOf(ui, '#4')
+    expect(four?.alt).toBe('#4 Café crash · Easy · Boss: +60 XP · INT · open')
+    expect(String(four?.source)).toContain('<use href="#g3f"')
+    expect(String(four?.source)).not.toContain('é')
+    await ui.unmount()
+  })
+
+  test('the terminal draws each card as a text scroll, no Svg, every row inside the pane', async ($, on) => {
+    engine(on)
+    gh(on)
+    await $.session.start(START)
+    await questBoard($)
+
+    for (const bodyColumns of [60, 34]) {
+      const ui = await $.ui.mount({ ...BOARD, surface: 'terminal', props: { ...BOARD.props, bodyColumns } })
+      expect(await ui.findAll({ type: 'Svg' })).toEqual([])
+      await ui.press({ key: 'scroll:#5' })
+      const rows = (await texts(ui)).filter(text => /^[◖│]/.test(text))
+      expect(rows.length).toBeGreaterThan(9)
+      expect(rows.every(row => [...row].length <= bodyColumns)).toBe(true)
+      expect(rows.some(row => /^│ #5 Quest Board .*◆◆◆◇◇ │$/.test(row) || /^│ #6 .*◆◆◆◆◇ │$/.test(row))).toBe(true)
+      expect(rows.some(row => row.startsWith('│ Medium · Boss: +100 XP'))).toBe(true)
+      expect(rows).toContain(`◖${'═'.repeat(Math.min(bodyColumns, 64) - 2)}◗`)
+      await ui.press({ key: 'scroll:#5' })
+      await ui.unmount()
+    }
+  })
+
+  test('a board kept by an older mod, naming no unrolled card or page, draws its first page rolled', async ($, on) => {
+    engine(on)
+    const older: { selected?: string } = {}
+    on('state.get', (_, e, next) =>
+      e.key === 'board'
+        ? {
+            value: {
+              value: {
+                listing: { state: 'listed', quests: [{ ticket: '#5', title: 'Five', status: 'open', difficulty: 'Easy', recommendedStats: ['intelligence'] }] },
+                filters: { status: null, difficulty: null },
+                ...older,
+              },
+              version: 1,
+            },
+          }
+        : next(e),
+    )
+    await $.session.start(START)
+
+    const ui = await $.ui.mount({ ...BOARD, surface: 'desktop' })
+    expect(await cards(ui)).toEqual(['quest:#5'])
+    expect((await artOf(ui, '#5'))?.isInteractive).toBeUndefined()
+    older.selected = '#5'
+    await ui.redraw()
+    expect((await artOf(ui, '#5'))?.isInteractive).toBe(true)
     await ui.unmount()
   })
 })

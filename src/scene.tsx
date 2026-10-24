@@ -167,7 +167,8 @@ export function drawScene(
   const line = shown.kind === 'boss' ? describeBossFight(shown.fight) : describeScene(encounter)
   const isIdle = shown.kind === 'encounter' && encounter === null
 
-  if (!('Svg' in elements)) {
+  // The terminal's table lists Svg too, as a fragment: it draws no SVG.
+  if (e.surface === 'terminal' || !('Svg' in elements)) {
     return <Text dimColor={isIdle}>{line}</Text>
   }
 

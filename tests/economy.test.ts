@@ -403,6 +403,21 @@ describe('Economy: the Boss Fight and the Quest reward', () => {
     expect(unfought.bossFight?.reward).toBe(0)
   })
 
+  test('a ticket its Quest Source has not found earns no Badges and leaves the tally and Boss streak as they were', () => {
+    const streak = { ...newGame(), region: 'vault' }
+    const before = { ...streak, player: { ...streak.player, tally: { ...streak.player.tally, bossStreak: 2 } } }
+    const unverified = step(summon('Medium', before), { type: 'QUEST_DETAILS', ticket: '#12', verified: 'not-found' }).state
+    const { state, effects } = win(unverified)
+
+    expect(state.bossFight?.status).toBe('won')
+    expect(state.player.badges ?? []).toEqual([])
+    expect(effects.map(effect => effect.type)).not.toContain('BADGE_EARNED')
+    expect(state.player.tally).toEqual(before.player.tally)
+    const lost = play(unverified, bossReady(), bossAnswer(1, 1), bossAnswer(2, 1), bossAnswer(3)).state
+    expect(lost.bossFight?.status).toBe('lost')
+    expect(lost.player.tally.bossStreak).toBe(2)
+  })
+
   test('a ticket its Quest Source could not be asked about (unknown) is rewarded as usual', () => {
     const unknown = step(summon(), { type: 'QUEST_DETAILS', ticket: '#12', verified: 'unknown' }).state
 

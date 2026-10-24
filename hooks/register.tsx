@@ -44,10 +44,16 @@ import type { QuestBoard, QuestCard, QuestSourceSetting, XpPool } from '../types
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
 
-/** The Quest Board: the Quests last listed, and the Player's filters. */
+/**
+ * The Quest Board: the Quests last listed, the Player's filters, the card
+ * unrolled and the page shown (absent in a board kept by an older mod, which
+ * the board draws as every card rolled, on the first page).
+ */
 const board = atom({ plugin: 'quest-mod', key: 'board' } as const, {
   listing: { state: 'loading' },
   filters: noFilters(),
+  selected: null,
+  page: 0,
 } satisfies QuestBoard)
 
 /**
@@ -480,8 +486,10 @@ async function listQuests($: EngineInterface): Promise<void> {
   const { source, setting } = await regionQuestSource($)
   const listed = await source.list()
 
+  // A card unrolled whose ticket is no longer listed is rolled for good.
   await update($, board, (current): QuestBoard => ({
     ...current,
+    ...(listed.ok && !listed.value.some(quest => quest.ticket === current.selected) ? { selected: null } : {}),
     listing: listed.ok
       ? { state: 'listed', quests: listed.value, ...(setting === undefined ? {} : { source: setting }) }
       : { state: 'unavailable', problem: listed.problem },
@@ -528,17 +536,25 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
   pick: quest => {
     void pickQuest($, quest).catch(() => undefined)
   },
+  // A filter changed shows its first page.
   filterStatus: status => {
-    void update($, board, current => ({ ...current, filters: { ...current.filters, status } }))
+    void update($, board, current => ({ ...current, filters: { ...current.filters, status }, page: 0 }))
   },
   filterDifficulty: difficulty => {
     void update($, board, current => ({
       ...current,
       filters: { ...current.filters, difficulty },
+      page: 0,
     }))
   },
   refresh: () => {
     void listQuests($)
+  },
+  select: ticket => {
+    void update($, board, current => ({ ...current, selected: ticket }))
+  },
+  page: page => {
+    void update($, board, current => ({ ...current, page }))
   },
 })
 
