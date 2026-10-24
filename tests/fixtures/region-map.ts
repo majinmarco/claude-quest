@@ -1,12 +1,14 @@
 // A sample Region for the Region map: two Dungeons (one of them cleared, one
 // of 45 Quests, three Floors), the Wilds, a history with Quests won, and
 // Modules on disk, some discovered. The map previews (scripts/render-art.mjs)
-// and the map art snapshot (tests/map-art.test.ts) are drawn from it.
+// and the map art snapshot (tests/map-art.test.ts) are drawn from it, and
+// from it themed (issue #17): a forest Region whose cleared Dungeon is a
+// fortress, and Search v2 as a library.
 
 import { floorSvg, moduleCells, modulesSvg, overworldGrid, overworldSvg } from '../../src/map-art'
 import { liveRegion } from '../../src/region-model'
 import type { LiveRegion } from '../../src/region-model'
-import type { Difficulty, QuestCard } from '../../types'
+import type { Difficulty, DungeonKind, QuestCard } from '../../types'
 
 const DIFFICULTIES: Difficulty[] = ['Trivial', 'Easy', 'Medium', 'Hard', 'Epic', 'Unrated']
 
@@ -54,7 +56,22 @@ export const SAMPLE_REGION: LiveRegion = {
   discovered: ['src', 'hooks', 'tests', 'tests/fixtures'],
 }
 
-/** The art the snapshot keeps: the overworld (the second site selected), a Floor of Search v2 (its second Room selected), the Module view. */
+/** The sample Region's theme, and its Dungeons' kinds by key: what the themed samples are drawn in. */
+export const SAMPLE_THEME = { name: 'Emberforge Vale', biome: 'forest', kinds: { [ONBOARDING.key]: 'fortress', [SEARCH.key]: 'library' } } as const
+
+/** Sites with the kinds SAMPLE_THEME gives their Dungeons. */
+export const themedSites = <T extends { site: { key: string } }>(sites: readonly T[]): (T & { kind?: DungeonKind })[] =>
+  sites.map(each => {
+    const kind = (SAMPLE_THEME.kinds as Record<string, DungeonKind>)[each.site.key]
+
+    return kind === undefined ? each : { ...each, kind }
+  })
+
+/**
+ * The art the snapshot keeps: the overworld (the second site selected), a
+ * Floor of Search v2 (its second Room selected), the Module view; and the
+ * overworld and that Floor themed (SAMPLE_THEME).
+ */
 export const mapSamples = (): Record<string, string> => {
   const region = liveRegion(SAMPLE_REGION)
   const sites = region.sites.map((site, at) => ({ site, isSelected: at === 1 }))
@@ -68,5 +85,10 @@ export const mapSamples = (): Record<string, string> => {
     overworldGrid: overworldGrid(SAMPLE_REGION_ID, sites).map(row => row.map(run => run.text).join('')).join('\n'),
     floor: floorSvg({ site: search, floor: 0, selected: 1 }),
     modules: modulesSvg(moduleCells(region.modules ?? []), region.moduleCounts),
+    overworldForest: overworldSvg(SAMPLE_REGION_ID, SAMPLE_THEME.name, themedSites(sites), SAMPLE_THEME.biome, SAMPLE_REGION_ID),
+    overworldForestGrid: overworldGrid(SAMPLE_REGION_ID, themedSites(sites), SAMPLE_THEME.biome)
+      .map(row => row.map(run => run.text).join(''))
+      .join('\n'),
+    floorLibrary: floorSvg({ site: search, floor: 0, selected: 1, kind: SAMPLE_THEME.kinds[SEARCH.key] }),
   }
 }

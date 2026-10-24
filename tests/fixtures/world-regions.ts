@@ -58,3 +58,9 @@ export const TWO_REGIONS: Record<string, RegionEntry> = { [HERE]: CLAUDE_QUEST, 
 export const THREE_REGIONS: Record<string, RegionEntry> = { ...TWO_REGIONS, [CLIENT_VAULT.root]: CLIENT_VAULT }
 
 export const FOUR_REGIONS: Record<string, RegionEntry> = { ...THREE_REGIONS, [MONOREPO.root]: MONOREPO }
+
+/** The two Regions themed (issue #17): claude-quest a snowy hold, vault a desert vault. */
+export const THEMED_REGIONS: Record<string, RegionEntry> = {
+  [HERE]: { ...CLAUDE_QUEST, theme: { name: 'Frosthold', biome: 'snow', themedAt: '2026-10-24T10:00:00.000Z' } },
+  [VAULT.root]: { ...VAULT, theme: { name: 'Sunscorch Vault', biome: 'desert', themedAt: '2026-10-24T10:00:00.000Z' } },
+}

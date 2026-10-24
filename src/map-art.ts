@@ -14,32 +14,166 @@ import { SPRITES } from './sprites'
 import type { SpriteName } from './sprites'
 import { clearedOf, floorCount, floorRooms, isSiteCleared, ROOMS_PER_FLOOR } from './region-model'
 import type { ModuleTile, Room, Site } from './region-model'
+import type { Biome, DungeonKind } from '../types'
+
+export type { Biome, DungeonKind } from '../types'
 
 /** A tile, in the art's own pixels; the art is drawn at twice that in CSS pixels. */
 const TILE = 16
 const SCALE = 2
 
 /**
- * The land a Region is drawn on. Only `meadow` for now: the seam where a
- * theme (Haiku's, issue #17) picks another set of tiles.
+ * A palette swap: each colour of a sprite's palette in `colors` drawn as the
+ * colour it maps to, the sprite defined again under its name and `id`.
  */
-export type Biome = 'meadow'
+type Tint = { id: string; colors: Readonly<Record<string, string>> }
 
-/** How a Dungeon's Rooms are drawn. Only `crypt` for now, the seam for a Dungeon's theme. */
-export type DungeonTheme = 'crypt'
+/** The colours of both tints, `over`'s winning, under both ids. */
+const both = (under: Tint | undefined, over: Tint | undefined): Tint | undefined =>
+  under === undefined ? over : over === undefined ? under : { id: `${under.id}-${over.id}`, colors: { ...under.colors, ...over.colors } }
 
-/** The tiles a biome draws its land with: open grass, its rarer kinds, and what grows on it, by weight. */
-const BIOMES: Record<Biome, { grass: SpriteName; patches: SpriteName[]; growth: [SpriteName, number][] }> = {
+/**
+ * The land of each biome (a Region's theme chooses one, issue #17; `meadow`
+ * without one): its open grass, its rarer kinds and what grows on it, by
+ * weight; the palette its ground (grass, patches, the road) and its growth
+ * are drawn in; and the mark and colour its growth takes on the terminal's
+ * grid.
+ */
+const BIOMES: Record<
+  Biome,
+  { grass: SpriteName; patches: SpriteName[]; growth: [SpriteName, number][]; ground?: Tint; growthTint?: Tint; mark: string; markColor: string }
+> = {
   meadow: {
     grass: 'grass',
     patches: ['grassTufts', 'grassFlowers'],
     growth: [['treeGreen', 0.1], ['treeAutumn', 0.04], ['bush', 0.03], ['mushrooms', 0.015]],
+    mark: '♣',
+    markColor: '#3e8948',
+  },
+  forest: {
+    grass: 'grass',
+    patches: ['grassTufts', 'grassFlowers'],
+    growth: [['treeGreen', 0.28], ['treeAutumn', 0.03], ['bush', 0.06], ['mushrooms', 0.03]],
+    ground: { id: 'forest', colors: { '#84c669': '#5a9e4b', '#8bd87d': '#6fb25a', '#65a556': '#3e7a3a', '#fdbe53': '#c8a040', '#eaa56c': '#b07a4a' } },
+    growthTint: { id: 'forest', colors: { '#84c669': '#479f4a', '#479f4a': '#265c42' } },
+    mark: '♠',
+    markColor: '#265c42',
+  },
+  coast: {
+    grass: 'grass',
+    patches: ['grassTufts', 'grassFlowers'],
+    growth: [['treeGreen', 0.04], ['bush', 0.04]],
+    ground: {
+      id: 'coast',
+      colors: { '#84c669': '#ead4aa', '#8bd87d': '#f4e4c4', '#65a556': '#d4b484', '#fdbe53': '#ffffff', '#e38628': '#c0cbdc', '#eaa56c': '#c9a46c' },
+    },
+    mark: '≈',
+    markColor: '#2ce8f5',
+  },
+  desert: {
+    grass: 'grass',
+    patches: ['grassTufts'],
+    growth: [['treeAutumn', 0.03], ['bush', 0.04]],
+    ground: {
+      id: 'desert',
+      colors: { '#84c669': '#e4a672', '#8bd87d': '#eab585', '#65a556': '#c88a5a', '#fdbe53': '#feae34', '#e38628': '#bd6c4a', '#eaa56c': '#c28d5f' },
+    },
+    growthTint: { id: 'desert', colors: { '#84c669': '#a0a050', '#479f4a': '#6e7a35', '#fdbe53': '#c8a040', '#e38628': '#8a6a3a' } },
+    mark: '∴',
+    markColor: '#e4a672',
+  },
+  snow: {
+    grass: 'grass',
+    patches: ['grassTufts', 'grassFlowers'],
+    growth: [['treeGreen', 0.12], ['bush', 0.02]],
+    ground: {
+      id: 'snow',
+      colors: { '#84c669': '#e8eef5', '#8bd87d': '#ffffff', '#65a556': '#c0cbdc', '#fdbe53': '#8fd3e0', '#e38628': '#5a9ec0', '#eaa56c': '#a8b4c8' },
+    },
+    growthTint: { id: 'snow', colors: { '#84c669': '#e8eef5', '#479f4a': '#2f5d4f' } },
+    mark: '*',
+    markColor: '#c0cbdc',
+  },
+  swamp: {
+    grass: 'grass',
+    patches: ['grassTufts', 'grassFlowers'],
+    growth: [['treeGreen', 0.08], ['bush', 0.08], ['mushrooms', 0.05]],
+    ground: {
+      id: 'swamp',
+      colors: { '#84c669': '#5d7a46', '#8bd87d': '#6c8a4f', '#65a556': '#3f5a35', '#fdbe53': '#a0a060', '#e38628': '#6e7a35', '#eaa56c': '#6a5038' },
+    },
+    growthTint: { id: 'swamp', colors: { '#84c669': '#6b7d3e', '#479f4a': '#3d5a2e' } },
+    mark: '♣',
+    markColor: '#6b7d3e',
   },
 }
 
-/** The tiles a Dungeon theme draws a Room with: its wall, the wall of a lit Room, its floor. */
-const THEMES: Record<DungeonTheme, { wall: SpriteName; litWall: SpriteName; floor: SpriteName; floorAlt: SpriteName }> = {
-  crypt: { wall: 'wall', litWall: 'banner', floor: 'floor', floorAlt: 'floorSpeckled' },
+/**
+ * How each kind of Dungeon (a Dungeon's theme chooses one; `crypt` without
+ * one) draws a Room: its wall, the wall of a lit Room, its floors; the
+ * palettes its walls (the gates on the overworld too), its floors and its
+ * banner are drawn in; its pennant once cleared, and its corridors.
+ */
+const THEMES: Record<
+  DungeonKind,
+  { wall: SpriteName; litWall: SpriteName; floor: SpriteName; floorAlt: SpriteName; walls?: Tint; floors?: Tint; banner?: Tint; pennant: string; corridor: string }
+> = {
+  crypt: { wall: 'wall', litWall: 'banner', floor: 'floor', floorAlt: 'floorSpeckled', pennant: '#e84537', corridor: '#be7d4b' },
+  fortress: {
+    wall: 'wall',
+    litWall: 'banner',
+    floor: 'floor',
+    floorAlt: 'floorStones',
+    walls: { id: 'fortress', colors: { '#52607c': '#4b3d44', '#8b9bb4': '#8a6f5a', '#c0cbdc': '#b89a78' } },
+    floors: { id: 'fortress', colors: { '#eaa56c': '#9a8a7a', '#fec99c': '#b8a890', '#cf8254': '#6e5f55', '#c0cbdc': '#d8ccb8' } },
+    banner: { id: 'fortress', colors: { '#e84537': '#3a7bd5', '#ff706d': '#6fa8ff' } },
+    pennant: '#3a7bd5',
+    corridor: '#6e5f55',
+  },
+  aqueduct: {
+    wall: 'wall',
+    litWall: 'banner',
+    floor: 'floor',
+    floorAlt: 'floorSpeckled',
+    walls: { id: 'aqueduct', colors: { '#52607c': '#1f4e5f', '#8b9bb4': '#3d8ea0', '#c0cbdc': '#8fd3e0' } },
+    floors: { id: 'aqueduct', colors: { '#eaa56c': '#2f7f99', '#fec99c': '#7cc6d6', '#cf8254': '#1f5f75' } },
+    banner: { id: 'aqueduct', colors: { '#e84537': '#2ce8f5', '#ff706d': '#b8f4fa' } },
+    pennant: '#2ce8f5',
+    corridor: '#1f5f75',
+  },
+  mine: {
+    wall: 'wall',
+    litWall: 'banner',
+    floor: 'floor',
+    floorAlt: 'floorSpeckled',
+    walls: { id: 'mine', colors: { '#52607c': '#3f2631', '#8b9bb4': '#763b36', '#c0cbdc': '#a05a3a' } },
+    floors: { id: 'mine', colors: { '#eaa56c': '#7a4a30', '#fec99c': '#feae34', '#cf8254': '#4e2e22' } },
+    banner: { id: 'mine', colors: { '#e84537': '#feae34', '#ff706d': '#fee761' } },
+    pennant: '#feae34',
+    corridor: '#4e2e22',
+  },
+  library: {
+    wall: 'wall',
+    litWall: 'banner',
+    floor: 'floor',
+    floorAlt: 'floorSpeckled',
+    walls: { id: 'library', colors: { '#52607c': '#4a2a1c', '#8b9bb4': '#8f5530', '#c0cbdc': '#c8844c' } },
+    floors: { id: 'library', colors: { '#eaa56c': '#9e3438', '#fec99c': '#c4544e', '#cf8254': '#6e1f2a' } },
+    banner: { id: 'library', colors: { '#e84537': '#8a4ac0', '#ff706d': '#b07ae0' } },
+    pennant: '#8a4ac0',
+    corridor: '#6e1f2a',
+  },
+  tower: {
+    wall: 'wall',
+    litWall: 'banner',
+    floor: 'floor',
+    floorAlt: 'floorStones',
+    walls: { id: 'tower', colors: { '#52607c': '#5d5d7a', '#8b9bb4': '#a8a8c4', '#c0cbdc': '#e4e4f2' } },
+    floors: { id: 'tower', colors: { '#eaa56c': '#8c8ca6', '#fec99c': '#bcbcd4', '#cf8254': '#5f5f78', '#c0cbdc': '#d8d8ea' } },
+    banner: { id: 'tower', colors: { '#e84537': '#3e8948', '#ff706d': '#63c74d' } },
+    pennant: '#3e8948',
+    corridor: '#5f5f78',
+  },
 }
 
 /** The map's colours, which the terminal's grid takes too. */
@@ -72,24 +206,32 @@ export const seeded = (...parts: readonly (string | number)[]): number => {
   return (hash >>> 0) / 0x100000000
 }
 
-/** The tiles drawn on one SVG: each sprite defined once (as `t-<name>`, apart from the glyph ids), then placed with <use>. */
+/**
+ * The tiles drawn on one SVG: each sprite defined once (as `t-<name>`, or
+ * `t-<name>-<tint>` in a tint, apart from the glyph ids), then placed with
+ * <use>.
+ */
 class Tiles {
-  private readonly used = new Set<SpriteName>()
+  private readonly used = new Map<string, { name: SpriteName; tint: Tint | undefined }>()
 
-  /** `name` with its top left at `x`, `y`. */
-  at(name: SpriteName, x: number, y: number): string {
-    this.used.add(name)
+  /** `name` with its top left at `x`, `y`, in `tint` when given. */
+  at(name: SpriteName, x: number, y: number, tint?: Tint): string {
+    const id = tint === undefined ? name : `${name}-${tint.id}`
+    if (!this.used.has(id)) {
+      this.used.set(id, { name, tint })
+    }
 
-    return `<use href="#t-${name}" x="${x}" y="${y}"/>`
+    return `<use href="#t-${id}" x="${x}" y="${y}"/>`
   }
 
   defs(): string {
     return [...this.used]
-      .map(name => {
+      .map(([id, { name, tint }]) => {
         const canvas = new Canvas()
-        canvas.sprite(SPRITES[name], 0, 0)
+        const sprite = SPRITES[name]
+        canvas.sprite(tint === undefined ? sprite : { ...sprite, palette: sprite.palette.map(color => tint.colors[color] ?? color) }, 0, 0)
 
-        return `<g id="t-${name}">${canvas.svg()}</g>`
+        return `<g id="t-${id}">${canvas.svg()}</g>`
       })
       .join('')
   }
@@ -188,8 +330,8 @@ export const overworldLayout = (regionId: string, keys: readonly string[]): Over
   return { columns: OVERWORLD_COLUMNS, rows, places, isFog }
 }
 
-/** One site as the overworld shows it: its number on the map is its place, from 1. */
-export type OverworldSite = { site: Site; isSelected: boolean }
+/** One site as the overworld shows it: its number on the map is its place, from 1; a Dungeon's kind, when themed. */
+export type OverworldSite = { site: Site; isSelected: boolean; kind?: DungeonKind }
 
 /** The tiles of the road: under each band, from its first site to the farthest one, this band or the next. */
 const roadTiles = (layout: OverworldLayout): Set<string> => {
@@ -231,25 +373,29 @@ const grassAt = (regionId: string, biome: Biome, column: number, row: number): S
   return roll < 0.18 ? (patches[Math.floor((roll / 0.18) * patches.length)] ?? grass) : grass
 }
 
-/** The banner of a cleared Dungeon: a pennant on a pole at the top right of its gate. */
-const pennant = (x: number, y: number): string =>
+/** The banner of a cleared Dungeon: a pennant on a pole at the top right of its gate, in its kind's colour. */
+const pennant = (x: number, y: number, color: string = MAP_COLORS.pennant): string =>
   rect(x + 27, y - 7, 1, 12, MAP_COLORS.pole) +
-  rect(x + 28, y - 7, 6, 2, MAP_COLORS.pennant) +
-  rect(x + 28, y - 5, 4, 2, MAP_COLORS.pennant)
+  rect(x + 28, y - 7, 6, 2, color) +
+  rect(x + 28, y - 5, 4, 2, color)
 
 /**
  * The overworld of the Region `regionId` as an SVG: open land with its
  * trees, the road, a gate in castle wall per Dungeon (a pennant once it is
  * cleared), a camp for the Wilds, each site numbered as its Button is, the
  * selected one framed; Fog past the last of them. `name` is lettered at the
- * top.
+ * top, `subtitle` (the Region's folder name, beside a themed name) after it.
+ * The land is drawn in `biome`'s tiles and palette, each gate in its
+ * Dungeon's kind (`crypt` when it has none).
  */
 export const overworldSvg = (
   regionId: string,
   name: string,
   sites: readonly OverworldSite[],
   biome: Biome = 'meadow',
+  subtitle?: string,
 ): string => {
+  const look = BIOMES[biome]
   const layout = overworldLayout(regionId, sites.map(({ site }) => site.key))
   const tiles = new Tiles()
   const lettering = new Lettering()
@@ -267,18 +413,18 @@ export const overworldSvg = (
       const y = row * TILE
       const at = `${column},${row}`
       if (taken.has(at)) {
-        land += tiles.at(BIOMES[biome].grass, x, y)
+        land += tiles.at(look.grass, x, y, look.ground)
         continue
       }
       const isFog = layout.isFog(column, row)
       if (road.has(at) && !isFog) {
-        land += tiles.at('dirt', x, y)
+        land += tiles.at('dirt', x, y, look.ground)
         continue
       }
-      land += tiles.at(grassAt(regionId, biome, column, row), x, y)
+      land += tiles.at(grassAt(regionId, biome, column, row), x, y, look.ground)
       const growth = row === 0 ? undefined : growthAt(regionId, biome, column, row)
       if (growth !== undefined) {
-        land += tiles.at(growth, x, y)
+        land += tiles.at(growth, x, y, look.growthTint)
       }
       if (isFog) {
         fog += veil(x, y, TILE, TILE, 0.84)
@@ -296,13 +442,14 @@ export const overworldSvg = (
     const x = place.column * TILE
     const y = place.row * TILE
     if (site.kind === 'dungeon') {
+      const { walls, pennant: flown } = THEMES[entry.kind ?? 'crypt']
       marks +=
-        tiles.at('gateLeft', x, y) +
-        tiles.at('gateRight', x + TILE, y) +
-        tiles.at('gateFootLeft', x, y + TILE) +
-        tiles.at('gateFootRight', x + TILE, y + TILE)
+        tiles.at('gateLeft', x, y, walls) +
+        tiles.at('gateRight', x + TILE, y, walls) +
+        tiles.at('gateFootLeft', x, y + TILE, walls) +
+        tiles.at('gateFootRight', x + TILE, y + TILE, walls)
       if (isSiteCleared(site)) {
-        marks += pennant(x, y)
+        marks += pennant(x, y, flown)
       }
     } else {
       marks +=
@@ -317,7 +464,10 @@ export const overworldSvg = (
     }
   })
 
-  const title = plate(lettering, name.toUpperCase(), 2, 4)
+  const lettered = name.toUpperCase()
+  const title =
+    plate(lettering, lettered, 2, 4) +
+    (subtitle === undefined || subtitle === '' ? '' : plate(lettering, subtitle, pixelWidth(lettered) + 8, 4, MAP_COLORS.dark))
 
   return svgOf(width, height, lettering.defs() + `<defs>${tiles.defs()}</defs>` + land + fog + marks + title)
 }
@@ -335,7 +485,7 @@ const HEADER = 12
 const GEM = 8
 
 /** What a Floor shows: its site, which Floor (from 0), and the Room selected (its place on the Floor, from 0). */
-export type FloorView = { site: Site; floor: number; selected: number | null; theme?: DungeonTheme }
+export type FloorView = { site: Site; floor: number; selected: number | null; kind?: DungeonKind; biome?: Biome }
 
 const roomOrigin = (at: number): { x: number; y: number } => ({
   x: (at % ROOM_COLUMNS) * (ROOM + CORRIDOR),
@@ -343,31 +493,36 @@ const roomOrigin = (at: number): { x: number; y: number } => ({
 })
 
 /** A Room of a Dungeon: wall above floor, the wall bannered once it is lit. */
-const dungeonRoom = (tiles: Tiles, theme: DungeonTheme, x: number, y: number, isLit: boolean, seed: number): string => {
-  const { wall, litWall, floor, floorAlt } = THEMES[theme]
+const dungeonRoom = (tiles: Tiles, kind: DungeonKind, x: number, y: number, isLit: boolean, seed: number): string => {
+  const { wall, litWall, floor, floorAlt, walls, floors, banner } = THEMES[kind]
   const floorTile = seed < 0.5 ? floor : floorAlt
 
   return (
-    tiles.at(wall, x, y) +
-    tiles.at(wall, x + 24, y) +
-    tiles.at(isLit ? litWall : wall, x + 12, y) +
-    tiles.at(floorTile, x, y + TILE) +
-    tiles.at(floorTile, x + 12, y + TILE) +
-    tiles.at(floorTile, x + 24, y + TILE)
+    tiles.at(wall, x, y, walls) +
+    tiles.at(wall, x + 24, y, walls) +
+    (isLit ? tiles.at(litWall, x + 12, y, both(walls, banner)) : tiles.at(wall, x + 12, y, walls)) +
+    tiles.at(floorTile, x, y + TILE, floors) +
+    tiles.at(floorTile, x + 12, y + TILE, floors) +
+    tiles.at(floorTile, x + 24, y + TILE, floors)
   )
 }
 
-/** A camp of the Wilds: trees above grass, a cauldron once it is lit, a pile of logs before. */
-const camp = (tiles: Tiles, x: number, y: number, isLit: boolean, seed: number): string =>
-  tiles.at('grass', x, y) +
-  tiles.at('grass', x + 12, y) +
-  tiles.at('grass', x + 24, y) +
-  tiles.at(seed < 0.5 ? 'treeGreen' : 'treeAutumn', x, y) +
-  tiles.at('bush', x + 24, y) +
-  tiles.at('grassTufts', x, y + TILE) +
-  tiles.at('grass', x + 12, y + TILE) +
-  tiles.at('grass', x + 24, y + TILE) +
-  tiles.at(isLit ? 'cauldron' : 'logPile', x + 12, y + TILE)
+/** A camp of the Wilds: trees above grass (in the Region's biome), a cauldron once it is lit, a pile of logs before. */
+const camp = (tiles: Tiles, biome: Biome, x: number, y: number, isLit: boolean, seed: number): string => {
+  const { ground, growthTint } = BIOMES[biome]
+
+  return (
+    tiles.at('grass', x, y, ground) +
+    tiles.at('grass', x + 12, y, ground) +
+    tiles.at('grass', x + 24, y, ground) +
+    tiles.at(seed < 0.5 ? 'treeGreen' : 'treeAutumn', x, y, growthTint) +
+    tiles.at('bush', x + 24, y, growthTint) +
+    tiles.at('grassTufts', x, y + TILE, ground) +
+    tiles.at('grass', x + 12, y + TILE, ground) +
+    tiles.at('grass', x + 24, y + TILE, ground) +
+    tiles.at(isLit ? 'cauldron' : 'logPile', x + 12, y + TILE)
+  )
+}
 
 /** The difficulty as five gems under the Room (Unrated: a question mark); nothing for a Room known only by count. */
 const gems = (tiles: Tiles, lettering: Lettering, room: Room, x: number, y: number): string => {
@@ -388,22 +543,23 @@ const gems = (tiles: Tiles, lettering: Lettering, room: Room, x: number, y: numb
  * corridors between them; a Room per Quest (numbered as its Button is), lit
  * when cleared and dark when open, its difficulty in gems; Fog for the
  * Rooms past the last Quest; the selected Room framed. A Dungeon draws the
- * walls and floors of Tiny Dungeon, the Wilds camps on grass.
+ * walls and floors of Tiny Dungeon in its kind's palette (`crypt` when it
+ * has none), the Wilds camps on grass in the Region's biome.
  */
-export const floorSvg = ({ site, floor, selected, theme = 'crypt' }: FloorView): string => {
+export const floorSvg = ({ site, floor, selected, kind = 'crypt', biome = 'meadow' }: FloorView): string => {
   const tiles = new Tiles()
   const lettering = new Lettering()
   const width = ROOM_COLUMNS * ROOM + (ROOM_COLUMNS - 1) * CORRIDOR
   const height = HEADER + ROOM_ROWS * ROOM + (ROOM_ROWS - 1) * CORRIDOR
   const rooms = floorRooms(site, floor)
-  const ground = site.kind === 'wilds' ? MAP_COLORS.road : MAP_COLORS.corridor
+  const ground = site.kind === 'wilds' ? MAP_COLORS.road : THEMES[kind].corridor
   let corridors = ''
   let body = ''
   for (let at = 0; at < ROOMS_PER_FLOOR; at++) {
     const { x, y } = roomOrigin(at)
     const room = rooms[at]
     if (room === undefined) {
-      body += site.kind === 'wilds' ? camp(tiles, x, y, false, 0) : dungeonRoom(tiles, theme, x, y, false, 0)
+      body += site.kind === 'wilds' ? camp(tiles, biome, x, y, false, 0) : dungeonRoom(tiles, kind, x, y, false, 0)
       body += veil(x, y, ROOM, ROOM, 0.9)
       continue
     }
@@ -417,8 +573,8 @@ export const floorSvg = ({ site, floor, selected, theme = 'crypt' }: FloorView):
     const seed = seeded(site.key, 'room', floor, at)
     body +=
       site.kind === 'wilds'
-        ? camp(tiles, x, y, room.isCleared, seed)
-        : dungeonRoom(tiles, theme, x, y, room.isCleared, seed)
+        ? camp(tiles, biome, x, y, room.isCleared, seed)
+        : dungeonRoom(tiles, kind, x, y, room.isCleared, seed)
     if (!room.isCleared) {
       body += veil(x, y, ROOM, TILE * 2, 0.62)
     }
@@ -545,7 +701,6 @@ const LIT = '▣'
 const CHARTED = '★'
 const DARK = '▢'
 const FOG = '░'
-const TREE = '♣'
 const ROAD = '·'
 const CAMP = '▲'
 
@@ -583,8 +738,8 @@ const tidy = (runs: readonly GridRun[]): GridRow => {
  * The overworld as a character grid: two cells a tile; each site a box with
  * its number in its top edge (doubled when selected), two lit squares inside
  * a cleared Dungeon, two dark ones inside a Dungeon still open, two tents
- * inside the camp of the Wilds; clubs for trees, dots for the road, shade
- * for Fog.
+ * inside the camp of the Wilds; its biome's mark for trees (clubs in a
+ * meadow), dots for the road, shade for Fog.
  */
 export const overworldGrid = (regionId: string, sites: readonly OverworldSite[], biome: Biome = 'meadow'): GridRow[] => {
   const layout = overworldLayout(regionId, sites.map(({ site }) => site.key))
@@ -626,7 +781,7 @@ export const overworldGrid = (regionId: string, sites: readonly OverworldSite[],
       } else if (road.has(`${column},${row}`)) {
         runs.push({ text: ROAD + ROAD, color: MAP_COLORS.road })
       } else if (row > 0 && growthAt(regionId, biome, column, row)?.startsWith('tree') === true) {
-        runs.push({ text: `${TREE} `, color: MAP_COLORS.tree })
+        runs.push({ text: `${BIOMES[biome].mark} `, color: BIOMES[biome].markColor })
       } else {
         runs.push({ text: '  ' })
       }

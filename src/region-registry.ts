@@ -10,14 +10,14 @@
 
 import type { EngineInterface } from 'claude-code'
 
-import type { RegionEntry, RegionSnapshot, Tally } from '../types'
+import type { Biome, DungeonKind, DungeonTheme, RegionEntry, RegionSnapshot, RegionTheme, Tally } from '../types'
 import { discoveredKey } from './persistence'
 
 // The registry's types are the contract's (types/index.d.ts): a Snapshot
 // (`takenAt`, `dungeons` by key and name with their counts, `wilds`,
 // `modules`) and an entry (`id`, `root`, `remote`, `firstPlayedAt`,
-// `lastPlayedAt`, `snapshot?`).
-export type { RegionEntry, RegionSnapshot } from '../types'
+// `lastPlayedAt`, `snapshot?`, `theme?`), and the themes (issue #17).
+export type { Biome, DungeonKind, DungeonTheme, RegionEntry, RegionSnapshot, RegionTheme } from '../types'
 
 /** The `$.store` key of the registry: `Record<rootPath, RegionEntry>`. */
 export const REGIONS_KEY = 'regions'
@@ -31,6 +31,15 @@ export const MAX_NAME_CHARS = 80
 /** The most JSON text the registry takes in the store: an eighth of its 4 MiB. */
 export const MAX_REGISTRY_CHARS = 512 * 1024
 
+/** The biomes a Region's theme may choose, each a set of tiles and a palette (src/map-art.ts, src/world-art.ts). */
+export const BIOMES: readonly Biome[] = ['meadow', 'forest', 'coast', 'desert', 'snow', 'swamp']
+
+/** The kinds a Dungeon's theme may choose, each a wall and floor palette and a banner (src/map-art.ts). */
+export const DUNGEON_KINDS: readonly DungeonKind[] = ['crypt', 'fortress', 'aqueduct', 'mine', 'library', 'tower']
+
+/** The most characters a themed name has: a short place name. */
+export const MAX_THEMED_NAME_CHARS = 32
+
 /** The key prefix of a Region seeded by name alone, its root not known. */
 const NAME_ONLY = 'name:'
 
@@ -39,6 +48,9 @@ const DISCOVERED = 'discovered:'
 
 /** A Region's id: its root's folder name. */
 export const regionIdOf = (root: string): string => root.split(/[\\/]/).filter(Boolean).pop() ?? root
+
+/** The registry's key of an entry: its root (kept as rootKeyOf keys it), or its name for a Region seeded by name alone. */
+export const registryKeyOf = (entry: Pick<RegionEntry, 'id' | 'root'>): string => (entry.root === '' ? `${NAME_ONLY}${entry.id}` : entry.root)
 
 /** The registry's key for `root`: as the discovered Modules key it, slashes forward, no trailing one. */
 export const rootKeyOf = (root: string): string => discoveredKey(root).slice(DISCOVERED.length)
@@ -57,6 +69,44 @@ const isEntry = (value: unknown): value is RegionEntry =>
 const count = (value: unknown): number =>
   typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
 
+/** A themed name as kept: one line of text, trimmed, 1 to MAX_THEMED_NAME_CHARS characters; else null. */
+export const themedNameOf = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const name = value.trim()
+
+  return name === '' || name.length > MAX_THEMED_NAME_CHARS || /[\u0000-\u001f\u007f]/.test(name) ? null : name
+}
+
+/** A Region's theme when it is one (a name, a biome of BIOMES, when it was made); else undefined. */
+export const themeOf = (entry: { theme?: unknown }): RegionTheme | undefined => {
+  const theme: unknown = entry.theme
+  if (!isRecord(theme)) {
+    return undefined
+  }
+  const name = themedNameOf(theme.name)
+  const { biome, themedAt } = theme
+
+  return name !== null && BIOMES.includes(biome as Biome) && typeof themedAt === 'string'
+    ? { name, biome: biome as Biome, themedAt }
+    : undefined
+}
+
+/** A Dungeon's theme when it is one (a name, a kind of DUNGEON_KINDS, when it was made); else undefined. */
+export const dungeonThemeOf = (dungeon: { theme?: unknown }): DungeonTheme | undefined => {
+  const theme: unknown = dungeon.theme
+  if (!isRecord(theme)) {
+    return undefined
+  }
+  const name = themedNameOf(theme.name)
+  const { kind, themedAt } = theme
+
+  return name !== null && DUNGEON_KINDS.includes(kind as DungeonKind) && typeof themedAt === 'string'
+    ? { name, kind: kind as DungeonKind, themedAt }
+    : undefined
+}
+
 /** A pair of counts, `cleared` never past `total`. */
 const share = (total: unknown, cleared: unknown): { total: number; cleared: number } => {
   const all = count(total)
@@ -64,7 +114,7 @@ const share = (total: unknown, cleared: unknown): { total: number; cleared: numb
   return { total: all, cleared: Math.min(count(cleared), all) }
 }
 
-/** A Snapshot as the registry keeps it: names cut, Dungeons bounded, counts whole, nothing else. */
+/** A Snapshot as the registry keeps it: names cut, Dungeons bounded, counts whole, themes checked, nothing else. */
 const cleanSnapshot = (snapshot: RegionSnapshot): RegionSnapshot => {
   const dungeons = Array.isArray(snapshot.dungeons) ? snapshot.dungeons : []
   const modules: Record<string, unknown> = isRecord(snapshot.modules) ? snapshot.modules : {}
@@ -73,11 +123,16 @@ const cleanSnapshot = (snapshot: RegionSnapshot): RegionSnapshot => {
 
   return {
     takenAt: String(snapshot.takenAt),
-    dungeons: dungeons.slice(0, MAX_DUNGEONS).map(dungeon => ({
-      key: String(dungeon.key).slice(0, MAX_NAME_CHARS),
-      name: String(dungeon.name).slice(0, MAX_NAME_CHARS),
-      ...share(dungeon.total, dungeon.cleared),
-    })),
+    dungeons: dungeons.slice(0, MAX_DUNGEONS).map(dungeon => {
+      const theme = dungeonThemeOf(dungeon)
+
+      return {
+        key: String(dungeon.key).slice(0, MAX_NAME_CHARS),
+        name: String(dungeon.name).slice(0, MAX_NAME_CHARS),
+        ...share(dungeon.total, dungeon.cleared),
+        ...(theme === undefined ? {} : { theme }),
+      }
+    }),
     wilds: share(wilds.total, wilds.cleared),
     modules: { discovered: counted.cleared, total: counted.total },
   }
@@ -120,9 +175,37 @@ export const touched = (
 }
 
 /**
+ * `snapshot` with the themes `kept` (the Snapshot it replaces) holds for its
+ * Dungeons, by key: the Region map takes a Snapshot knowing no themes, and a
+ * theme is made once, ever.
+ */
+const withKeptThemes = (snapshot: RegionSnapshot, kept: RegionSnapshot | undefined): RegionSnapshot => {
+  const themes = new Map<string, DungeonTheme>()
+  for (const dungeon of kept?.dungeons ?? []) {
+    const theme = dungeonThemeOf(dungeon)
+    if (theme !== undefined) {
+      themes.set(dungeon.key, theme)
+    }
+  }
+  if (themes.size === 0) {
+    return snapshot
+  }
+
+  return {
+    ...snapshot,
+    dungeons: snapshot.dungeons.map(dungeon => {
+      const theme = dungeon.theme ?? themes.get(dungeon.key)
+
+      return theme === undefined ? dungeon : { ...dungeon, theme }
+    }),
+  }
+}
+
+/**
  * The registry with `root`'s Snapshot replaced by `snapshot` (names and
- * counts only), nothing else of its entry changed; a Region not known yet is
- * created with it, first and last played now.
+ * counts only, and the Dungeons' themes the old one held), nothing else of
+ * its entry changed; a Region not known yet is created with it, first and
+ * last played now.
  */
 export const withSnapshot = (
   regions: Record<string, RegionEntry>,
@@ -134,7 +217,53 @@ export const withSnapshot = (
   const key = rootKeyOf(root)
   const kept = regions[key] ?? { id: meta.id, root: key, remote: meta.remote, firstPlayedAt: now, lastPlayedAt: now }
 
-  return { ...regions, [key]: { ...kept, snapshot: cleanSnapshot(snapshot) } }
+  return { ...regions, [key]: { ...kept, snapshot: cleanSnapshot(withKeptThemes(snapshot, kept.snapshot)) } }
+}
+
+/**
+ * The registry with `theme` on the Region under registry key `key`, when it
+ * is there and has none yet (a theme is made once and kept for ever).
+ */
+export const withRegionTheme = (
+  regions: Record<string, RegionEntry>,
+  key: string,
+  theme: RegionTheme,
+): Record<string, RegionEntry> => {
+  const entry = regions[key]
+  const checked = themeOf({ theme })
+  if (entry === undefined || themeOf(entry) !== undefined || checked === undefined) {
+    return regions
+  }
+
+  return { ...regions, [key]: { ...entry, theme: checked } }
+}
+
+/**
+ * The registry with `theme` on Dungeon `dungeon` (its key) of the Snapshot
+ * of the Region under registry key `key`, when both are there and the
+ * Dungeon has none yet.
+ */
+export const withDungeonTheme = (
+  regions: Record<string, RegionEntry>,
+  key: string,
+  dungeon: string,
+  theme: DungeonTheme,
+): Record<string, RegionEntry> => {
+  const entry = regions[key]
+  const snapshot = entry?.snapshot
+  const checked = dungeonThemeOf({ theme })
+  const kept = snapshot?.dungeons.find(each => each.key === dungeon)
+  if (entry === undefined || snapshot === undefined || checked === undefined || kept === undefined || dungeonThemeOf(kept) !== undefined) {
+    return regions
+  }
+
+  return {
+    ...regions,
+    [key]: {
+      ...entry,
+      snapshot: { ...snapshot, dungeons: snapshot.dungeons.map(each => (each.key === dungeon ? { ...each, theme: checked } : each)) },
+    },
+  }
 }
 
 /** What a Quest closing cleared: its ticket's Dungeon by key, or the Wilds (null). */
@@ -340,6 +469,25 @@ export async function writeSnapshot(
   meta: { id: string; remote: string | null },
 ): Promise<void> {
   await changeRegions($, (regions, now) => withSnapshot(regions, root, snapshot, meta, now))
+}
+
+/** Keeps `theme` on the Region under registry key `key` (when it has none); resolves to the registry. */
+export function writeRegionTheme(
+  $: EngineInterface,
+  key: string,
+  theme: RegionTheme,
+): Promise<Record<string, RegionEntry>> {
+  return changeRegions($, regions => withRegionTheme(regions, key, theme))
+}
+
+/** Keeps `theme` on a Dungeon of the Snapshot of the Region under registry key `key`; resolves to the registry. */
+export function writeDungeonTheme(
+  $: EngineInterface,
+  key: string,
+  dungeon: string,
+  theme: DungeonTheme,
+): Promise<Record<string, RegionEntry>> {
+  return changeRegions($, regions => withDungeonTheme(regions, key, dungeon, theme))
 }
 
 /** Touches the Region at `root` as a Quest closes there, lighting what it cleared; resolves to the registry. */
