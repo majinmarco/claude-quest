@@ -64,7 +64,7 @@ const asDetails = (issue: GhIssue): TicketDetails => {
   return {
     ...asQuest(issue),
     ...(summary === undefined ? {} : { summary }),
-    ...(description === undefined ? {} : { description }),
+    ...(description === undefined ? {} : { description, descriptionFormat: 'markdown' as const }),
   }
 }
 

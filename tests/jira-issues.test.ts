@@ -345,7 +345,7 @@ describe('Jira adapter', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      value: { summary: 'Orders of 10 or more.\nGet 10% off.', description: 'Orders of 10 or more.\nGet 10% off.' },
+      value: { summary: 'Orders of 10 or more.\nGet 10% off.', description: 'Orders of 10 or more.\nGet 10% off.', descriptionFormat: 'text' },
     })
   })
 

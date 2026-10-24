@@ -27,9 +27,21 @@ export const DESCRIPTION_CUT = 8000
 /** What follows a description cut at DESCRIPTION_CUT. */
 export const DESCRIPTION_REST = '… (open the ticket for the rest)'
 
-/** A description as the log shows it: whole up to DESCRIPTION_CUT characters, else cut there, saying so. */
-export const descriptionShown = (text: string): string =>
-  text.length <= DESCRIPTION_CUT ? text : `${text.slice(0, DESCRIPTION_CUT).trimEnd()}\n\n${DESCRIPTION_REST}`
+/**
+ * A description as the log shows it: whole up to DESCRIPTION_CUT characters,
+ * else cut there, saying so; a Markdown code fence the cut left open is
+ * closed first, so the note is not drawn as code.
+ */
+export const descriptionShown = (text: string): string => {
+  if (text.length <= DESCRIPTION_CUT) {
+    return text
+  }
+
+  const cut = text.slice(0, DESCRIPTION_CUT).trimEnd()
+  const isFenceOpen = (cut.match(/^ {0,3}(```|~~~)/gm) ?? []).length % 2 === 1
+
+  return `${cut}${isFenceOpen ? '\n```' : ''}\n\n${DESCRIPTION_REST}`
+}
 
 /** The most of a description the Quest Board's unrolled Scroll shows, in characters. */
 export const EXCERPT_CHARS = 300
@@ -264,6 +276,9 @@ export function drawQuestLog($: EngineInterface, e: RenderInput<'Pane'>, model: 
       <Text dimColor>{`No ticket ${ticket} in this Region's Quest Source.`}</Text>
     ) : fetch.details.description === undefined ? (
       <Text dimColor>The ticket has no description.</Text>
+    ) : fetch.details.descriptionFormat === 'text' ? (
+      // Jira's, flattened to plain text: drawn as written, never read as Markdown.
+      <Text>{descriptionShown(fetch.details.description)}</Text>
     ) : (
       <Markdown key="quest-log-description" text={descriptionShown(fetch.details.description)} />
     )

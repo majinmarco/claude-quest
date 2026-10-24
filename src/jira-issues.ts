@@ -102,7 +102,7 @@ const asDetails = (issue: JiraIssue, field: string | undefined): TicketDetails =
   return {
     ...asQuest(issue, field),
     ...(summary === undefined ? {} : { summary }),
-    ...(description === undefined ? {} : { description }),
+    ...(description === undefined ? {} : { description, descriptionFormat: 'text' as const }),
   }
 }
 

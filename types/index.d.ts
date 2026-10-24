@@ -517,7 +517,12 @@ export type QuestCard = {
  * whole (`description`: Markdown for GitHub Issues, plain text for Jira), as
  * the Quest Log shows it.
  */
-export type TicketDetails = QuestCard & { summary?: string; description?: string }
+export type TicketDetails = QuestCard & {
+  summary?: string
+  description?: string
+  /** How `description` is written: `markdown` (GitHub Issues) or plain `text` (Jira); absent with no description. */
+  descriptionFormat?: 'markdown' | 'text'
+}
 
 /** Why a Quest Source could not list its Quests. */
 export type QuestSourceProblem = {

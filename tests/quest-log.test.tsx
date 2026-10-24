@@ -163,6 +163,12 @@ describe('Quest Log: the description shown', () => {
     expect(shown).not.toContain('b')
     expect(shown.endsWith('… (open the ticket for the rest)')).toBe(true)
   })
+
+  test('a cut inside a code fence closes it, so the note is not drawn as code', () => {
+    const shown = descriptionShown(`Intro\n\n\`\`\`ts\n${'x'.repeat(8100)}\n\`\`\``)
+
+    expect(shown.endsWith('\n```\n\n… (open the ticket for the rest)')).toBe(true)
+  })
 })
 
 describe('Quest Log: the Scroll\'s excerpt', () => {

@@ -51,7 +51,8 @@ import { drawScene } from '../src/scene'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
-import type { QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketFetch, XpPool } from '../types'
+import type { QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketDetails, TicketFetch, XpPool } from '../types'
+import type { Sourced } from '../src/quest-source'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
@@ -607,18 +608,20 @@ async function fetchTicket($: EngineInterface, ticket: string, isForced = false)
     return
   }
 
-  const { source } = await regionQuestSource($)
-  const got = await source.get(ticket).catch(
-    (error: unknown): Awaited<ReturnType<typeof source.get>> => ({
+  // Any failure, the Quest Source not even resolved included, is told as
+  // unreachable: the ticket never stays `loading` for the session.
+  const got = await regionQuestSource($)
+    .then(({ source }) => source.get(ticket))
+    .catch((error: unknown): Sourced<TicketDetails | null> => ({
       ok: false,
       problem: { kind: 'unreachable', message: String(error) },
-    }),
-  )
-  await keepTicket($, ticket, got.ok ? { state: 'got', details: got.value } : { state: 'unavailable', problem: got.problem })
+    }))
+  await keepTicket($, ticket, got)
 }
 
-/** Keeps what fetching `ticket` found, for the Quest Log and the Quest Board's Scroll. */
-async function keepTicket($: EngineInterface, ticket: string, fetched: TicketFetch): Promise<void> {
+/** Keeps what fetching `ticket` found (its details, or why it could not be reached), for the Quest Log and the Quest Board's Scroll. */
+async function keepTicket($: EngineInterface, ticket: string, got: Sourced<TicketDetails | null>): Promise<void> {
+  const fetched: TicketFetch = got.ok ? { state: 'got', details: got.value } : { state: 'unavailable', problem: got.problem }
   await update($, memberOf(ticketDetails, { requestId: ticket }), (): TicketFetch => fetched)
 }
 
@@ -674,7 +677,7 @@ async function lookUpTicket($: EngineInterface, ticket: string, listed: boolean,
   const kept = await read($, memberOf(ticketDetails, { requestId: ticket }))
   const got: Awaited<ReturnType<typeof source.get>> =
     kept?.state === 'got' && kept.details !== null ? { ok: true, value: kept.details } : await source.get(ticket)
-  await keepTicket($, ticket, got.ok ? { state: 'got', details: got.value } : { state: 'unavailable', problem: got.problem })
+  await keepTicket($, ticket, got)
 
   if (!got.ok) {
     $.ui.log(`Could not look ${ticket} up in its Quest Source: ${got.problem.message}`, { to: 'debug' })

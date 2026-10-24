@@ -244,7 +244,7 @@ describe('GitHub Issues adapter', () => {
     const body = '## Problem\n\nOrders of **10** or more get [10% off](https://example.com).\n\n- [ ] done'
     const result = await githubIssues(fakeGh([{ ...issue([]), body }]).run).get('#7')
 
-    expect(result).toMatchObject({ ok: true, value: { description: body } })
+    expect(result).toMatchObject({ ok: true, value: { description: body, descriptionFormat: 'markdown' } })
   })
 
   test('output gh did not write as JSON is unreachable, not a crash', async () => {
