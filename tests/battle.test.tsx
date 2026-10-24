@@ -10,6 +10,7 @@ import {
   vitestFailing3,
   vitestPassing,
 } from './fixtures/bash-calls'
+import { editOneLine } from './fixtures/file-changes'
 
 const SCENE = {
   plugin: 'quest-mod',
@@ -42,7 +43,7 @@ const HUD = {
 const START = { cwd: '/work/runners', surface: 'desktop', isInteractive: true } as const
 
 /** A recorded Bash call: what the hook saw, and what the tool answered. */
-type Recorded = { input: { command: string; tool: 'Bash'; tool_use_id: string }; result: unknown }
+type Recorded = { input: { tool: string; tool_use_id: string }; result: unknown }
 
 /**
  * Answers the engine's side of the mod, each Bash call with the result its
@@ -81,7 +82,7 @@ const engine = (on: On) => {
     recorded: (call: Recorded) => {
       answers.set(call.input.tool_use_id, call.result)
 
-      return call.input
+      return call.input as never
     },
   }
 }
@@ -118,6 +119,8 @@ describe('Battle', () => {
     await $.tool.call(recorded(vitestFailing1))
     expect((await lineOn($, 'terminal')).text).toBe('2 hits on the bug: vitest run · 1/3 HP')
 
+    // The fix: a Battle won pays only for edits made while it stood.
+    await $.tool.call(recorded(editOneLine))
     await $.tool.call(recorded(vitestPassing))
     expect((await lineOn($, 'terminal')).text).toBe(
       'Battle won: vitest run all green · +30 XP (Strength)',

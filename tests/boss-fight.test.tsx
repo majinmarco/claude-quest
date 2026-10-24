@@ -307,12 +307,13 @@ describe('The Boss Fight', () => {
     await call($, commitAfterAdd)
 
     expect(asked).toHaveLength(0)
-    expect(toasts).toContain('No boss came for Quest #12: it closes without a Boss Fight.')
+    // Unfought, an Unrated Quest pays a quarter of its 80.
+    expect(toasts).toContain('No boss came for Quest #12: it closes without a Boss Fight. +20 XP (Intelligence).')
     expect(region().quests?.[0]).toMatchObject({ ticket: '#12', status: 'unfought', endedAt: '2026-10-23T21:00:00.000Z' })
     expect((await hud($)).some(text => text?.startsWith('Quest '))).toBe(false)
   })
 
-  test('/boss tells the Question as text; three right answers win XP and a badge, and the Region file records it', async ($, on) => {
+  test('/boss tells the Question as text; three right answers win the Quest reward and a trophy, and the Region file records it', async ($, on) => {
     const { call, clock, player, region, toasts } = engine(on)
     await $.session.start(START)
     await startQuest($)
@@ -335,17 +336,21 @@ describe('The Boss Fight', () => {
 
     await clock.advance(60_000)
     const first = await run($, 'boss', 'A')
-    expect(first.text).toMatch(/^Hit! \+20 XP \(Intelligence\)\. Boss 2\/3 HP\ndeposit throws/)
+    expect(first.text).toMatch(/^Hit! \+30 XP \(Intelligence\)\. Boss 2\/3 HP\ndeposit throws/)
     await run($, 'boss', 'a')
     const last = await run($, 'boss', 'A')
 
-    expect(last.text).toContain('The boss falls! +100 XP (Intelligence) and a badge: Bane of #12\'s Boss. Quest #12 closed.')
+    // An Unrated Quest (the board never listed it) rewards 80, Flawless 40 more.
+    expect(last.text).toContain('The boss falls! +120 XP (Intelligence). Flawless! Trophy: Bane of vault#12. Quest #12 closed.')
+    // 3 × 30 + 120 = 210: level 2 (at 100) with 110 into it.
     expect(player()).toMatchObject({
       level: 2,
-      xp: 60,
-      badges: [{ name: 'Bane of #12\'s Boss', ticket: '#12' }],
+      xp: 110,
+      totalXp: 210,
+      trophies: [{ name: 'Bane of vault#12', region: 'vault', ticket: '#12' }],
     })
-    expect(toasts).toContain('Badge earned: Bane of #12\'s Boss')
+    expect(toasts).toContain('Trophy won: Bane of vault#12')
+    expect(toasts).toContain('Badge earned: Boss Slayer · /badges')
     expect(region().quests?.[0]).toMatchObject({ ticket: '#12', status: 'won' })
     expect(typeof region().quests?.[0]?.endedAt).toBe('string')
     expect((await hud($)).some(text => text?.startsWith('Quest '))).toBe(false)
@@ -363,8 +368,8 @@ describe('The Boss Fight', () => {
 
     expect(wrong.text).toMatch(/^The boss strikes: -10 HP\. The answer was A: It throws/)
     expect(last.text).toContain('The boss still stands, 1/3 HP: Quest #12 closed without the Boss Fight\'s reward.')
-    expect(player()).toMatchObject({ hp: 90, xp: 40 })
-    expect(player()?.badges).toBeUndefined()
+    expect(player()).toMatchObject({ hp: 90, xp: 60 })
+    expect(player()?.trophies).toBeUndefined()
     expect(region().quests?.[0]).toMatchObject({ status: 'lost' })
   })
 
@@ -401,8 +406,8 @@ describe('The Boss Fight', () => {
     ])
 
     await ui.press({ key: 'boss-option:boss-1:0' })
-    expect((await ui.find({ type: 'Text', text: /^Hit!/ }))?.text).toBe('Hit! +20 XP (Intelligence). Boss 2/3 HP')
-    expect(player()).toMatchObject({ xp: 20 })
+    expect((await ui.find({ type: 'Text', text: /^Hit!/ }))?.text).toBe('Hit! +30 XP (Intelligence). Boss 2/3 HP')
+    expect(player()).toMatchObject({ xp: 30 })
 
     await ui.press({ key: 'boss-skip' })
     expect(region().quests?.[0]).toMatchObject({ status: 'skipped' })
@@ -442,7 +447,7 @@ describe('The Boss Fight', () => {
     await run($, 'boss', 'A')
     const won = await $.ui.mount({ ...SCENE, surface: 'terminal' })
     expect((await won.find({ type: 'Text' }))?.text).toBe(
-      'The boss of Quest #12 falls! +100 XP (Intelligence) and a badge: Bane of #12\'s Boss',
+      'The boss of Quest #12 falls! +120 XP (Intelligence) · Flawless · trophy: Bane of vault#12',
     )
     await won.unmount()
   })

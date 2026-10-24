@@ -13,10 +13,12 @@ import {
 import type { Model, QuestionInput } from '../src/content-generator'
 import { isUnderWay, newGame, step } from '../src/engine'
 import type { Effect, FileChange, GameEvent, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
-import { drawHud } from '../src/hud'
+import { badgesText, drawHud } from '../src/hud'
 import {
   discoveredModulesOf,
   loadPlayer,
+  loadPlayerMigrated,
+  migratePlayer,
   readRegionFile,
   recordModulesDiscovered,
   recordQuestAbandoned,
@@ -36,7 +38,7 @@ import { drawScene } from '../src/scene'
 import { rulesOf } from '../src/settings'
 import { translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
-import type { QuestBoard } from '../types'
+import type { Difficulty, QuestBoard, XpPool } from '../types'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
@@ -140,7 +142,7 @@ async function askSage($: EngineInterface, changes: FileChange[], rules: Rules):
   const key = await cacheKeyOf(changes)
   const cached = cachedQuestion(await read($, questionCache), key)
   if (cached !== undefined) {
-    await queueQuestion($, cached, rules)
+    await queueQuestion($, cached, key, rules)
     return
   }
 
@@ -157,16 +159,19 @@ async function askSage($: EngineInterface, changes: FileChange[], rules: Rules):
   }
 
   await update($, questionCache, cache => remember(cache, key, generated.question))
-  await queueQuestion($, generated.question, rules)
+  await queueQuestion($, generated.question, key, rules)
 }
 
 /**
- * Queues a Question the Sage made, unless the same one is already waiting
- * (an identical change, cached, made again before it was answered).
+ * Queues a Question the Sage made about the change cached under `key`,
+ * unless the same one is already waiting (an identical change, cached, made
+ * again before it was answered); the Game Engine queues none for a change
+ * already answered this session.
  */
 async function queueQuestion(
   $: EngineInterface,
   question: QuestionContent,
+  key: string,
   rules: Rules,
 ): Promise<void> {
   const waiting = (await read($, game))?.questions ?? []
@@ -178,7 +183,7 @@ async function queueQuestion(
     return
   }
 
-  await play($, { type: 'QUESTION_READY', question, at: await $.clock.now() }, rules)
+  await play($, { type: 'QUESTION_READY', question, key, at: await $.clock.now() }, rules)
   await showIfInView($, rules)
 }
 
@@ -391,6 +396,30 @@ async function stepGame($: EngineInterface, event: GameEvent, rules: Rules): Pro
   return effects
 }
 
+/**
+ * A Quest's difficulty, as the Quest Board last listed its ticket: Unrated
+ * when the board never listed it, so the Quest reward is never lost to it.
+ */
+async function listedDifficulty($: EngineInterface, ticket: string): Promise<Difficulty> {
+  const { listing } = await read($, board)
+  const card = listing.state === 'listed' ? listing.quests.find(quest => quest.ticket === ticket) : undefined
+
+  return card?.difficulty ?? 'Unrated'
+}
+
+/** What a full XP pool's toast says: the Sage still pays (or, once hers is full, the boss). */
+const cappedText = (pool: XpPool, inQuest: boolean): string => {
+  const scope = inQuest ? 'this Quest' : 'this session, outside a Quest'
+  switch (pool) {
+    case 'ambient':
+      return `Exploration and Crafting XP is full for ${scope}. The Sage's Questions still pay: /sage`
+    case 'battle':
+      return `Battle XP is full for ${scope}. The Sage's Questions still pay: /sage`
+    case 'sage':
+      return `The Sage's XP is full for ${scope}. ${inQuest ? 'The Boss Fight still pays.' : 'Start a Quest for more: /quest-board'}`
+  }
+}
+
 /** Steps the session's game by one event, keeps the Player, plays the effects. */
 async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
   const effects = await stepGame($, event, rules)
@@ -409,7 +438,7 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
 
   for (const effect of effects) {
     if (effect.type === 'LEVEL_UP') {
-      $.ui.toast(`Level up! You are now level ${effect.level}.`)
+      $.ui.toast(`Level up! You are now level ${effect.level}, fully healed.`)
     }
     if (effect.type === 'COMPACTION_WARNING') {
       $.ui.toast(
@@ -446,7 +475,17 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
       $.ui.toast(`The boss of Quest ${effect.ticket} bars the way: ${effect.hp} review Questions. /boss`)
     }
     if (effect.type === 'BADGE_EARNED') {
-      $.ui.toast(`Badge earned: ${effect.badge.name}`)
+      $.ui.toast(`Badge earned: ${effect.badge.name} · /badges`)
+    }
+    if (effect.type === 'TROPHY_EARNED') {
+      $.ui.toast(`Trophy won: ${effect.trophy.name}`)
+    }
+    if (effect.type === 'XP_CAPPED') {
+      $.ui.toast(cappedText(effect.pool, saved?.quest != null))
+    }
+    // A level-up heals fully: its own toast says so.
+    if (effect.type === 'HP_HEALED' && saved !== null && !effects.some(each => each.type === 'LEVEL_UP')) {
+      $.ui.toast(`Healed +${effect.amount} HP: ${saved.player.hp}/${saved.player.maxHp}`)
     }
     if (effect.type === 'QUEST_CLOSED') {
       const fight = saved?.bossFight
@@ -471,8 +510,22 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     // After a reload of the mod the session's game is still in $.state; one
     // kept by an older version of the mod gains the fields it lacks.
+    // A Player kept by an older mod is migrated (ADR 0002): a level the new
+    // curve changes is told once, as the migrated Player is kept.
     const kept = await read($, game)
-    const player = kept?.player ?? (await loadPlayer($))
+    const loaded = kept === null ? await loadPlayerMigrated($) : migratePlayer(kept.player)
+    const { player } = loaded
+    // Kept migrated, so the next load migrates nothing and tells nothing.
+    if (kept !== null) {
+      await savePlayer($, player)
+    }
+    if (loaded.levelChange !== null) {
+      $.ui.toast(
+        `Claude Quest's levels were rebalanced: you are level ${loaded.levelChange.to} (was ${loaded.levelChange.from}), your XP kept.`,
+      )
+    }
+    const root = await $.session.root().catch(() => null)
+    const regionName = root === null ? null : (root.split(/[\\/]/).filter(Boolean).pop() ?? null)
     // The modules explored in this Region in earlier sessions are no first
     // visit; with no Region file to read, every module is new.
     const region = await readRegionFile($).catch(() => ({ ok: false as const }))
@@ -482,6 +535,8 @@ export const register: Register = (on, options) => {
 
       return {
         ...resumed,
+        player,
+        region: regionName,
         visitedModules: [...new Set([...discovered, ...resumed.visitedModules])],
       }
     })
@@ -498,6 +553,9 @@ export const register: Register = (on, options) => {
         name: 'sage',
         description: 'Answer the Sage\'s Questions; /sage A-D answers the first one',
       })
+      .catch(() => undefined)
+    await $.command
+      .register({ name: 'badges', description: 'Your Badges, trophies, title and Stats' })
       .catch(() => undefined)
     await $.command
       .register({
@@ -645,6 +703,12 @@ export const register: Register = (on, options) => {
     return { text: answered == null ? 'The boss did not hear that answer.' : bossAnswerText(answered) }
   })
 
+  on('command.run', { command: 'badges' }, async $ => {
+    const player = (await read($, game))?.player ?? (await loadPlayer($))
+
+    return { text: badgesText(player) }
+  })
+
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
     await openSceneForArt($, [e.surface])
@@ -658,7 +722,11 @@ export const register: Register = (on, options) => {
     const event = translateCommand(e)
 
     if (event !== null) {
-      await play($, event, rules)
+      await play(
+        $,
+        event.type === 'QUEST_START' ? { ...event, difficulty: await listedDifficulty($, event.ticket) } : event,
+        rules,
+      )
     }
 
     return next(e)

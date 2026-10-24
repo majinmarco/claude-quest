@@ -227,7 +227,8 @@ describe('The Sage', () => {
 
     expect((await ui.find({ type: 'Text', text: /^Right/ }))?.text).toBe('Right! +20 XP (Intelligence)')
     expect(await ui.find({ type: 'Text', text: 'It trims the email, then lowercases it.' })).toBeDefined()
-    expect(player()).toMatchObject({ xp: 30, hp: 100, stats: { intelligence: 20 } })
+    // The Crafting's 5 and the answer's 20.
+    expect(player()).toMatchObject({ xp: 25, hp: 100, stats: { intelligence: 20 } })
     expect((await hudQuestions($)).text).toBeUndefined()
     await ui.unmount()
   })

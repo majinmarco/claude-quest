@@ -130,9 +130,9 @@ describe('Quest Board', () => {
       const card = await ui.find({ type: 'Button', key: 'quest:#5' })
       expect(card?.text).toBe('#5 Quest Board from GitHub Issues')
       const shown = await texts(ui)
-      expect(shown).toContain('Medium · 100 XP · INT · ready-for-agent')
-      expect(shown).toContain('Hard · 200 XP · INT · needs-triage')
-      expect(shown).toContain('Trivial · 25 XP · STR · ready-for-agent')
+      expect(shown).toContain('Medium · Boss: +100 XP · INT · ready-for-agent')
+      expect(shown).toContain('Hard · Boss: +140 XP · INT · needs-triage')
+      expect(shown).toContain('Trivial · Boss: +40 XP · STR · ready-for-agent')
       await ui.unmount()
     }
   })
@@ -159,7 +159,7 @@ describe('Quest Board', () => {
     await questBoard($)
 
     const ui = await $.ui.mount({ ...BOARD, surface: 'terminal' })
-    expect(await texts(ui)).toContain('Medium · 100 XP · INT · ready-for-agent')
+    expect(await texts(ui)).toContain('Medium · Boss: +100 XP · INT · ready-for-agent')
     await ui.unmount()
   })
 
@@ -402,8 +402,8 @@ describe('Quest Board: the Region chooses its Quest Source', () => {
         'CPI-12 Dashboard filters',
       )
       const shown = await texts(ui)
-      expect(shown).toContain('Medium · 100 XP · INT · To Do')
-      expect(shown).toContain('Unrated · 50 XP · STR · In Progress')
+      expect(shown).toContain('Medium · Boss: +100 XP · INT · To Do')
+      expect(shown).toContain('Unrated · Boss: +80 XP · STR · In Progress')
       await ui.unmount()
     }
   })

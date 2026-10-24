@@ -11,7 +11,7 @@
     "sageCallsPerQuest": {
       "type": "number",
       "title": "Sage calls per Quest",
-      "description": "How many times per Quest the Sage may ask Haiku for a Question. Over budget, Questions are skipped.",
+      "description": "How many times per Quest the Sage may ask Haiku for a Question. Over budget, Questions are skipped. Sage XP is capped per Quest (200), so raising this adds Questions, not XP.",
       "default": 10,
       "min": 0
     },

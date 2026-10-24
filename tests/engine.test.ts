@@ -1,15 +1,16 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { BOSS_FIGHT_XP, DEFAULT_RULES, HASTY_ANSWER_XP, MAX_QUEST_CHANGES, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
+import { BOSS_ANSWER_XP, DEFAULT_RULES, HASTY_ANSWER_XP, MAX_QUEST_CHANGES, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
 import type { GameState, QuestionContent } from '../types'
 
 describe('Game Engine: a new Player', () => {
-  test('starts at level 1 with no XP, full HP and no Stats', () => {
+  test('starts at level 1 with no XP, full HP, no Stats and an empty tally', () => {
     const { player } = newGame()
 
     expect(player).toEqual({
       level: 1,
       xp: 0,
+      totalXp: 0,
       hp: 100,
       maxHp: 100,
       stats: {
@@ -20,12 +21,13 @@ describe('Game Engine: a new Player', () => {
         charisma: 0,
         constitution: 0,
       },
+      tally: { questsClosed: 0, bossesWon: 0, bossStreak: 0, sageRight: 0, modulesDiscovered: 0, regions: [] },
     })
   })
 })
 
 describe('Game Engine: Exploration', () => {
-  test('a file read starts an Exploration Encounter and earns 5 XP', () => {
+  test('a file read starts an Exploration Encounter and earns 1 XP', () => {
     const visited = { ...newGame(), visitedModules: ['src'] }
 
     const { state, effects } = step(visited, {
@@ -34,24 +36,12 @@ describe('Game Engine: Exploration', () => {
       module: 'src',
     })
 
-    expect(state.player.xp).toBe(5)
-    expect(state.encounter).toEqual({
-      kind: 'Exploration',
-      target: 'src/engine.ts',
-      module: 'src',
-      isFirstVisit: false,
-    })
+    expect(state.player.xp).toBe(1)
+    const encounter = { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: false, xp: 1 }
+    expect(state.encounter).toEqual(encounter)
     expect(effects).toEqual([
-      {
-        type: 'ENCOUNTER_STARTED',
-        encounter: {
-          kind: 'Exploration',
-          target: 'src/engine.ts',
-          module: 'src',
-          isFirstVisit: false,
-        },
-      },
-      { type: 'XP_GAINED', amount: 5 },
+      { type: 'ENCOUNTER_STARTED', encounter },
+      { type: 'XP_GAINED', amount: 1 },
     ])
   })
 })
@@ -61,38 +51,26 @@ describe('Game Engine: first visit to a module', () => {
     expect(newGame().visitedModules).toEqual([])
   })
 
-  test('the first read in a module earns 10 bonus Wisdom XP on top of the 5', () => {
+  test('the first read in a module earns 5 bonus Wisdom XP on top of the 1', () => {
     const { state, effects } = step(newGame(), {
       type: 'FILE_READ',
       path: 'src/engine.ts',
       module: 'src',
     })
 
-    expect(state.player.xp).toBe(15)
+    expect(state.player.xp).toBe(6)
     expect(state.visitedModules).toEqual(['src'])
-    expect(state.encounter).toEqual({
-      kind: 'Exploration',
-      target: 'src/engine.ts',
-      module: 'src',
-      isFirstVisit: true,
-    })
+    const encounter = { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true, xp: 6 }
+    expect(state.encounter).toEqual(encounter)
     expect(effects).toEqual([
-      {
-        type: 'ENCOUNTER_STARTED',
-        encounter: {
-          kind: 'Exploration',
-          target: 'src/engine.ts',
-          module: 'src',
-          isFirstVisit: true,
-        },
-      },
-      { type: 'XP_GAINED', amount: 5 },
+      { type: 'ENCOUNTER_STARTED', encounter },
+      { type: 'XP_GAINED', amount: 1 },
       { type: 'MODULE_DISCOVERED', module: 'src' },
-      { type: 'XP_GAINED', amount: 10, stat: 'wisdom' },
+      { type: 'XP_GAINED', amount: 5, stat: 'wisdom' },
     ])
   })
 
-  test('a repeat visit to the module earns only the 5', () => {
+  test('a repeat visit to the module earns only the 1', () => {
     const first = step(newGame(), { type: 'FILE_READ', path: 'src/engine.ts', module: 'src' })
 
     const { state, effects } = step(first.state, {
@@ -101,11 +79,11 @@ describe('Game Engine: first visit to a module', () => {
       module: 'src',
     })
 
-    expect(state.player.xp).toBe(20)
+    expect(state.player.xp).toBe(7)
     expect(state.visitedModules).toEqual(['src'])
     expect(state.encounter).toMatchObject({ module: 'src', isFirstVisit: false })
     expect(effects).not.toContainEqual({ type: 'MODULE_DISCOVERED', module: 'src' })
-    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 5 })
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 1 })
   })
 
   test('each module is a first visit of its own, a nested one included', () => {
@@ -117,7 +95,7 @@ describe('Game Engine: first visit to a module', () => {
       module: 'tests/fixtures',
     })
 
-    expect(third.state.player.xp).toBe(45)
+    expect(third.state.player.xp).toBe(18)
     expect(third.state.visitedModules).toEqual(['src', 'tests', 'tests/fixtures'])
   })
 
@@ -126,17 +104,17 @@ describe('Game Engine: first visit to a module', () => {
 
     const { state } = step(remembered, { type: 'FILE_READ', path: 'src/hud.tsx', module: 'src' })
 
-    expect(state.player.xp).toBe(5)
+    expect(state.player.xp).toBe(1)
   })
 
-  test('a read outside the project discovers nothing and earns only the 5', () => {
+  test('a read outside the project discovers nothing and earns only the 1', () => {
     const { state, effects } = step(newGame(), {
       type: 'FILE_READ',
       path: '/home/marco/.claude/settings.json',
       module: null,
     })
 
-    expect(state.player.xp).toBe(5)
+    expect(state.player.xp).toBe(1)
     expect(state.visitedModules).toEqual([])
     expect(state.encounter).toMatchObject({ module: null, isFirstVisit: false })
     expect(effects).toEqual([
@@ -147,39 +125,40 @@ describe('Game Engine: first visit to a module', () => {
           target: '/home/marco/.claude/settings.json',
           module: null,
           isFirstVisit: false,
+          xp: 1,
         },
       },
-      { type: 'XP_GAINED', amount: 5 },
+      { type: 'XP_GAINED', amount: 1 },
     ])
   })
 
   test('the bonus counts toward levelling up', () => {
-    const start = newGame({ ...newGame().player, xp: 90 })
+    const start = newGame({ ...newGame().player, xp: 96, totalXp: 96 })
 
     const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts', module: '.' })
 
-    expect(state.player).toMatchObject({ level: 2, xp: 5 })
+    expect(state.player).toMatchObject({ level: 2, xp: 2 })
     expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
   })
 })
 
 describe('Game Engine: levelling', () => {
   test('crossing 100 XP at level 1 reaches level 2, carrying the rest over', () => {
-    const start = { ...newGame({ ...newGame().player, xp: 98 }), visitedModules: ['.'] }
+    const start = newGame({ ...newGame().player, xp: 98, totalXp: 98 })
 
     const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts', module: '.' })
 
     expect(state.player.level).toBe(2)
-    expect(state.player.xp).toBe(3)
+    expect(state.player.xp).toBe(4)
     expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
   })
 
-  test('level 2 takes 200 XP to clear', () => {
-    const start = { ...newGame({ ...newGame().player, level: 2, xp: 190 }), visitedModules: ['.'] }
+  test('level 2 takes 150 XP to clear', () => {
+    const start = { ...newGame({ ...newGame().player, level: 2, xp: 148, totalXp: 248 }), visitedModules: ['.'] }
 
     const { state, effects } = step(start, { type: 'FILE_READ', path: 'a.ts', module: '.' })
 
-    expect(state.player).toMatchObject({ level: 2, xp: 195 })
+    expect(state.player).toMatchObject({ level: 2, xp: 149 })
     expect(effects).not.toContainEqual({ type: 'LEVEL_UP', level: 3 })
   })
 })
@@ -281,8 +260,20 @@ describe('Game Engine: Quest start', () => {
   test('starting a Quest makes it the active Quest, with no Encounters yet', () => {
     const { state, effects } = step(newGame(), { type: 'QUEST_START', ticket: '#4' })
 
-    expect(state.quest).toEqual({ ticket: '#4', encounters: [] })
+    expect(state.quest).toEqual({
+      ticket: '#4',
+      encounters: [],
+      difficulty: 'Unrated',
+      pools: { ambient: 0, battle: 0, sage: 0 },
+      sageWrong: 0,
+    })
     expect(effects).toEqual([{ type: 'QUEST_STARTED', ticket: '#4' }])
+  })
+
+  test('a Quest takes the difficulty its ticket was listed with', () => {
+    const { state } = step(newGame(), { type: 'QUEST_START', ticket: '#4', difficulty: 'Hard' })
+
+    expect(state.quest?.difficulty).toBe('Hard')
   })
 
   test('Encounters during the Quest are attached to it, oldest first', () => {
@@ -292,8 +283,8 @@ describe('Game Engine: Quest start', () => {
     const { state } = step(once, { type: 'FILE_READ', path: 'src/hud.tsx', module: 'src' })
 
     expect(state.quest?.encounters).toEqual([
-      { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true },
-      { kind: 'Exploration', target: 'src/hud.tsx', module: 'src', isFirstVisit: false },
+      { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true, xp: 6 },
+      { kind: 'Exploration', target: 'src/hud.tsx', module: 'src', isFirstVisit: false, xp: 1 },
     ])
   })
 
@@ -303,7 +294,7 @@ describe('Game Engine: Quest start', () => {
 
     const { state, effects } = step(explored, { type: 'QUEST_START', ticket: 'ABC-123' })
 
-    expect(state.quest).toEqual({ ticket: 'ABC-123', encounters: [] })
+    expect(state.quest).toMatchObject({ ticket: 'ABC-123', encounters: [] })
     expect(effects).toEqual([
       { type: 'QUEST_ABANDONED', ticket: '#4' },
       { type: 'QUEST_STARTED', ticket: 'ABC-123' },
@@ -316,25 +307,25 @@ describe('Game Engine: Quest start', () => {
 
     const { state, effects } = step(explored, { type: 'QUEST_START', ticket: '#4' })
 
-    expect(state.quest).toEqual({
+    expect(state.quest).toMatchObject({
       ticket: '#4',
-      encounters: [{ kind: 'Exploration', target: 'a.ts', module: '.', isFirstVisit: true }],
+      encounters: [{ kind: 'Exploration', target: 'a.ts', module: '.', isFirstVisit: true, xp: 6 }],
     })
     expect(effects).toEqual([])
   })
 })
 
 describe('Game Engine: Quest rewards', () => {
-  test('the XP reward of a Quest doubles with each step of difficulty', () => {
-    expect(questXp('Trivial')).toBe(25)
-    expect(questXp('Easy')).toBe(50)
+  test('the Quest reward grows with difficulty, 40 to 180', () => {
+    expect(questXp('Trivial')).toBe(40)
+    expect(questXp('Easy')).toBe(60)
     expect(questXp('Medium')).toBe(100)
-    expect(questXp('Hard')).toBe(200)
-    expect(questXp('Epic')).toBe(400)
+    expect(questXp('Hard')).toBe(140)
+    expect(questXp('Epic')).toBe(180)
   })
 
-  test('a Quest whose ticket names no size is unrated and rewards as Easy', () => {
-    expect(questXp('Unrated')).toBe(50)
+  test('a Quest whose ticket names no size is unrated and rewards between Easy and Medium', () => {
+    expect(questXp('Unrated')).toBe(80)
   })
 })
 
@@ -342,6 +333,17 @@ describe('Game Engine: Battle', () => {
   const fail = (failures: number | null, check = 'vitest run') =>
     ({ type: 'TEST_FAIL', check, kind: 'test', failures }) as const
   const pass = (check = 'vitest run') => ({ type: 'TEST_PASS', check, kind: 'test' }) as const
+  /** A one-line fix, made while a Battle stands. */
+  const fix = {
+    type: 'FILE_EDIT',
+    path: 'src/a.ts',
+    module: 'src',
+    isNewFile: false,
+    linesBefore: 40,
+    linesAdded: 1,
+    linesRemoved: 1,
+    diff: '@@ -1 +1 @@\n-a\n+b',
+  } as const
 
   /** Steps a new game through `events`, answering the last step. */
   const play = (...events: Parameters<typeof step>[1][]) => {
@@ -405,21 +407,25 @@ describe('Game Engine: Battle', () => {
   })
 
   test('all green wins: the last hits land and Strength XP is earned, 10 per HP', () => {
-    const { state, effects } = play(fail(3), fail(1), pass())
+    const { state, effects } = play(fail(3), fix, fail(1), pass())
 
-    expect(state.encounter).toMatchObject({ hp: 0, maxHp: 3, hits: 1, outcome: 'won' })
+    expect(state.encounter).toMatchObject({ hp: 0, maxHp: 3, hits: 1, outcome: 'won', xp: 30 })
     expect(effects).toEqual([
       { type: 'ENCOUNTER_UPDATED', encounter: state.encounter },
       { type: 'MONSTER_HIT', check: 'vitest run', hits: 1, hp: 0 },
       { type: 'BATTLE_WON', check: 'vitest run', foe: 'test' },
+      { type: 'CODE_CHANGED', changes: [{ path: 'src/a.ts', diff: fix.diff }] },
       { type: 'XP_GAINED', amount: 30, stat: 'strength' },
+      // 30 is the session's whole battle pool outside a Quest.
+      { type: 'XP_CAPPED', pool: 'battle' },
+      { type: 'BADGE_EARNED', badge: { id: 'first-blood', name: 'First Blood' } },
     ])
     expect(state.player.xp).toBe(30)
     expect(state.player.stats.strength).toBe(30)
   })
 
   test('a one-HP monster won earns 10 Strength XP', () => {
-    const { state } = play(fail(null), pass())
+    const { state } = play(fail(null), fix, pass())
 
     expect(state.player.xp).toBe(10)
     expect(state.player.stats.strength).toBe(10)
@@ -466,7 +472,11 @@ describe('Game Engine: Battle', () => {
   })
 
   test('winning can level the Player up', () => {
-    const { effects } = play(fail(10), pass())
+    const nearly = newGame({ ...newGame().player, xp: 90, totalXp: 90 })
+    const { effects } = [fail(10), fix, pass()].reduce(
+      (played, event) => step(played.state, event),
+      { state: nearly, effects: [] as ReturnType<typeof step>['effects'] },
+    )
 
     expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
   })
@@ -501,7 +511,7 @@ describe('Game Engine: Crafting', () => {
     diff: '@@ -0,0 +1,23 @@\n+export type UserProfile = {',
   }
 
-  test('a new file is forged: a Crafting Encounter of the item named after it, for 10 XP', () => {
+  test('a new file is forged: a Crafting Encounter of the item named after it, for 5 XP', () => {
     const { state, effects } = step(newGame(), newFile)
 
     const encounter = {
@@ -512,9 +522,10 @@ describe('Game Engine: Crafting', () => {
       isNewFile: true,
       linesAdded: 23,
       linesRemoved: 0,
+      xp: 5,
     }
     expect(state.encounter).toEqual(encounter)
-    expect(state.player.xp).toBe(10)
+    expect(state.player.xp).toBe(5)
     expect(effects).toEqual([
       { type: 'ENCOUNTER_STARTED', encounter },
       {
@@ -526,7 +537,7 @@ describe('Game Engine: Crafting', () => {
           },
         ],
       },
-      { type: 'XP_GAINED', amount: 10 },
+      { type: 'XP_GAINED', amount: 5 },
     ])
   })
 
@@ -614,7 +625,7 @@ describe('Game Engine: Crafting', () => {
   })
 
   test('forging can level the Player up', () => {
-    const nearly = { ...newGame(), player: { ...newGame().player, xp: 95 } }
+    const nearly = { ...newGame(), player: { ...newGame().player, xp: 96, totalXp: 96 } }
 
     expect(step(nearly, newFile).effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
   })
@@ -727,6 +738,7 @@ describe('Game Engine: what the Sage asks about', () => {
       hits: 1,
       outcome: 'won',
       isCounted: true,
+      xp: 10,
     })
   })
 })
@@ -866,14 +878,14 @@ describe('Game Engine: the Question Queue', () => {
     ])
   })
 
-  test('a Wisdom-tagged Question answered right still earns Intelligence XP, the Stat in play', () => {
+  test('a Wisdom-tagged Question answered right earns Wisdom XP, its tag', () => {
     const { state } = play(
       newGame(),
       ready(T, { ...content, stat: 'wisdom' }),
       { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 0, at: T + 9000 },
     )
 
-    expect(state.player.stats).toMatchObject({ intelligence: 20, wisdom: 0 })
+    expect(state.player.stats).toMatchObject({ intelligence: 0, wisdom: 20 })
   })
 
   test('HP never drops below zero', () => {
@@ -936,7 +948,7 @@ describe('Game Engine: the Question Queue', () => {
   })
 
   test('a right answer can level the Player up', () => {
-    const near = { ...newGame(), player: { ...newGame().player, xp: 90 } }
+    const near = { ...newGame(), player: { ...newGame().player, xp: 90, totalXp: 90 } }
 
     const { state, effects } = play(near, ready(), {
       type: 'QUESTION_ANSWERED',
@@ -1217,15 +1229,15 @@ describe('Game Engine: the Boss Fight', () => {
     expect(fighting.questions).toEqual([])
   })
 
-  test(`a right answer hits the boss and earns ${QUESTION_XP} Intelligence XP`, () => {
+  test(`a right answer hits the boss and earns ${BOSS_ANSWER_XP} Intelligence XP`, () => {
     const { state, effects } = play(fighting, answer(1, 0))
 
     expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 2 })
     expect(state.bossFight?.questions.map(question => question.id)).toEqual(['boss-2', 'boss-3'])
-    expect(state.bossFight?.lastAnswer).toMatchObject({ isCorrect: true, xp: 20 })
+    expect(state.bossFight?.lastAnswer).toMatchObject({ isCorrect: true, xp: 30 })
     expect(effects).toContainEqual({ type: 'BOSS_HIT', hp: 2 })
-    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 20, stat: 'intelligence' })
-    expect(state.player.stats.intelligence).toBe(20)
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 30, stat: 'intelligence' })
+    expect(state.player.stats.intelligence).toBe(30)
   })
 
   test(`a wrong answer costs ${WRONG_ANSWER_HP} HP and leaves the boss unhurt`, () => {
@@ -1238,44 +1250,46 @@ describe('Game Engine: the Boss Fight', () => {
     expect(effects.some(effect => effect.type === 'BOSS_HIT')).toBe(false)
   })
 
-  test(`every Question right wins: ${BOSS_FIGHT_XP} XP and a badge, and the Quest closes won`, () => {
+  test('every Question right wins: the Quest reward, Flawless, a trophy, and the Quest closes won', () => {
     const { state, effects } = play(fighting, answer(1, 0), answer(2, 0), answer(3, 0))
 
-    // 3 right answers (60) and the win (100): 160 XP, level 2 with 60 over.
-    expect(state.player).toMatchObject({ level: 2, xp: 60, stats: { intelligence: 160 } })
-    expect(state.player.badges).toEqual([
-      { name: 'Bane of #12\'s Boss', ticket: '#12', earnedAt: T + 180_000 },
+    // 3 right answers (90), an Unrated Quest's reward (80) and Flawless (40):
+    // 210 XP, level 2 (at 100) with 110 into it.
+    expect(state.player).toMatchObject({ level: 2, xp: 110, totalXp: 210, stats: { intelligence: 210 } })
+    expect(state.player.trophies).toEqual([
+      { name: 'Bane of #12', region: null, ticket: '#12', earnedAt: T + 180_000 },
     ])
     expect(state.quest).toBeNull()
-    expect(state.bossFight).toMatchObject({ status: 'won', hp: 0, questions: [] })
-    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 100, stat: 'intelligence' })
+    expect(state.bossFight).toMatchObject({ status: 'won', hp: 0, questions: [], reward: 120, flawless: true })
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 80, stat: 'intelligence' })
     expect(effects).toContainEqual({
       type: 'BADGE_EARNED',
-      badge: { name: 'Bane of #12\'s Boss', ticket: '#12', earnedAt: T + 180_000 },
+      badge: { id: 'boss-slayer', name: 'Boss Slayer', earnedAt: T + 180_000 },
     })
     expect(effects).toContainEqual({ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'won' })
   })
 
-  test('a badge joins those the Player already has', () => {
+  test('a trophy joins those the Player already has', () => {
     const decorated = {
       ...fighting,
-      player: { ...fighting.player, badges: [{ name: 'Bane of #11\'s Boss', ticket: '#11', earnedAt: 1 }] },
+      player: { ...fighting.player, trophies: [{ name: 'Bane of #11', region: null, ticket: '#11', earnedAt: 1 }] },
     }
 
     const { state } = play(decorated, answer(1, 0), answer(2, 0), answer(3, 0))
 
-    expect(state.player.badges?.map(badge => badge.ticket)).toEqual(['#11', '#12'])
+    expect(state.player.trophies?.map(trophy => trophy.ticket)).toEqual(['#11', '#12'])
   })
 
-  test('the last Question answered with the boss standing loses: no win XP, no badge, the Quest closes lost', () => {
+  test('the last Question answered with the boss standing loses: no reward, no trophy, the Quest closes lost', () => {
     const { state, effects } = play(fighting, answer(1, 0), answer(2, 1), answer(3, 0))
 
-    expect(state.player).toMatchObject({ hp: 90, xp: 40, stats: { intelligence: 40 } })
-    expect(state.player.badges ?? []).toEqual([])
+    expect(state.player).toMatchObject({ hp: 90, xp: 60, stats: { intelligence: 60 } })
+    expect(state.player.trophies).toBeUndefined()
+    expect(state.player.badges?.map(badge => badge.id)).toEqual(['first-quest'])
     expect(state.quest).toBeNull()
-    expect(state.bossFight).toMatchObject({ status: 'lost', hp: 1 })
+    expect(state.bossFight).toMatchObject({ status: 'lost', hp: 1, reward: 0 })
     expect(effects).toContainEqual({ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'lost' })
-    expect(effects.some(effect => effect.type === 'BADGE_EARNED')).toBe(false)
+    expect(effects.some(effect => effect.type === 'TROPHY_EARNED')).toBe(false)
   })
 
   test('skipping closes the Quest without the Boss Fight\'s reward; answers given keep theirs', () => {
@@ -1283,7 +1297,7 @@ describe('Game Engine: the Boss Fight', () => {
     const { state, effects } = play(answered, { type: 'BOSS_FIGHT_SKIPPED' })
 
     expect(effects).toEqual([{ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'skipped' }])
-    expect(state.player.xp).toBe(20)
+    expect(state.player.xp).toBe(30)
     expect(state.player.badges).toBeUndefined()
     expect(state.quest).toBeNull()
     expect(state.bossFight?.status).toBe('skipped')
@@ -1305,16 +1319,17 @@ describe('Game Engine: the Boss Fight', () => {
     expect(state.bossFight?.status).toBe('skipped')
   })
 
-  test('when no Boss Fight can be made, the Quest closes unfought, without its reward', () => {
+  test('when no Boss Fight can be made, the Quest closes unfought, for a quarter of its reward', () => {
     const { state, effects } = play(summoned, {
       type: 'BOSS_FIGHT_UNAVAILABLE',
       ticket: '#12',
       reason: 'over budget',
     })
 
-    expect(effects).toEqual([{ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'unfought' }])
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 20, stat: 'intelligence' })
+    expect(effects.at(-1)).toEqual({ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'unfought' })
     expect(state.quest).toBeNull()
-    expect(state.bossFight?.status).toBe('unfought')
+    expect(state.bossFight).toMatchObject({ status: 'unfought', reward: 20 })
   })
 
   test('with no Boss Fight under way, an answer or a skip changes nothing', () => {

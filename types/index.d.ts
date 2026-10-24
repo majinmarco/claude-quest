@@ -14,22 +14,88 @@ export type Player = {
   level: number
   /** XP earned towards the next level. */
   xp: number
+  /**
+   * Every XP the Player has earned, lifetime: `level` and `xp` are derived
+   * from it (see xpToClear). Filled in by migratePlayer for a Player kept by
+   * an older mod.
+   */
+  totalXp: number
   hp: number
   maxHp: number
   stats: Stats
-  /** The badges won, oldest first; absent on a Player kept by an older mod. */
+  /** What the Player has done, lifetime, as Badges count it. */
+  tally: Tally
+  /** The Badges earned, oldest first, one per id; absent on a Player kept by an older mod. */
   badges?: Badge[]
+  /**
+   * The Boss Fights won, one per Quest of a Region, oldest first: a Quest's
+   * reward is paid once per (region, ticket). Absent until the first.
+   */
+  trophies?: Trophy[]
+  /**
+   * The Quests whose unfought share of the Quest reward was paid, so it is
+   * paid once per (region, ticket) too. Absent until the first.
+   */
+  unfought?: QuestKey[]
 }
 
-/** A badge on the Player: a Boss Fight won, named after its Quest. */
+/** A Quest as rewards know it: its ticket in its Region (null when not known). */
+export type QuestKey = { region: string | null; ticket: string }
+
+/** The Player's lifetime counts, as Badges read them. */
+export type Tally = {
+  /** Quests closed won, lost or unfought (not skipped). */
+  questsClosed: number
+  bossesWon: number
+  /** Boss Fights won in a row: a loss or a skip resets it; unfought leaves it. */
+  bossStreak: number
+  /** Right Sage answers that were not hasty. */
+  sageRight: number
+  modulesDiscovered: number
+  /** The Regions a Quest was closed in (won, lost or unfought). */
+  regions: string[]
+}
+
+/** The ids of the Badges there are: a small, fixed set. */
+export type BadgeId =
+  | 'first-blood'
+  | 'first-quest'
+  | 'boss-slayer'
+  | 'flawless'
+  | 'dragon-slayer'
+  | 'cartographer'
+  | 'apprentice'
+  | 'unbroken'
+  | 'wayfarer'
+  | 'second-wind'
+
+/** A Badge on the Player: a feat of play, earned once, across every project. */
 export type Badge = {
-  /** `Bane of #12's Boss`. */
+  id: BadgeId
+  /** `Boss Slayer`. */
   name: string
-  /** The Quest whose Boss Fight was won. */
+  /** When it was earned, in ms since the epoch; absent when not known. */
+  earnedAt?: number
+}
+
+/**
+ * A trophy on the Player: a Boss Fight won, named after its Quest and Region
+ * (`Bane of claude-quest#12`). `region` is null for one kept from an older
+ * mod's per-ticket badge, its Region unknown.
+ */
+export type Trophy = {
+  name: string
+  region: string | null
   ticket: string
   /** When it was won, in ms since the epoch. */
   earnedAt: number
 }
+
+/** The three XP pools: Claude's own activity, Battles, and the Sage's answers. */
+export type XpPool = 'ambient' | 'battle' | 'sage'
+
+/** The XP paid into each pool so far, against its cap. */
+export type PoolCounters = Record<XpPool, number>
 
 /**
  * A game moment the session's activity played. An Exploration is a read or a
@@ -43,6 +109,8 @@ export type Encounter =
       target: string
       module: string | null
       isFirstVisit: boolean
+      /** The XP it paid, pools capped; absent in one kept by an older mod. */
+      xp?: number
     }
   | BattleEncounter
   | CraftingEncounter
@@ -61,6 +129,8 @@ export type CraftingEncounter = {
   isNewFile: boolean
   linesAdded: number
   linesRemoved: number
+  /** The XP it paid, pools capped; absent in one kept by an older mod. */
+  xp?: number
 }
 
 /**
@@ -84,6 +154,8 @@ export type BattleEncounter = {
   outcome: 'spawned' | 'hit' | 'stands' | 'grew' | 'won'
   /** False when the failing run counted nothing readable: a one-HP monster. */
   isCounted: boolean
+  /** Once won, the Strength XP it paid; absent before, and in one kept by an older mod. */
+  xp?: number
 }
 
 /** A Battle under way: a monster standing against one check. */
@@ -93,6 +165,11 @@ export type Battle = {
   hp: number
   maxHp: number
   isCounted: boolean
+  /**
+   * The monster's HP at the first run that counted its failures: what a win
+   * pays by. Absent while uncounted, and in a Battle kept by an older mod.
+   */
+  firstHp?: number
   /**
    * The edits made while it stood, the latest few: the fix, which the Sage
    * asks about once the Battle is won. Absent in a Battle kept by an older mod.
@@ -131,6 +208,12 @@ export type Quest = {
    * commit's. Absent until the first, and in a Quest kept by an older mod.
    */
   changes?: FileChange[]
+  /** How hard its ticket is, as the Quest Board listed it: the Quest reward's measure. */
+  difficulty?: Difficulty
+  /** The XP paid into each pool during the Quest, against its caps. */
+  pools?: PoolCounters
+  /** Wrong Sage answers during the Quest: any one spoils a Flawless win. */
+  sageWrong?: number
 }
 
 /**
@@ -160,6 +243,14 @@ export type BossFight = {
   questions: Question[]
   /** The last answer, its verdict and explanation shown; null before the first. */
   lastAnswer: QuestionAnswer | null
+  /** How many Questions it started with; absent in one kept by an older mod (maxHp). */
+  questionCount?: number
+  /** Once ended, the XP its end paid: the Quest reward (and Flawless bonus), or the unfought share. */
+  reward?: number
+  /** Won with every answer right and no wrong Sage answer in the Quest. */
+  flawless?: boolean
+  /** The trophy its win earned, by name; absent when none (lost, or the reward already paid). */
+  trophy?: string
 }
 
 /** A file's change, as unified-diff hunks (`@@ -1,3 +1,3 @@` and the lines under it). */
@@ -188,6 +279,11 @@ export type QuestionContent = {
 
 /** A comprehension Question an NPC put to the Player, in the Question Queue. */
 export type Question = QuestionContent & {
+  /**
+   * The cache key of the change it asks about (see src/question-cache.ts):
+   * once answered, a Question for the same change is not queued again.
+   */
+  key?: string
   /** Unique in the session: `sage-1`, `sage-2`, ... for the Sage, `boss-1` ... for the boss. */
   id: string
   /** Who asks it: the Sage (the Question Queue) or the boss (the Boss Fight). */
@@ -217,7 +313,7 @@ export type QuestionAnswer = {
    * its time is unknown.
    */
   isHasty: boolean
-  /** The Intelligence XP it earned; 0 when wrong, less when hasty. */
+  /** The XP it paid, to its Stat; 0 when wrong, less when hasty, Exhausted or capped. */
   xp: number
   /** The HP it cost; 0 when right. */
   hpLost: number
@@ -262,6 +358,12 @@ export type GameState = {
    * older mod.
    */
   bossFight?: BossFight | null
+  /** The XP paid into each pool this session outside any Quest, against the session's caps. */
+  pools?: PoolCounters
+  /** The cache keys of the changes whose Question was answered this session. */
+  answeredKeys?: string[]
+  /** The Region's name: the folder of the session's root; null when not known. */
+  region?: string | null
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */

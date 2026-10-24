@@ -54,7 +54,7 @@ const distinct = <T,>(values: readonly T[]): T[] => [...new Set(values)]
 const describeCard = (quest: QuestCard): string =>
   [
     quest.difficulty,
-    `${questXp(quest.difficulty)} XP`,
+    `Boss: +${questXp(quest.difficulty)} XP`,
     quest.recommendedStats.map(stat => STAT_ABBREVIATION[stat]).join(' '),
     quest.status,
   ].join(' · ')

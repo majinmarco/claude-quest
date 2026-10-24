@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Badge, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, StatName, Vitals } from '../types'
+import type { Badge, BadgeId, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
 
-export type { Badge, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, Vitals } from '../types'
+export type { Badge, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
 
 export type GameEvent =
   /**
@@ -35,7 +35,11 @@ export type GameEvent =
       model?: string
       spendUsd?: number
     }
-  | { type: 'QUEST_START'; ticket: string }
+  /**
+   * A Quest starts for `ticket`; `difficulty` as the Quest Board listed it,
+   * Unrated when absent (the board never listed it).
+   */
+  | { type: 'QUEST_START'; ticket: string; difficulty?: Difficulty }
   /**
    * A check (a test run, lint or type-check) failed: `failures` is how many
    * its output counts, null when it counts none that can be read.
@@ -47,7 +51,16 @@ export type GameEvent =
    * The Content Generator made a Question about a code-changing Encounter's
    * change, at `at` (ms since the epoch): the Sage queues it.
    */
-  | { type: 'QUESTION_READY'; question: QuestionContent; at: number }
+  | {
+      type: 'QUESTION_READY'
+      question: QuestionContent
+      at: number
+      /**
+       * The cache key of the change it asks about: a Question for a change
+       * already answered this session is not queued again.
+       */
+      key?: string
+    }
   /** The dialogue box put a waiting Question in front of the Player, at `at`. */
   | { type: 'QUESTION_SHOWN'; id: string; at: number }
   /** The Player chose option `choice` of a waiting Question, at `at`. */
@@ -91,6 +104,13 @@ export type Effect =
   | { type: 'QUESTION_ANSWERED'; answer: QuestionAnswer }
   /** HP lost: a wrong answer's cost. */
   | { type: 'HP_LOST'; amount: number }
+  /** HP healed: a new Quest, a level-up or a Boss Fight won. */
+  | { type: 'HP_HEALED'; amount: number }
+  /**
+   * An XP pool just filled, for the active Quest (or the session, between
+   * Quests): what it would pay is 0 from now. Told once per pool per Quest.
+   */
+  | { type: 'XP_CAPPED'; pool: XpPool }
   /** XP earned; `stat` is the Stat whose kind of work earned it, if any. */
   | { type: 'XP_GAINED'; amount: number; stat?: StatName }
   /** The Player's first visit to a Module in this Region. */
@@ -120,8 +140,10 @@ export type Effect =
   | { type: 'BOSS_FIGHT_STARTED'; ticket: string; hp: number }
   /** A right answer hit the boss: `hp` left. */
   | { type: 'BOSS_HIT'; hp: number }
-  /** A badge joined the Player's: a Boss Fight won. */
+  /** A Badge joined the Player's. */
   | { type: 'BADGE_EARNED'; badge: Badge }
+  /** A Boss Fight won earned its Quest's trophy, the first win of that Quest in its Region. */
+  | { type: 'TROPHY_EARNED'; trophy: Trophy }
   /** The active Quest closed, its Boss Fight ended as `outcome`. */
   | { type: 'QUEST_CLOSED'; ticket: string; outcome: QuestOutcome }
 
@@ -165,20 +187,29 @@ export const DEFAULT_RULES: Rules = {
   nonTrivialLines: 3,
 }
 
-const EXPLORATION_XP = 5
+// The reward economy (docs/adr/0002-reward-economy.md): understanding the
+// code pays the most. XP from Claude's own activity is ambient and fills a
+// small pool per Quest; Battles have their own pool, and so do the Sage's
+// answers. The Boss Fight's answers and the Quest reward are uncapped, once
+// per Quest by construction.
+
+/** The XP a read or search pays: a trickle, into the ambient pool. */
+export const READ_XP = 1
 
 /**
- * The bonus for a first visit to a Module: Wisdom's kind of XP, for learning
- * how the system is laid out. It goes to the Player's XP like any other; no
- * Stat grows from it yet.
+ * The bonus for a first visit to a Module: Wisdom XP, for learning how the
+ * system is laid out. Ambient, as the read is.
  */
-export const DISCOVERY_XP = 10
+export const DISCOVERY_XP = 5
 
 /**
- * The Strength XP a Battle won earns, per HP of its monster at its largest:
- * the more that was failing, the bigger the win.
+ * The Strength XP a Battle won pays, per HP of its monster at the first
+ * counted run, up to BATTLE_HP_PAID of them: a big red suite is no bigger win.
  */
 export const BATTLE_XP_PER_HP = 10
+
+/** The most monster HP a Battle won pays for. */
+export const BATTLE_HP_PAID = 3
 
 /**
  * How many lines an edit changes, at least, to be a major edit and forge an
@@ -193,35 +224,52 @@ export const MAJOR_EDIT_LINES = 10
  */
 export const REWRITE_SHARE = 0.8
 
-/** The XP a Crafting earns: something made. */
-export const CRAFTING_XP = 10
+/** The XP a Crafting pays: something made, by Claude, so ambient. */
+export const CRAFTING_XP = 5
 
 /**
- * The Intelligence XP a right answer earns: twice a Crafting's, since reading
- * and understanding the code is what the game is for. Accuracy pays, not
- * volume: a wrong answer earns nothing and costs HP.
+ * The XP a right Sage answer pays, to the Question's Stat: four Craftings'
+ * worth, since reading and understanding the code is what the game is for.
+ * Accuracy pays, not volume: a wrong answer earns nothing and costs HP.
  */
 export const QUESTION_XP = 20
 
 /**
- * The XP a hasty right answer earns: a quarter of QUESTION_XP. A right answer
+ * The XP a hasty right answer pays: a quarter of QUESTION_XP. A right answer
  * is hasty when it came quicker than the Player could have read a non-trivial
  * Question (Rules.hastyAnswerMs, Rules.nonTrivialLines), so guessing fast pays
  * little; it still pays something, as a quick reader may well be right.
  */
 export const HASTY_ANSWER_XP = QUESTION_XP / 4
 
+/** The Intelligence XP a right Boss Fight answer pays: uncapped, the review is the point. */
+export const BOSS_ANSWER_XP = 30
+
 /**
- * The HP a wrong answer costs: a tenth of a new Player's 100, so guessing
- * hurts without ten wrong answers being far off.
+ * The HP a wrong answer costs: a tenth of MAX_HP, so guessing hurts without
+ * ten wrong answers being far off. At 0 HP the Player is Exhausted.
  */
 export const WRONG_ANSWER_HP = 10
 
-/**
- * The XP a Boss Fight won earns, beside each right answer's QUESTION_XP:
- * five answers' worth, as careful review is the biggest reward.
- */
-export const BOSS_FIGHT_XP = 100
+/** The Player's most HP, fixed. */
+export const MAX_HP = 100
+
+/** The HP a new Quest heals: starting work rests the Player a little. */
+export const QUEST_HEAL = 25
+
+/** The share of the Quest reward an unfought Quest pays (no Boss Fight could be made). */
+export const UNFOUGHT_SHARE = 1 / 4
+
+/** How many Questions a full Boss Fight asks: fewer scale its reward down. */
+export const BOSS_QUESTIONS = 3
+
+/** What each XP pool holds per Quest. */
+export const POOL_CAPS: Record<XpPool, number> = { ambient: 60, battle: 60, sage: 200 }
+
+/** What each XP pool holds per session, outside any Quest. */
+export const SESSION_POOL_CAPS: Record<XpPool, number> = { ambient: 20, battle: 30, sage: 100 }
+
+const emptyPools = (): PoolCounters => ({ ambient: 0, battle: 0, sage: 0 })
 
 /**
  * How many edits made during a Battle the Sage asks about once it is won:
@@ -284,29 +332,52 @@ export const manaLevel = (mana: number | null): ManaLevel => {
 }
 
 /**
- * The XP a Quest rewards, by its difficulty alone: it doubles with each step.
- * A ticket that names no size is Unrated and rewards as Easy, so an unsized
- * ticket is still worth taking but never worth more than a sized one.
+ * The Quest reward, by the ticket's difficulty alone, paid when its Boss
+ * Fight is won. Unrated sits in the middle, so a Region without size labels
+ * or story points is not penalised.
  */
 const QUEST_XP: Record<Difficulty, number> = {
-  Trivial: 25,
-  Easy: 50,
+  Trivial: 40,
+  Easy: 60,
   Medium: 100,
-  Hard: 200,
-  Epic: 400,
-  Unrated: 50,
+  Hard: 140,
+  Epic: 180,
+  Unrated: 80,
 }
 
 export const questXp = (difficulty: Difficulty): number => QUEST_XP[difficulty]
 
-/** XP needed to clear a level: 100 at level 1, 200 at level 2, and so on. */
-export const xpToClear = (level: number): number => 100 * level
+/** XP needed to clear a level: 100 at level 1, 150 at 2, 300 at 3, 550 at 4. */
+export const xpToClear = (level: number): number => 100 + 50 * (level - 1) ** 2
+
+/** The level lifetime XP reaches, and the XP into it. */
+export const levelOf = (totalXp: number): { level: number; xp: number } => {
+  let level = 1
+  let xp = Math.max(0, totalXp)
+  while (xp >= xpToClear(level)) {
+    xp -= xpToClear(level)
+    level += 1
+  }
+
+  return { level, xp }
+}
+
+/** A new Player's tally: nothing done yet. */
+export const emptyTally = (): Tally => ({
+  questsClosed: 0,
+  bossesWon: 0,
+  bossStreak: 0,
+  sageRight: 0,
+  modulesDiscovered: 0,
+  regions: [],
+})
 
 export const newPlayer = (): Player => ({
   level: 1,
   xp: 0,
-  hp: 100,
-  maxHp: 100,
+  totalXp: 0,
+  hp: MAX_HP,
+  maxHp: MAX_HP,
   stats: {
     intelligence: 0,
     wisdom: 0,
@@ -315,6 +386,7 @@ export const newPlayer = (): Player => ({
     charisma: 0,
     constitution: 0,
   },
+  tally: emptyTally(),
 })
 
 export const newGame = (player: Player = newPlayer()): GameState => ({
@@ -329,6 +401,9 @@ export const newGame = (player: Player = newPlayer()): GameState => ({
   lastAnswer: null,
   sageCallsOutsideQuest: 0,
   bossFight: null,
+  pools: emptyPools(),
+  answeredKeys: [],
+  region: null,
 })
 
 export const step = (
@@ -342,7 +417,7 @@ export const step = (
     case 'SESSION_MEASURED':
       return measure(state, event)
     case 'QUEST_START':
-      return startQuest(state, event.ticket)
+      return startQuest(state, event.ticket, event.difficulty ?? 'Unrated')
     case 'TEST_FAIL':
       return checkFailed(state, event)
     case 'TEST_PASS':
@@ -350,7 +425,7 @@ export const step = (
     case 'FILE_EDIT':
       return craft(withFix(withQuestChange(state, event), event), event)
     case 'QUESTION_READY':
-      return queueQuestion(state, event.question, event.at)
+      return queueQuestion(state, event.question, event.at, event.key)
     case 'QUESTION_SHOWN':
       return showQuestion(state, event.id, event.at)
     case 'QUESTION_ANSWERED':
@@ -443,29 +518,31 @@ const craft = (
   }
 
   const { path, module, isNewFile, linesAdded, linesRemoved, diff } = event
-  const item = itemNameOf(path)
+  const paid = pay(state, 'ambient', null, CRAFTING_XP)
   const encounter: CraftingEncounter = {
     kind: 'Crafting',
     target: path,
     module,
-    item,
+    item: itemNameOf(path),
     isNewFile,
     linesAdded,
     linesRemoved,
+    xp: paid.paid,
   }
-  const gained = gainXp(state.player, CRAFTING_XP)
 
   return {
-    state: { ...state, player: gained.player, encounter, quest: attach(state.quest, encounter) },
+    state: { ...paid.state, encounter, quest: attach(paid.state.quest, encounter) },
     effects: [
       { type: 'ENCOUNTER_STARTED', encounter },
       { type: 'CODE_CHANGED', changes: [{ path, diff }] },
-      { type: 'XP_GAINED', amount: CRAFTING_XP },
-      ...gained.effects,
+      ...paid.effects,
     ],
   }
 }
 
+// A read pays READ_XP, a first visit to a Module DISCOVERY_XP of Wisdom
+// beside it, both ambient: a full pool pays nothing, but a discovery still
+// counts toward the Cartographer.
 const explore = (
   state: GameState,
   path: string,
@@ -473,30 +550,30 @@ const explore = (
 ): { state: GameState; effects: Effect[] } => {
   // Outside the project there is no Module to discover.
   const isFirstVisit = module !== null && !state.visitedModules.includes(module)
-  const encounter: Encounter = { kind: 'Exploration', target: path, module, isFirstVisit }
-  const earned: Effect[] = [{ type: 'XP_GAINED', amount: EXPLORATION_XP }]
+  const readPaid = pay(state, 'ambient', null, READ_XP)
+  let played = readPaid.state
+  const effects: Effect[] = [...readPaid.effects]
+  let xp = readPaid.paid
+
   if (isFirstVisit) {
-    earned.push(
-      { type: 'MODULE_DISCOVERED', module },
-      { type: 'XP_GAINED', amount: DISCOVERY_XP, stat: 'wisdom' },
-    )
+    const found = pay(played, 'ambient', 'wisdom', DISCOVERY_XP)
+    const { player } = found.state
+    const tallied: GameState = {
+      ...found.state,
+      player: { ...player, tally: { ...player.tally, modulesDiscovered: player.tally.modulesDiscovered + 1 } },
+      visitedModules: [...state.visitedModules, module],
+    }
+    const awarded = award(tallied, {})
+    played = awarded.state
+    xp += found.paid
+    effects.push({ type: 'MODULE_DISCOVERED', module }, ...found.effects, ...awarded.effects)
   }
-  const total = earned.reduce(
-    (sum, effect) => sum + (effect.type === 'XP_GAINED' ? effect.amount : 0),
-    0,
-  )
-  const gained = gainXp(state.player, total)
+
+  const encounter: Encounter = { kind: 'Exploration', target: path, module, isFirstVisit, xp }
 
   return {
-    state: {
-      ...state,
-      player: gained.player,
-      encounter,
-      quest: attach(state.quest, encounter),
-      visitedModules:
-        isFirstVisit && module !== null ? [...state.visitedModules, module] : state.visitedModules,
-    },
-    effects: [{ type: 'ENCOUNTER_STARTED', encounter }, ...earned, ...gained.effects],
+    state: { ...played, encounter, quest: attach(played.quest, encounter) },
+    effects: [{ type: 'ENCOUNTER_STARTED', encounter }, ...effects],
   }
 }
 
@@ -506,38 +583,184 @@ const attach = (quest: Quest | null, encounter: Encounter): Quest | null =>
     ? null
     : { ...quest, encounters: [...quest.encounters, encounter] }
 
-const gainXp = (
-  player: Player,
-  amount: number,
-): { player: Player; effects: Effect[] } => {
-  let { level, xp } = player
-  const effects: Effect[] = []
-  xp += amount
+/** The Stat a right answer to `question` pays: Wisdom for a `wisdom` tag, else Intelligence. */
+export const statOf = (question: QuestionContent): StatName =>
+  question.stat === 'wisdom' ? 'wisdom' : 'intelligence'
 
-  while (xp >= xpToClear(level)) {
-    xp -= xpToClear(level)
-    level += 1
-    effects.push({ type: 'LEVEL_UP', level })
-  }
+/** Whether the Player is Exhausted: at 0 HP, wrong answers cost nothing and right ones pay half. */
+export const isExhausted = (player: Player): boolean => player.hp <= 0
 
-  return { player: { ...player, level, xp }, effects }
+/** What a right answer worth `amount` pays the Player: half, rounded down, when Exhausted. */
+const exhaustedPay = (player: Player, amount: number): number =>
+  isExhausted(player) ? Math.floor(amount / 2) : amount
+
+/** The Player healed by up to `amount` HP (all the way with Infinity), and what it healed. */
+const heal = (player: Player, amount: number): { player: Player; effects: Effect[] } => {
+  const healed = Math.min(amount, player.maxHp - player.hp)
+
+  return healed > 0
+    ? { player: { ...player, hp: player.hp + healed }, effects: [{ type: 'HP_HEALED', amount: healed }] }
+    : { player, effects: [] }
 }
 
-/** XP earned by a Stat's kind of work: the Player's, and that Stat's. */
-const gainStatXp = (
-  player: Player,
-  stat: StatName,
+/**
+ * Pays the Player `amount` XP from `pool` (null: uncapped), to `stat` when
+ * one earned it: the pool, the active Quest's or the session's between
+ * Quests, pays what it has left and tells XP_CAPPED as it fills. Lifetime
+ * XP grows and the level follows it; a level-up heals fully. Halving an
+ * Exhausted Player's answers is the caller's (exhaustedPay).
+ */
+const pay = (
+  state: GameState,
+  pool: XpPool | null,
+  stat: StatName | null,
   amount: number,
-): { player: Player; effects: Effect[] } => {
-  const gained = gainXp(player, amount)
+): { state: GameState; effects: Effect[]; paid: number } => {
+  let paid = Math.max(0, Math.floor(amount))
+  let next = state
+  const capped: Effect[] = []
+
+  if (pool !== null) {
+    const { quest } = state
+    const counters = (quest !== null ? quest.pools : state.pools) ?? emptyPools()
+    const cap = (quest !== null ? POOL_CAPS : SESSION_POOL_CAPS)[pool]
+    const before = counters[pool]
+    paid = Math.min(paid, Math.max(0, cap - before))
+    const pools = { ...counters, [pool]: before + paid }
+    next = quest !== null ? { ...state, quest: { ...quest, pools } } : { ...state, pools }
+    if (before < cap && before + paid >= cap) {
+      capped.push({ type: 'XP_CAPPED', pool })
+    }
+  }
+
+  if (paid === 0) {
+    return { state: next, effects: capped, paid }
+  }
+
+  const { player } = next
+  const totalXp = player.totalXp + paid
+  const { level, xp } = levelOf(totalXp)
+  const effects: Effect[] = [stat === null ? { type: 'XP_GAINED', amount: paid } : { type: 'XP_GAINED', amount: paid, stat }]
+  for (let reached = player.level + 1; reached <= level; reached += 1) {
+    effects.push({ type: 'LEVEL_UP', level: reached })
+  }
+  const earned: Player = {
+    ...player,
+    totalXp,
+    level,
+    xp,
+    stats: stat === null ? player.stats : { ...player.stats, [stat]: player.stats[stat] + paid },
+  }
+  const healed = level > player.level ? heal(earned, Infinity) : { player: earned, effects: [] }
 
   return {
-    player: {
-      ...gained.player,
-      stats: { ...gained.player.stats, [stat]: gained.player.stats[stat] + amount },
-    },
-    effects: gained.effects,
+    state: { ...next, player: healed.player },
+    effects: [...effects, ...healed.effects, ...capped],
+    paid,
   }
+}
+
+/** The Badges there are, by id, with their names. */
+export const BADGES: Record<BadgeId, string> = {
+  'first-blood': 'First Blood',
+  'first-quest': 'Questbound',
+  'boss-slayer': 'Boss Slayer',
+  flawless: 'Flawless',
+  'dragon-slayer': 'Dragon Slayer',
+  cartographer: 'Cartographer',
+  apprentice: "Sage's Apprentice",
+  unbroken: 'Unbroken',
+  wayfarer: 'Wayfarer',
+  'second-wind': 'Second Wind',
+}
+
+/** What just happened, for the Badges a single moment earns. */
+export type BadgeContext = {
+  /** A Battle won, with edits made while it stood: its monster at its largest. */
+  battleWon?: { maxHp: number }
+  /** A Boss Fight won: Flawless, and whether the Player was Exhausted. */
+  bossWon?: { flawless: boolean; exhausted: boolean }
+}
+
+/** The monster HP, at least, a Battle won must have had for the Dragon Slayer. */
+export const DRAGON_HP = 20
+
+/** How many of a lifetime count earn its Badge. */
+export const BADGE_COUNTS = { modules: 25, sageRight: 25, bossStreak: 5, regions: 3 } as const
+
+/**
+ * The Badges the Player earns now and does not hold yet, by their lifetime
+ * tally and what just happened.
+ */
+export const earnedBadges = (player: Player, context: BadgeContext = {}): BadgeId[] => {
+  const { tally } = player
+  const held = new Set((player.badges ?? []).map(badge => badge.id))
+  const earned: Record<BadgeId, boolean> = {
+    'first-blood': context.battleWon !== undefined,
+    'first-quest': tally.questsClosed >= 1,
+    'boss-slayer': tally.bossesWon >= 1,
+    flawless: context.bossWon?.flawless === true,
+    'dragon-slayer': (context.battleWon?.maxHp ?? 0) >= DRAGON_HP,
+    cartographer: tally.modulesDiscovered >= BADGE_COUNTS.modules,
+    apprentice: tally.sageRight >= BADGE_COUNTS.sageRight,
+    unbroken: tally.bossStreak >= BADGE_COUNTS.bossStreak,
+    wayfarer: tally.regions.length >= BADGE_COUNTS.regions,
+    'second-wind': context.bossWon?.exhausted === true,
+  }
+
+  return (Object.keys(BADGES) as BadgeId[]).filter(id => earned[id] && !held.has(id))
+}
+
+/** The Player given the Badges they earn now, each told as BADGE_EARNED. */
+const award = (
+  state: GameState,
+  context: BadgeContext,
+  at?: number,
+): { state: GameState; effects: Effect[] } => {
+  const badges = earnedBadges(state.player, context).map(
+    (id): Badge => (at === undefined ? { id, name: BADGES[id] } : { id, name: BADGES[id], earnedAt: at }),
+  )
+  if (badges.length === 0) {
+    return { state, effects: [] }
+  }
+
+  return {
+    state: { ...state, player: { ...state.player, badges: [...(state.player.badges ?? []), ...badges] } },
+    effects: badges.map(badge => ({ type: 'BADGE_EARNED', badge }) as const),
+  }
+}
+
+/** The MVP's Stats and the title each names, in the order a tie goes. */
+const TITLES: [StatName, string][] = [
+  ['intelligence', 'Scholar'],
+  ['wisdom', 'Pathfinder'],
+  ['strength', 'Warrior'],
+]
+
+/** The level a Player first has a title at. */
+export const TITLE_LEVEL = 3
+
+/** The level a Player's title gains `Veteran` at. */
+export const VETERAN_LEVEL = 10
+
+/**
+ * The Player's title: from level 3, named by their highest MVP Stat (Scholar,
+ * Pathfinder, Warrior), Veteran from level 10; null before, or with no Stat
+ * earned yet.
+ */
+export const titleOf = (player: Player): string | null => {
+  if (player.level < TITLE_LEVEL) {
+    return null
+  }
+
+  const [stat, title] = TITLES.reduce((best, each) =>
+    player.stats[each[0]] > player.stats[best[0]] ? each : best,
+  )
+  if (player.stats[stat] <= 0) {
+    return null
+  }
+
+  return player.level >= VETERAN_LEVEL ? `Veteran ${title}` : title
 }
 
 const measure = (
@@ -567,10 +790,12 @@ const measure = (
 // One active Quest per session. Starting another replaces it: the Quest
 // running is abandoned, not refused, because until a Boss Fight can close a
 // Quest a refusal would hold the session to its first Quest for good. The
-// Quest already running, started again, carries on with its Encounters.
+// Quest already running, started again, carries on with its Encounters. A new
+// Quest heals QUEST_HEAL HP; the Quest just closed, started again, does not.
 const startQuest = (
   state: GameState,
   ticket: string,
+  difficulty: Difficulty,
 ): { state: GameState; effects: Effect[] } => {
   if (state.quest?.ticket === ticket) {
     return { state, effects: [] }
@@ -578,12 +803,13 @@ const startQuest = (
 
   const abandoned: Effect[] =
     state.quest === null ? [] : [{ type: 'QUEST_ABANDONED', ticket: state.quest.ticket }]
-  const quest: Quest = { ticket, encounters: [] }
+  const quest: Quest = { ticket, encounters: [], difficulty, pools: emptyPools(), sageWrong: 0 }
+  const rested = state.bossFight?.ticket === ticket ? { player: state.player, effects: [] } : heal(state.player, QUEST_HEAL)
 
   // The Boss Fight belongs to the Quest it ends: a new Quest has none yet.
   return {
-    state: { ...state, quest, bossFight: null },
-    effects: [...abandoned, { type: 'QUEST_STARTED', ticket }],
+    state: { ...state, player: rested.player, quest, bossFight: null },
+    effects: [...abandoned, { type: 'QUEST_STARTED', ticket }, ...rested.effects],
   }
 }
 
@@ -635,7 +861,14 @@ const checkFailed = (
 
   if (open === undefined) {
     const hp = failures ?? 1
-    const battle: Battle = { check, foe: event.kind, hp, maxHp: hp, isCounted: failures !== null }
+    const battle: Battle = {
+      check,
+      foe: event.kind,
+      hp,
+      maxHp: hp,
+      isCounted: failures !== null,
+      ...(failures !== null ? { firstHp: hp } : {}),
+    }
     const encounter = encounterOf(battle, 0, 'spawned')
 
     return {
@@ -651,6 +884,7 @@ const checkFailed = (
     hp,
     maxHp: Math.max(open.maxHp, hp),
     isCounted: failures === null ? open.isCounted : true,
+    ...(open.firstHp === undefined && failures !== null ? { firstHp: hp } : {}),
   }
   const outcome = hits > 0 ? 'hit' : hp > open.hp ? 'grew' : 'stands'
   const encounter = encounterOf(battle, hits, outcome)
@@ -668,9 +902,11 @@ const checkFailed = (
   }
 }
 
-// All green wins: the monster takes its last hits and falls, and the Player
-// earns Strength XP for it, by the monster's largest HP. A check passing with
-// no Battle against it plays nothing.
+// All green wins: the monster takes its last hits and falls. A Battle won
+// with edits made while it stood pays Strength XP into the battle pool, by
+// the monster's HP at its first counted run, BATTLE_HP_PAID of them at most;
+// one won with no edit changed no code (a flaky check) and pays nothing. A
+// check passing with no Battle against it plays nothing.
 const checkPassed = (
   state: GameState,
   check: string,
@@ -680,43 +916,50 @@ const checkPassed = (
     return { state, effects: [] }
   }
 
-  const encounter = encounterOf({ ...open, hp: 0 }, open.hp, 'won')
-  const amount = BATTLE_XP_PER_HP * open.maxHp
   // The Sage asks about the fix; a Battle won with no edit changed no code.
   const fix = open.edits ?? []
-  const gained = gainStatXp(state.player, 'strength', amount)
-  const { player } = gained
+  const isEarned = fix.length > 0
+  const paid = isEarned
+    ? pay(state, 'battle', 'strength', BATTLE_XP_PER_HP * Math.min(open.firstHp ?? open.maxHp, BATTLE_HP_PAID))
+    : { state, effects: [], paid: 0 }
+  const awarded = isEarned ? award(paid.state, { battleWon: { maxHp: open.maxHp } }) : { state: paid.state, effects: [] }
+  const encounter: BattleEncounter = { ...encounterOf({ ...open, hp: 0 }, open.hp, 'won'), xp: paid.paid }
 
   return {
-    state: {
-      ...playBattle(
-        state,
-        encounter,
-        state.battles.filter(battle => battle !== open),
-      ),
-      player,
-    },
+    state: playBattle(
+      awarded.state,
+      encounter,
+      state.battles.filter(battle => battle !== open),
+    ),
     effects: [
       { type: 'ENCOUNTER_UPDATED', encounter },
       { type: 'MONSTER_HIT', check, hits: open.hp, hp: 0 },
       { type: 'BATTLE_WON', check, foe: open.foe },
-      ...(fix.length > 0 ? [{ type: 'CODE_CHANGED', changes: fix } as const] : []),
-      { type: 'XP_GAINED', amount, stat: 'strength' },
-      ...gained.effects,
+      ...(isEarned ? [{ type: 'CODE_CHANGED', changes: fix } as const] : []),
+      ...paid.effects,
+      ...awarded.effects,
     ],
   }
 }
 
 // The Question Queue: Questions wait, oldest first, until the Player answers
-// them; nothing in it ever holds up the session.
+// them; nothing in it ever holds up the session. A Question about a change
+// whose Question was already answered this session (a cache hit, the same
+// diff again) is not queued: an answer known pays once.
 const queueQuestion = (
   state: GameState,
   content: QuestionContent,
   at: number,
+  key: string | undefined,
 ): { state: GameState; effects: Effect[] } => {
+  if (key !== undefined && (state.answeredKeys ?? []).includes(key)) {
+    return { state, effects: [] }
+  }
+
   const questionsAsked = state.questionsAsked + 1
   const question: Question = {
     ...content,
+    ...(key !== undefined ? { key } : {}),
     id: `sage-${questionsAsked}`,
     npc: 'Sage',
     queuedAt: at,
@@ -757,10 +1000,12 @@ const isHasty = (question: Question, answerMs: number | null, rules: Rules): boo
   answerMs < rules.hastyAnswerMs &&
   question.source.lines.length >= rules.nonTrivialLines
 
-// A right answer earns QUESTION_XP of Intelligence, the Stat in play for
-// understanding code, whatever the Question's tag, or HASTY_ANSWER_XP when it
-// came too fast; a wrong one costs WRONG_ANSWER_HP, never below zero. Either
-// way the Question leaves the queue and its explanation shows.
+// A right answer pays QUESTION_XP to the Question's Stat (Wisdom for a
+// `wisdom` tag, else Intelligence) from the sage pool, HASTY_ANSWER_XP when it
+// came too fast, half either way when Exhausted; a wrong one costs
+// WRONG_ANSWER_HP, never below zero, and spoils a Flawless win. Either way
+// the Question leaves the queue, its change counts as answered, and its
+// explanation shows.
 const answerQuestion = (
   state: GameState,
   { id, choice, at }: Extract<GameEvent, { type: 'QUESTION_ANSWERED' }>,
@@ -774,44 +1019,44 @@ const answerQuestion = (
   const isCorrect = choice === question.answer
   const answerMs = question.shownAt === null ? null : at - question.shownAt
   const hasty = isCorrect && isHasty(question, answerMs, rules)
-  const xp = isCorrect ? (hasty ? HASTY_ANSWER_XP : QUESTION_XP) : 0
-  const hpLost = isCorrect ? 0 : Math.min(WRONG_ANSWER_HP, state.player.hp)
-  const answer: QuestionAnswer = {
-    question,
-    choice,
-    isCorrect,
-    answeredAt: at,
-    answerMs,
-    isHasty: hasty,
-    xp,
-    hpLost,
+  const answered: GameState = {
+    ...state,
+    questions: state.questions.filter(each => each !== question),
+    answeredKeys:
+      question.key === undefined ? state.answeredKeys : [...(state.answeredKeys ?? []), question.key],
   }
-  const questions = state.questions.filter(each => each !== question)
 
   if (!isCorrect) {
+    const hpLost = Math.min(WRONG_ANSWER_HP, state.player.hp)
+    const answer: QuestionAnswer = { question, choice, isCorrect, answeredAt: at, answerMs, isHasty: false, xp: 0, hpLost }
+    const { quest } = answered
+
     return {
       state: {
-        ...state,
-        questions,
+        ...answered,
+        quest: quest === null ? null : { ...quest, sageWrong: (quest.sageWrong ?? 0) + 1 },
         lastAnswer: answer,
         player: { ...state.player, hp: state.player.hp - hpLost },
       },
       effects: [
         { type: 'QUESTION_ANSWERED', answer },
-        { type: 'HP_LOST', amount: hpLost },
+        // Exhausted, a wrong answer costs nothing: no HP is lost.
+        ...(hpLost > 0 ? [{ type: 'HP_LOST', amount: hpLost } as const] : []),
       ],
     }
   }
 
-  const gained = gainStatXp(state.player, 'intelligence', xp)
+  const paid = pay(answered, 'sage', statOf(question), exhaustedPay(state.player, hasty ? HASTY_ANSWER_XP : QUESTION_XP))
+  const answer: QuestionAnswer = { question, choice, isCorrect, answeredAt: at, answerMs, isHasty: hasty, xp: paid.paid, hpLost: 0 }
+  const { player } = paid.state
+  const tallied: GameState = hasty
+    ? paid.state
+    : { ...paid.state, player: { ...player, tally: { ...player.tally, sageRight: player.tally.sageRight + 1 } } }
+  const awarded = award(tallied, {}, at)
 
   return {
-    state: { ...state, questions, lastAnswer: answer, player: gained.player },
-    effects: [
-      { type: 'QUESTION_ANSWERED', answer },
-      { type: 'XP_GAINED', amount: xp, stat: 'intelligence' },
-      ...gained.effects,
-    ],
+    state: { ...awarded.state, lastAnswer: answer },
+    effects: [{ type: 'QUESTION_ANSWERED', answer }, ...paid.effects, ...awarded.effects],
   }
 }
 
@@ -900,27 +1145,33 @@ const startBossFight = (
   return {
     state: {
       ...state,
-      bossFight: { ...state.bossFight, status: 'fighting', hp, maxHp: hp, questions: asked },
+      bossFight: { ...state.bossFight, status: 'fighting', hp, maxHp: hp, questions: asked, questionCount: hp },
     },
     effects: [{ type: 'BOSS_FIGHT_STARTED', ticket, hp }],
   }
 }
 
-/** The name of the badge Quest `ticket`'s Boss Fight won earns: `Bane of #12's Boss`. */
-export const badgeNameOf = (ticket: string): string => `Bane of ${ticket}'s Boss`
+/**
+ * The name of the trophy Quest `ticket`'s Boss Fight won earns in `region`:
+ * `Bane of claude-quest#12`, `Bane of vault ABC-123`; `Bane of #12` when the
+ * Region is not known.
+ */
+export const trophyNameOf = (region: string | null, ticket: string): string =>
+  `Bane of ${region ?? ''}${region === null || ticket.startsWith('#') ? '' : ' '}${ticket}`
 
-const badgeOf = (ticket: string, earnedAt: number): Badge => ({
-  name: badgeNameOf(ticket),
-  ticket,
-  earnedAt,
-})
+/**
+ * The Quest reward a Boss Fight won pays for a Quest of `difficulty`: its
+ * questXp, scaled down when fewer than BOSS_QUESTIONS Questions could be made.
+ */
+export const bossRewardOf = (difficulty: Difficulty, questionCount: number): number =>
+  Math.round((questXp(difficulty) * Math.min(questionCount, BOSS_QUESTIONS)) / BOSS_QUESTIONS)
 
-// Each right answer hits the boss and earns QUESTION_XP of Intelligence; a
-// wrong one costs WRONG_ANSWER_HP, as the Sage's do. No haste rule: the
-// boss's Questions are not timed. The boss at 0 HP is won: BOSS_FIGHT_XP and
-// a badge. The last Question answered with the boss standing is lost: the
-// answers keep what they earned or cost, and nothing more. Either way the
-// Quest closes.
+// Each right answer hits the boss and pays BOSS_ANSWER_XP of Intelligence,
+// uncapped (half when Exhausted); a wrong one costs WRONG_ANSWER_HP, as the
+// Sage's do. No haste rule: the boss's Questions are not timed. The boss at 0
+// HP is won (see closeQuest for its reward). The last Question answered with
+// the boss standing is lost: the answers keep what they earned or cost, and
+// nothing more. Either way the Quest closes.
 const answerBoss = (
   state: GameState,
   { id, choice, at }: Extract<GameEvent, { type: 'BOSS_ANSWERED' }>,
@@ -939,8 +1190,10 @@ const answerBoss = (
   }
 
   const isCorrect = choice === question.answer
-  const xp = isCorrect ? QUESTION_XP : 0
   const hpLost = isCorrect ? 0 : Math.min(WRONG_ANSWER_HP, state.player.hp)
+  const scored = isCorrect
+    ? pay(state, null, 'intelligence', exhaustedPay(state.player, BOSS_ANSWER_XP))
+    : { state: { ...state, player: { ...state.player, hp: state.player.hp - hpLost } }, effects: [], paid: 0 }
   const answer: QuestionAnswer = {
     question,
     choice,
@@ -948,49 +1201,34 @@ const answerBoss = (
     answeredAt: at,
     answerMs: question.shownAt === null ? null : at - question.shownAt,
     isHasty: false,
-    xp,
+    xp: scored.paid,
     hpLost,
   }
   const hp = isCorrect ? bossFight.hp - 1 : bossFight.hp
   const questions = bossFight.questions.filter(each => each !== question)
-  const scored = isCorrect
-    ? gainStatXp(state.player, 'intelligence', xp)
-    : { player: { ...state.player, hp: state.player.hp - hpLost }, effects: [] }
   const answered: GameState = {
-    ...state,
-    player: scored.player,
+    ...scored.state,
     bossFight: { ...bossFight, hp, questions, lastAnswer: answer },
   }
   const effects: Effect[] = [
     { type: 'QUESTION_ANSWERED', answer },
-    ...(isCorrect
-      ? [{ type: 'BOSS_HIT', hp } as const, { type: 'XP_GAINED', amount: xp, stat: 'intelligence' } as const]
-      : [{ type: 'HP_LOST', amount: hpLost } as const]),
+    ...(isCorrect ? [{ type: 'BOSS_HIT', hp } as const] : hpLost > 0 ? [{ type: 'HP_LOST', amount: hpLost } as const] : []),
     ...scored.effects,
   ]
 
   if (hp === 0) {
-    const won = gainStatXp(answered.player, 'intelligence', BOSS_FIGHT_XP)
-    const badge = badgeOf(bossFight.ticket, at)
-    const closed = closeQuest(
-      { ...answered, player: { ...won.player, badges: [...(won.player.badges ?? []), badge] } },
-      'won',
-    )
+    // Won today only with every Question right (the boss has one HP per
+    // Question), so a win is Flawless unless a Sage answer went wrong.
+    const questionCount = bossFight.questionCount ?? bossFight.maxHp
+    const allRight = bossFight.maxHp - hp === questionCount
+    const flawless = allRight && (state.quest?.sageWrong ?? 0) === 0
+    const closed = closeQuest(answered, 'won', { at, flawless, exhausted: isExhausted(state.player) })
 
-    return {
-      state: closed.state,
-      effects: [
-        ...effects,
-        { type: 'XP_GAINED', amount: BOSS_FIGHT_XP, stat: 'intelligence' },
-        ...won.effects,
-        { type: 'BADGE_EARNED', badge },
-        ...closed.effects,
-      ],
-    }
+    return { state: closed.state, effects: [...effects, ...closed.effects] }
   }
 
   if (questions.length === 0) {
-    const closed = closeQuest(answered, 'lost')
+    const closed = closeQuest(answered, 'lost', { at })
 
     return { state: closed.state, effects: [...effects, ...closed.effects] }
   }
@@ -998,26 +1236,96 @@ const answerBoss = (
   return { state: answered, effects }
 }
 
+/** What closing a Quest knows of how its Boss Fight ended. */
+type Closing = { at?: number; flawless?: boolean; exhausted?: boolean }
+
+/** Whether the Player holds the trophy of Quest `ticket` in `region` already: its reward was paid. */
+const isRewarded = (player: Player, region: string | null, ticket: string): boolean =>
+  (player.trophies ?? []).some(trophy => trophy.region === region && trophy.ticket === ticket)
+
+/** Whether the unfought share of Quest `ticket` in `region` was paid already. */
+const isConsoled = (player: Player, region: string | null, ticket: string): boolean =>
+  (player.unfought ?? []).some(quest => quest.region === region && quest.ticket === ticket)
+
 // The Boss Fight ended, so its Quest closes: no Quest is active after it.
-// The Boss Fight stays, ended, until the next Quest starts; the Encounter
-// under way is put away, so the Scene shows how the Quest ended until the
-// next Encounter.
+// Won, it pays the Quest reward by the Quest's difficulty (and half again
+// when Flawless) and its trophy, once per (Region, ticket), and heals fully;
+// unfought, it pays UNFOUGHT_SHARE of the reward, once per (Region, ticket)
+// and never after a win; lost or skipped, nothing. The tally and Badges follow. The Boss
+// Fight stays, ended, until the next Quest starts; the Encounter under way is
+// put away, so the Scene shows how the Quest ended until the next Encounter.
 const closeQuest = (
   state: GameState,
   outcome: QuestOutcome,
+  { at, flawless = false, exhausted = false }: Closing = {},
 ): { state: GameState; effects: Effect[] } => {
   const ticket = state.bossFight?.ticket ?? state.quest?.ticket
   if (ticket === undefined) {
     return { state, effects: [] }
   }
 
+  const region = state.region ?? null
+  const difficulty = state.quest?.difficulty ?? 'Unrated'
+  const fight = state.bossFight ?? null
+  const isNew = !isRewarded(state.player, region, ticket)
+  let played = state
+  const effects: Effect[] = []
+  let reward = 0
+  let trophy: Trophy | undefined
+
+  if (outcome === 'won') {
+    if (isNew) {
+      const earned = pay(played, null, 'intelligence', bossRewardOf(difficulty, fight?.questionCount ?? fight?.maxHp ?? BOSS_QUESTIONS))
+      const bonus = flawless ? pay(earned.state, null, 'intelligence', Math.floor(earned.paid / 2)) : { state: earned.state, effects: [], paid: 0 }
+      reward = earned.paid + bonus.paid
+      trophy = { name: trophyNameOf(region, ticket), region, ticket, earnedAt: at ?? 0 }
+      played = { ...bonus.state, player: { ...bonus.state.player, trophies: [...(bonus.state.player.trophies ?? []), trophy] } }
+      effects.push(...earned.effects, ...bonus.effects)
+    }
+    const healed = heal(played.player, Infinity)
+    played = { ...played, player: healed.player }
+    effects.push(...healed.effects, ...(trophy === undefined ? [] : [{ type: 'TROPHY_EARNED', trophy } as const]))
+  }
+
+  if (outcome === 'unfought' && isNew && !isConsoled(state.player, region, ticket)) {
+    const earned = pay(played, null, 'intelligence', Math.floor(questXp(difficulty) * UNFOUGHT_SHARE))
+    reward = earned.paid
+    const { player } = earned.state
+    played = { ...earned.state, player: { ...player, unfought: [...(player.unfought ?? []), { region, ticket }] } }
+    effects.push(...earned.effects)
+  }
+
+  const { tally } = played.player
+  const counts = outcome !== 'skipped'
+  const tallied: Tally = {
+    ...tally,
+    questsClosed: tally.questsClosed + (counts ? 1 : 0),
+    bossesWon: tally.bossesWon + (outcome === 'won' ? 1 : 0),
+    bossStreak: outcome === 'won' ? tally.bossStreak + 1 : outcome === 'unfought' ? tally.bossStreak : 0,
+    regions: counts && region !== null && !tally.regions.includes(region) ? [...tally.regions, region] : tally.regions,
+  }
+  const awarded = award(
+    { ...played, player: { ...played.player, tally: tallied } },
+    outcome === 'won' ? { bossWon: { flawless, exhausted } } : {},
+    at,
+  )
+
   return {
     state: {
-      ...state,
+      ...awarded.state,
       quest: null,
       encounter: null,
-      bossFight: state.bossFight == null ? null : { ...state.bossFight, status: outcome },
+      bossFight:
+        fight === null
+          ? null
+          : {
+              ...fight,
+              status: outcome,
+              reward,
+              ...(outcome === 'won' ? { flawless } : {}),
+              ...(trophy === undefined ? {} : { trophy: trophy.name }),
+            },
     },
-    effects: [{ type: 'QUEST_CLOSED', ticket, outcome }],
+    effects: [...effects, ...awarded.effects, { type: 'QUEST_CLOSED', ticket, outcome }],
   }
 }

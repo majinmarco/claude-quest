@@ -154,7 +154,7 @@ describe('Scene pane', () => {
     const art = await ui.find({ type: 'Svg' })
     expect(art?.props.isInteractive).toBe(true)
     expect(String(art?.props.source)).toMatch(/^<svg [^>]*>.*<animateTransform /)
-    expect(art?.props.alt).toBe('Exploring engine.ts in src · first visit, +10 XP (Wisdom)')
+    expect(art?.props.alt).toBe('Exploring engine.ts in src · first visit, +6 XP')
     await ui.unmount()
   })
 
@@ -179,7 +179,7 @@ describe('Scene pane', () => {
 
     const ui = await $.ui.mount({ ...SCENE, surface: 'terminal' })
     expect((await ui.find({ type: 'Text' }))?.text).toBe(
-      'Exploring GLOSSARY.md in the project root · first visit, +10 XP (Wisdom)',
+      'Exploring GLOSSARY.md in the project root · first visit, +6 XP',
     )
     await ui.unmount()
   })
@@ -194,7 +194,7 @@ describe('Exploration: first visit to a module', () => {
     // The Region file is written after the tool call, never holding it up.
     await clock.settle()
 
-    expect(player()).toMatchObject({ xp: 5 })
+    expect(player()).toMatchObject({ xp: 1 })
     expect(project.has(REGION)).toBe(false)
     const ui = await $.ui.mount({ ...SCENE, surface: 'terminal' })
     expect((await ui.find({ type: 'Text' }))?.text).toBe(
@@ -208,16 +208,16 @@ describe('Exploration: first visit to a module', () => {
     await $.session.start(START)
 
     await $.tool.call(readOf('src/engine.ts'))
-    expect(player()).toMatchObject({ xp: 15 })
+    expect(player()).toMatchObject({ xp: 6 })
 
     await $.tool.call(readOf('src/hud.tsx'))
-    expect(player()).toMatchObject({ xp: 20 })
+    expect(player()).toMatchObject({ xp: 7 })
 
     await $.tool.call(readOf('tests/engine.test.ts'))
-    expect(player()).toMatchObject({ xp: 35 })
+    expect(player()).toMatchObject({ xp: 13 })
 
     const ui = await $.ui.mount({ ...HUD, surface: 'terminal' })
-    expect((await ui.find({ type: 'Text', text: /^XP / }))?.text).toBe('XP 35/100')
+    expect((await ui.find({ type: 'Text', text: /^XP / }))?.text).toBe('XP 13/100')
     await ui.unmount()
   })
 
@@ -244,7 +244,7 @@ describe('Exploration: first visit to a module', () => {
 
     await $.tool.call(readOf('src/engine.ts'))
 
-    expect(player()).toMatchObject({ xp: 5 })
+    expect(player()).toMatchObject({ xp: 1 })
   })
 
   test('discovering a module keeps the rest of the Region file as it was', async ($, on) => {

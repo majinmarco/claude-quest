@@ -75,12 +75,13 @@ describe('HUD', () => {
 
     await $.tool.call(read.input)
 
-    expect(kept.get('player')).toMatchObject({ level: 1, xp: 5 })
+    // A read pays 1 XP.
+    expect(kept.get('player')).toMatchObject({ level: 1, xp: 1 })
 
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...HUD, surface })
 
-      expect((await ui.find({ type: 'Text', text: /^XP / }))?.text).toBe('XP 5/100')
+      expect((await ui.find({ type: 'Text', text: /^XP / }))?.text).toBe('XP 1/100')
       expect((await ui.find({ type: 'Text', text: /Exploring/ }))?.text).toBe(
         'Exploring GLOSSARY.md',
       )
@@ -109,9 +110,11 @@ describe('HUD', () => {
 
     await $.tool.call(read.input)
 
+    // Kept by an older mod: 100 + 200 + 42 = 342 XP lifetime, still level 3
+    // on the new curve (250 to reach it), 92 into it; the read adds 1.
     const ui = await $.ui.mount({ ...HUD, surface: 'terminal' })
-    expect((await ui.find({ type: 'Text', text: /^Lv / }))?.text).toBe('Lv 3')
-    expect((await ui.find({ type: 'Text', text: /^XP / }))?.text).toBe('XP 47/300')
+    expect((await ui.find({ type: 'Text', text: /^Lv / }))?.text).toBe('Lv 3 Scholar')
+    expect((await ui.find({ type: 'Text', text: /^XP / }))?.text).toBe('XP 93/300')
     await ui.unmount()
   })
 
@@ -121,7 +124,7 @@ describe('HUD', () => {
 
     await $.tool.call(read.input)
 
-    expect(kept.get('player')).toMatchObject({ level: 3, xp: 47 })
+    expect(kept.get('player')).toMatchObject({ level: 3, xp: 93, totalXp: 343 })
   })
 })
 
@@ -378,5 +381,117 @@ describe('Quests', () => {
     await implement($, 'the spec in docs/spec.md')
 
     expect(files.has(REGION)).toBe(false)
+  })
+})
+
+/** Runs `/command args` as the Player would. */
+const runCommand = ($: Engine, command: string, args = '') =>
+  $.command.run({
+    command,
+    args,
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 80 },
+  })
+
+/** Records the mod's toasts. */
+const toastsOf = (on: On) => {
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+
+  return toasts
+}
+
+/** A Player kept by this mod: level 4, a Scholar, two Badges and a trophy. */
+const SCHOLAR = {
+  level: 4,
+  xp: 10,
+  totalXp: 560,
+  hp: 0,
+  maxHp: 100,
+  stats: { intelligence: 300, wisdom: 40, dexterity: 0, strength: 60, charisma: 0, constitution: 0 },
+  tally: { questsClosed: 2, bossesWon: 1, bossStreak: 1, sageRight: 6, modulesDiscovered: 9, regions: ['vault'] },
+  badges: [
+    { id: 'first-quest', name: 'Questbound' },
+    { id: 'boss-slayer', name: 'Boss Slayer' },
+  ],
+  trophies: [{ name: 'Bane of vault#12', region: 'vault', ticket: '#12', earnedAt: 1 }],
+}
+
+describe('HUD: the Player\'s progress', () => {
+  test('the HUD shows the title, Exhausted at 0 HP, the Badge count and the Stats, dim', async ($, on) => {
+    keptStore(on, { player: SCHOLAR })
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...HUD, surface })
+
+      expect((await ui.find({ type: 'Text', text: /^Lv / }))?.text).toBe('Lv 4 Scholar')
+      const exhausted = await ui.find({ type: 'Text', text: 'Exhausted' })
+      expect(exhausted?.props.color).toBe('red')
+      expect(await ui.find({ type: 'Text', text: /^HP / })).toBeUndefined()
+      expect((await ui.find({ type: 'Text', text: /^★/ }))?.text).toBe('★2')
+      const stats = await ui.find({ type: 'Text', text: /^INT / })
+      expect(stats?.text).toBe('INT 300 · WIS 40 · STR 60')
+      expect(stats?.props.dimColor).toBe(true)
+      await ui.unmount()
+    }
+  })
+
+  test('/badges lists the Badges, trophies, title and Stats as text', async ($, on) => {
+    keptStore(on, { player: SCHOLAR })
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    expect((await runCommand($, 'badges')).text).toBe(
+      [
+        'Lv 4 Scholar · 560 XP lifetime · INT 300 · WIS 40 · STR 60',
+        'Badges (2/10): Questbound, Boss Slayer',
+        'Trophies (1): Bane of vault#12',
+      ].join('\n'),
+    )
+  })
+
+  test('a Player kept by an older mod is migrated, kept so, and told once when the level changed', async ($, on) => {
+    const kept = keptStore(on, {
+      player: { level: 5, xp: 40, hp: 100, maxHp: 100, stats: LEVEL_3.stats, badges: [{ name: "Bane of #12's Boss", ticket: '#12', earnedAt: 7 }] },
+    })
+    const toasts = toastsOf(on)
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+    // A reload of the mod runs session.start again.
+    await $.session.start(START)
+
+    expect(kept.get('player')).toMatchObject({
+      level: 4,
+      totalXp: 1040,
+      trophies: [{ name: 'Bane of #12', region: null, ticket: '#12', earnedAt: 7 }],
+    })
+    expect(toasts.filter(toast => toast.includes('rebalanced'))).toEqual([
+      "Claude Quest's levels were rebalanced: you are level 4 (was 5), your XP kept.",
+    ])
+  })
+
+  test('a full XP pool is told once, pointing to the Sage', async ($, on) => {
+    keptStore(on)
+    const toasts = toastsOf(on)
+    on('tool.call', () => read.result)
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    for (let n = 0; n < 25; n += 1) {
+      await $.tool.call(read.input)
+    }
+
+    expect(toasts).toEqual([
+      "Exploration and Crafting XP is full for this session, outside a Quest. The Sage's Questions still pay: /sage",
+    ])
+    const ui = await $.ui.mount({ ...HUD, surface: 'terminal' })
+    expect((await ui.find({ type: 'Text', text: /^XP / }))?.text).toBe('XP 20/100')
+    await ui.unmount()
   })
 })

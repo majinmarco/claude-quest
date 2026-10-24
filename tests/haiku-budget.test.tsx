@@ -150,7 +150,7 @@ describe('The Haiku budget', () => {
 })
 
 describe('The Question cache', () => {
-  test('an identical diff reuses the cached Question: Haiku is asked once', async ($, on) => {
+  test('an identical diff, its Question answered, asks Haiku nothing and queues nothing: an answer pays once', async ($, on) => {
     const { asked, call } = engine(on)
     await $.session.start(START)
 
@@ -159,7 +159,7 @@ describe('The Question cache', () => {
     await call($, writeNewFile)
 
     expect(asked).toHaveLength(1)
-    expect(await waiting($)).toBe('1')
+    expect(await waiting($)).toBeUndefined()
   })
 
   test('a cache hit spends no budget', { options: { sageCallsOutsideQuest: 1 } }, async ($, on) => {
@@ -197,6 +197,6 @@ describe('The Question cache', () => {
     await call($, writeNewFile)
 
     expect(asked).toHaveLength(1)
-    expect(await waiting($)).toBe('1')
+    expect(await waiting($)).toBeUndefined()
   })
 })

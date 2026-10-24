@@ -7,7 +7,7 @@
 import type { EngineInterface, RenderInput } from 'claude-code'
 
 import type { GameState, Question, QuestionAnswer } from '../types'
-import { QUESTION_XP } from './engine'
+import { QUESTION_XP, statOf } from './engine'
 import { portraitSvg } from './scene-art'
 
 export type SageActions = {
@@ -48,12 +48,17 @@ export const NO_QUESTION =
  * What an answer earned or cost, in one line. A hasty right answer says what
  * a closer read would have earned.
  */
-export const verdictOf = ({ isCorrect, isHasty, xp, hpLost, question }: QuestionAnswer): string =>
-  isCorrect
-    ? isHasty
-      ? `Right, but hasty: +${xp} XP (Intelligence). A closer read earns the full ${QUESTION_XP}.`
-      : `Right! +${xp} XP (Intelligence)`
-    : `Not quite: -${hpLost} HP. The answer was ${LETTERS[question.answer]}: ${question.options[question.answer]}`
+export const verdictOf = ({ isCorrect, isHasty, xp, hpLost, question }: QuestionAnswer): string => {
+  if (!isCorrect) {
+    return `Not quite${hpLost > 0 ? `: -${hpLost} HP` : ''}. The answer was ${LETTERS[question.answer]}: ${question.options[question.answer]}`
+  }
+
+  const paid = xp > 0 ? `+${xp} XP (${statOf(question) === 'wisdom' ? 'Wisdom' : 'Intelligence'})` : "no XP: the Sage's XP pool is full"
+
+  return isHasty
+    ? `Right, but hasty: ${paid}. A closer read earns the full ${QUESTION_XP}.`
+    : `Right! ${paid}`
+}
 
 /**
  * A Question as text, for the terminal's `/sage` and the transcript: the

@@ -91,12 +91,12 @@ describe('Crafting', () => {
 
     const { text, art } = await sceneOn($, 'desktop')
     expect(text).toBe(
-      'The blacksmith forges the User Profile Card: new file user-profile-card.tsx in src, 23 lines · +10 XP',
+      'The blacksmith forges the User Profile Card: new file user-profile-card.tsx in src, 23 lines · +5 XP',
     )
     expect(art?.props.alt).toBe(text)
     expect(art?.props.isInteractive).toBe(true)
     expect(String(art?.props.source)).toMatch(/^<svg [^>]*>.*<animate/)
-    expect(player()).toMatchObject({ xp: 10 })
+    expect(player()).toMatchObject({ xp: 5 })
   })
 
   test('in the terminal a major edit is one line: the item reforged, its lines counted', async ($, on) => {
@@ -107,7 +107,7 @@ describe('Crafting', () => {
 
     const { text, art } = await sceneOn($, 'terminal')
     expect(text).toBe(
-      'The blacksmith reforges the Order Ledger: order-ledger.ts in src, +12 -10 lines · +10 XP',
+      'The blacksmith reforges the Order Ledger: order-ledger.ts in src, +12 -10 lines · +5 XP',
     )
     expect(art).toBeUndefined()
   })

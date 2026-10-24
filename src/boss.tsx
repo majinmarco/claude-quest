@@ -8,7 +8,7 @@
 import type { EngineInterface, RenderInput } from 'claude-code'
 
 import type { BossFight, QuestionAnswer } from '../types'
-import { badgeNameOf, BOSS_FIGHT_XP, isUnderWay } from './engine'
+import { isUnderWay } from './engine'
 import { portraitSvg } from './scene-art'
 import { LETTERS } from './sage'
 
@@ -29,11 +29,15 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '
 
 const hpOf = (fight: BossFight): string => `${fight.hp}/${fight.maxHp} HP`
 
+/** What the Boss Fight's end paid, as ` +100 XP (Intelligence).`; nothing when it paid none. */
+const rewardOf = (fight: BossFight): string =>
+  fight.reward === undefined || fight.reward <= 0 ? '' : ` +${fight.reward} XP (Intelligence).`
+
 /** What a Boss Fight answer did, in one line: a hit, or the boss's strike back. */
 export const bossVerdictOf = (answer: QuestionAnswer, fight: BossFight): string =>
   answer.isCorrect
     ? `Hit! +${answer.xp} XP (Intelligence). Boss ${hpOf(fight)}`
-    : `The boss strikes: -${answer.hpLost} HP. The answer was ${LETTERS[answer.question.answer]}: ${answer.question.options[answer.question.answer]}`
+    : `The boss strikes${answer.hpLost > 0 ? `: -${answer.hpLost} HP` : ', but you are Exhausted: no HP lost'}. The answer was ${LETTERS[answer.question.answer]}: ${answer.question.options[answer.question.answer]}`
 
 /** How a Boss Fight ended, or that it has not, in one line. */
 export const bossOutcomeText = (fight: BossFight): string => {
@@ -43,13 +47,13 @@ export const bossOutcomeText = (fight: BossFight): string => {
     case 'fighting':
       return `The boss of Quest ${fight.ticket} stands, ${hpOf(fight)}.`
     case 'won':
-      return `The boss falls! +${BOSS_FIGHT_XP} XP (Intelligence) and a badge: ${badgeNameOf(fight.ticket)}. Quest ${fight.ticket} closed.`
+      return `The boss falls!${rewardOf(fight)}${fight.flawless === true ? ' Flawless!' : ''}${fight.trophy === undefined ? '' : ` Trophy: ${fight.trophy}.`} Quest ${fight.ticket} closed.`
     case 'lost':
       return `The boss still stands, ${hpOf(fight)}: Quest ${fight.ticket} closed without the Boss Fight's reward.`
     case 'skipped':
       return `Boss Fight skipped: Quest ${fight.ticket} closed without its reward.`
     case 'unfought':
-      return `No boss came for Quest ${fight.ticket}: it closes without a Boss Fight.`
+      return `No boss came for Quest ${fight.ticket}: it closes without a Boss Fight.${rewardOf(fight)}`
   }
 }
 

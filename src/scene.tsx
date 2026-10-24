@@ -4,7 +4,7 @@
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
-import { badgeNameOf, BATTLE_XP_PER_HP, BOSS_FIGHT_XP, CRAFTING_XP, DISCOVERY_XP, isUnderWay } from './engine'
+import { isUnderWay } from './engine'
 import type { BattleEncounter, BossFight, CheckKind, CraftingEncounter, Encounter } from './engine'
 import { bossSceneSvg, MONSTERS, sceneSvg } from './scene-art'
 
@@ -23,6 +23,13 @@ const whereIn = (module: string | null): string => {
   return module === '.' ? 'in the project root' : `in ${module}`
 }
 
+
+/**
+ * The XP an Encounter paid, after `before` (` · `, `, `): `+5 XP (Wisdom)`;
+ * nothing when it paid none, its pool full.
+ */
+const paidXp = (xp: number | undefined, before: string, stat?: string): string =>
+  xp === undefined || xp <= 0 ? '' : `${before}+${xp} XP${stat === undefined ? '' : ` (${stat})`}`
 
 const plural = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`
@@ -56,7 +63,7 @@ export const describeBattle = (battle: BattleEncounter): string => {
     case 'grew':
       return `The ${monster} grows: ${battle.check} · ${hp}`
     case 'won':
-      return `Battle won: ${battle.check} all green · +${BATTLE_XP_PER_HP * battle.maxHp} XP (Strength)`
+      return `Battle won: ${battle.check} all green${paidXp(battle.xp, ' · ', 'Strength')}`
   }
 }
 
@@ -70,7 +77,7 @@ export const describeCrafting = (crafting: CraftingEncounter): string => {
     ? `forges the ${crafting.item}: new file ${file}, ${plural(crafting.linesAdded, 'line')}`
     : `reforges the ${crafting.item}: ${file}, +${crafting.linesAdded} -${crafting.linesRemoved} lines`
 
-  return `The blacksmith ${made} · +${CRAFTING_XP} XP`
+  return `The blacksmith ${made}${paidXp(crafting.xp, ' · ')}`
 }
 
 /** The Boss Fight in one line: how it stands after the last answer, or how it ended. */
@@ -89,15 +96,15 @@ export const describeBossFight = (fight: BossFight): string => {
 
       return last.isCorrect
         ? `A hit on ${boss} · ${hp} · /boss`
-        : `The boss of Quest ${fight.ticket} strikes back: -${last.hpLost} HP · ${hp} · /boss`
+        : `The boss of Quest ${fight.ticket} strikes back${last.hpLost > 0 ? `: -${last.hpLost} HP` : ''} · ${hp} · /boss`
     case 'won':
-      return `The boss of Quest ${fight.ticket} falls! +${BOSS_FIGHT_XP} XP (Intelligence) and a badge: ${badgeNameOf(fight.ticket)}`
+      return `The boss of Quest ${fight.ticket} falls!${paidXp(fight.reward, ' ', 'Intelligence')}${fight.flawless === true ? ' · Flawless' : ''}${fight.trophy === undefined ? '' : ` · trophy: ${fight.trophy}`}`
     case 'lost':
       return `The boss of Quest ${fight.ticket} still stands, ${hp}: Quest closed without its reward`
     case 'skipped':
       return `Boss Fight skipped: Quest ${fight.ticket} closed without its reward`
     case 'unfought':
-      return `No boss came for Quest ${fight.ticket}: Quest closed without a Boss Fight`
+      return `No boss came for Quest ${fight.ticket}: Quest closed without a Boss Fight${paidXp(fight.reward, ' · ', 'Intelligence')}`
   }
 }
 
@@ -129,7 +136,7 @@ export const describeScene = (encounter: Encounter | null): string => {
 
   const where = `Exploring ${nameOf(encounter.target)} ${whereIn(encounter.module)}`
 
-  return encounter.isFirstVisit ? `${where} · first visit, +${DISCOVERY_XP} XP (Wisdom)` : where
+  return encounter.isFirstVisit ? `${where} · first visit${paidXp(encounter.xp, ', ')}` : where
 }
 
 export function drawScene(
