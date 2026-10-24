@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { manaLevel, newGame, questXp, step } from '../src/engine'
+import { isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, REWRITE_SHARE, manaLevel, newGame, questXp, step } from '../src/engine'
 
 describe('Game Engine: a new Player', () => {
   test('starts at level 1 with no XP, full HP and no Stats', () => {
@@ -469,4 +469,172 @@ describe('Game Engine: Battle', () => {
 
     expect(effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
   })
+})
+
+describe('Game Engine: Crafting', () => {
+  /** A file change, of `added` and `removed` lines, to an existing file. */
+  const edit = (
+    added: number,
+    removed: number,
+    path = '/work/forge/src/order-ledger.ts',
+    linesBefore: number | null = 40,
+  ) => ({
+    type: 'FILE_EDIT' as const,
+    path,
+    module: 'src',
+    isNewFile: false,
+    linesBefore,
+    linesAdded: added,
+    linesRemoved: removed,
+    diff: '@@ -1,1 +1,1 @@\n-a\n+b',
+  })
+
+  const newFile = {
+    type: 'FILE_EDIT' as const,
+    path: '/work/forge/src/user-profile-card.tsx',
+    module: 'src',
+    isNewFile: true,
+    linesBefore: null,
+    linesAdded: 23,
+    linesRemoved: 0,
+    diff: '@@ -0,0 +1,23 @@\n+export type UserProfile = {',
+  }
+
+  test('a new file is forged: a Crafting Encounter of the item named after it, for 10 XP', () => {
+    const { state, effects } = step(newGame(), newFile)
+
+    const encounter = {
+      kind: 'Crafting',
+      target: '/work/forge/src/user-profile-card.tsx',
+      module: 'src',
+      item: 'User Profile Card',
+      isNewFile: true,
+      linesAdded: 23,
+      linesRemoved: 0,
+    }
+    expect(state.encounter).toEqual(encounter)
+    expect(state.player.xp).toBe(10)
+    expect(effects).toEqual([
+      { type: 'ENCOUNTER_STARTED', encounter },
+      {
+        type: 'CODE_CHANGED',
+        path: '/work/forge/src/user-profile-card.tsx',
+        item: 'User Profile Card',
+        isNewFile: true,
+        linesAdded: 23,
+        linesRemoved: 0,
+        diff: '@@ -0,0 +1,23 @@\n+export type UserProfile = {',
+      },
+      { type: 'XP_GAINED', amount: 10 },
+    ])
+  })
+
+  test('even a tiny new file is forged', () => {
+    const { state } = step(newGame(), { ...newFile, linesAdded: 1 })
+
+    expect(state.encounter?.kind).toBe('Crafting')
+  })
+
+  test('an edit of 10 changed lines is a major edit, and forges', () => {
+    expect(MAJOR_EDIT_LINES).toBe(10)
+
+    const { state, effects } = step(newGame(), edit(10, 3))
+
+    expect(state.encounter).toMatchObject({ kind: 'Crafting', item: 'Order Ledger', isNewFile: false })
+    expect(effects.map(effect => effect.type)).toEqual(['ENCOUNTER_STARTED', 'CODE_CHANGED', 'XP_GAINED'])
+  })
+
+  test('lines removed count as changed: deleting 10 lines forges', () => {
+    expect(step(newGame(), edit(0, 10)).state.encounter?.kind).toBe('Crafting')
+  })
+
+  test('an edit of 9 changed lines is minor: no Encounter, nothing earned', () => {
+    const before = newGame()
+
+    const { state, effects } = step(before, edit(9, 9))
+
+    expect(state).toEqual(before)
+    expect(effects).toEqual([])
+  })
+
+  test('lines replaced count once: 6 removed and 6 added is a 6-line edit, minor', () => {
+    expect(step(newGame(), edit(6, 6)).effects).toEqual([])
+  })
+
+  test('a near-complete rewrite of a small file forges: 4 of its 5 lines replaced', () => {
+    expect(REWRITE_SHARE).toBe(0.8)
+
+    expect(step(newGame(), edit(13, 4, 'src/config.ts', 5)).state.encounter).toMatchObject({
+      kind: 'Crafting',
+      item: 'Config',
+    })
+  })
+
+  test('replacing 3 of 5 lines is no rewrite, and too few lines: minor', () => {
+    expect(step(newGame(), edit(3, 3, 'src/config.ts', 5)).effects).toEqual([])
+  })
+
+  test('emptying a file is no rewrite: nothing new is made', () => {
+    expect(step(newGame(), edit(0, 5, 'src/config.ts', 5)).effects).toEqual([])
+  })
+
+  test('with the old file unknown only the lines changed count', () => {
+    expect(step(newGame(), edit(4, 4, 'src/config.ts', null)).effects).toEqual([])
+  })
+
+  test('a minor edit leaves the Encounter under way as it was', () => {
+    const exploring = step(newGame(), { type: 'FILE_READ', path: 'src/a.ts', module: 'src' }).state
+
+    expect(step(exploring, edit(1, 1)).state.encounter).toEqual(exploring.encounter)
+  })
+
+  test('a Crafting during a Quest is recorded on it', () => {
+    const questing = step(newGame(), { type: 'QUEST_START', ticket: '#9' }).state
+
+    const { state } = step(questing, newFile)
+
+    expect(state.quest?.encounters).toEqual([state.encounter])
+  })
+
+  test('Crafting is a code-changing Encounter; Exploration is not', () => {
+    const crafted = step(newGame(), newFile).state.encounter
+    const explored = step(newGame(), { type: 'FILE_READ', path: 'a.ts', module: '.' }).state.encounter
+
+    expect(crafted !== null && isCodeChanging(crafted)).toBe(true)
+    expect(explored !== null && isCodeChanging(explored)).toBe(false)
+  })
+
+  test('a Battle won changes code; a Battle spawned does not', () => {
+    const spawned = step(newGame(), { type: 'TEST_FAIL', check: 'npm test', kind: 'test', failures: 2 })
+    const won = step(spawned.state, { type: 'TEST_PASS', check: 'npm test', kind: 'test' })
+
+    expect(isCodeChanging(spawned.state.encounter!)).toBe(false)
+    expect(isCodeChanging(won.state.encounter!)).toBe(true)
+  })
+
+  test('forging can level the Player up', () => {
+    const nearly = { ...newGame(), player: { ...newGame().player, xp: 95 } }
+
+    expect(step(nearly, newFile).effects).toContainEqual({ type: 'LEVEL_UP', level: 2 })
+  })
+})
+
+describe('Game Engine: the item forged is named after the component', () => {
+  const named: [string, string][] = [
+    ['/work/forge/src/order-ledger.ts', 'Order Ledger'],
+    ['src/user_profile.py', 'User Profile'],
+    ['src/sceneArt.ts', 'Scene Art'],
+    ['src/HTTPServer.go', 'HTTP Server'],
+    ['tests/battle.test.tsx', 'Battle Test'],
+    ['src/quest-board/index.ts', 'Quest Board'],
+    ['pkg/my_module/__init__.py', 'My Module'],
+    ['Makefile', 'Makefile'],
+    ['.gitignore', 'Gitignore'],
+    ['index.ts', 'Index'],
+  ]
+  for (const [path, item] of named) {
+    test(`${path} forges the ${item}`, () => {
+      expect(itemNameOf(path)).toBe(item)
+    })
+  }
 })

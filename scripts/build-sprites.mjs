@@ -30,6 +30,14 @@ const SPRITES = {
   spider: 122,
   slime: 108,
   ghost: 121,
+  blacksmith: 86,
+  anvil: 74,
+  hammer: 117,
+  sword: 104,
+  shield: 102,
+  axe: 118,
+  dagger: 103,
+  staff: 129,
 }
 
 /** Decodes an 8-bit indexed PNG (the sheet's kind) into RGBA rows. */

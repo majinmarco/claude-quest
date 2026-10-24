@@ -5,6 +5,7 @@ import { translateCommand, translateMeasure, translateToolCall } from '../src/tr
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
 import * as bash from './fixtures/bash-calls'
 import { CLAUDE_PLUGIN_TEST_FAILING, vitestFailing3 } from './fixtures/bash-calls'
+import * as changes from './fixtures/file-changes'
 
 /** The project's root, as `$.session.root()` answers in the recorded session. */
 const ROOT = '/work/claude-quest'
@@ -399,5 +400,165 @@ describe('Event translator: which Bash commands are checks', () => {
     const input = { tool: 'Bash', tool_use_id: 'toolu_x', command: 'npx vitest run' }
 
     expect(translateToolCall(input, { deny: 'no tests now' }, ROOT)).toBeNull()
+  })
+})
+
+describe('Event translator: a file changed', () => {
+  /** The scratch project's root in the recorded session. */
+  const FORGE = '/work/forge'
+
+  test('a Write of a new file is a FILE_EDIT of a new file, every line added', () => {
+    const event = translateToolCall(changes.writeNewFile.input, changes.writeNewFile.result, FORGE)
+
+    expect(event).toMatchObject({
+      type: 'FILE_EDIT',
+      path: '/work/forge/src/user-profile-card.tsx',
+      module: 'src',
+      isNewFile: true,
+      linesBefore: null,
+      linesAdded: 23,
+      linesRemoved: 0,
+    })
+    expect(event?.type === 'FILE_EDIT' && event.diff).toMatch(
+      /^@@ -0,0 \+1,23 @@\n\+export type UserProfile = \{\n\+  id: string;\n/,
+    )
+  })
+
+  test('a one-line Edit counts one line removed and one added, its context left out', () => {
+    expect(translateToolCall(changes.editOneLine.input, changes.editOneLine.result, FORGE)).toEqual({
+      type: 'FILE_EDIT',
+      path: '/work/forge/src/greeting.ts',
+      module: 'src',
+      isNewFile: false,
+      linesBefore: 3,
+      linesAdded: 1,
+      linesRemoved: 1,
+      diff:
+        '@@ -1,3 +1,3 @@\n' +
+        '-export const greet = (name: string): string => `Hello, ${name}`\n' +
+        '+export const greet = (name: string): string => `Hi, ${name}`\n' +
+        ' \n' +
+        ' export const farewell = (name: string): string => `Bye, ${name}`',
+    })
+  })
+
+  test('an Edit replacing ten lines with twelve counts both', () => {
+    const { input, result } = changes.editTwelveLines
+
+    expect(translateToolCall(input, result, FORGE)).toMatchObject({
+      isNewFile: false,
+      linesAdded: 12,
+      linesRemoved: 10,
+    })
+  })
+
+  test('an Edit replacing all occurrences counts every line it touched', () => {
+    const { input, result } = changes.editReplaceAll
+
+    expect(translateToolCall(input, result, FORGE)).toMatchObject({ linesAdded: 32, linesRemoved: 32 })
+  })
+
+  test('a Write over an existing file is no new file: its diff is counted', () => {
+    const { input, result } = changes.writeRewrite
+
+    expect(translateToolCall(input, result, FORGE)).toMatchObject({
+      path: '/work/forge/src/config.ts',
+      isNewFile: false,
+      linesBefore: 5,
+      linesAdded: 13,
+      linesRemoved: 4,
+    })
+  })
+
+  test('a Write changing one line of an existing file counts that line', () => {
+    const { input, result } = changes.writeOneLineChanged
+
+    expect(translateToolCall(input, result, FORGE)).toMatchObject({ linesAdded: 1, linesRemoved: 1 })
+  })
+
+  test('a NotebookEdit replacing a cell counts the cell lines it changed', () => {
+    const { input, result } = changes.notebookReplace
+
+    expect(translateToolCall(input, result, FORGE)).toEqual({
+      type: 'FILE_EDIT',
+      path: '/work/forge/analysis.ipynb',
+      module: '.',
+      isNewFile: false,
+      linesBefore: null,
+      linesAdded: 2,
+      linesRemoved: 2,
+      diff: '@@ -1,2 +1,2 @@\n-x = 1\n-print(x)\n+y = 2\n+print(y * 3)',
+    })
+  })
+
+  test('a NotebookEdit inserting a cell adds its lines', () => {
+    const { input, result } = changes.notebookInsert
+
+    expect(translateToolCall(input, result, FORGE)).toMatchObject({ linesAdded: 1, linesRemoved: 0 })
+  })
+
+  test('an Edit that failed changed nothing: no event', () => {
+    const { input, result } = changes.editNotFound
+
+    expect(translateToolCall(input, result, FORGE)).toBeNull()
+  })
+
+  test('a denied Write changed nothing: no event', () => {
+    expect(translateToolCall(changes.writeNewFile.input, { deny: 'not now' }, FORGE)).toBeNull()
+  })
+
+  // Built from Claude Code 2.1.308's types (BuiltinToolResults.Write and
+  // Edit), not recorded: `staged` holds the change for review, the file
+  // unchanged; an update's patch is empty when nothing changed, or, with
+  // originalFile null, when the old content was too large to diff.
+  test('a change held for review (staged) changed nothing yet: no event', () => {
+    const { input, result } = changes.editTwelveLines
+    const staged = { ...result, result: { ...result.result, staged: true } }
+
+    expect(translateToolCall(input, staged, FORGE)).toBeNull()
+  })
+
+  test('an Edit with nothing to replace in a file that did not exist creates it: a new file', () => {
+    const { input, result } = changes.editOneLine
+    const creating = {
+      ...result,
+      result: {
+        ...result.result,
+        oldString: '',
+        newString: 'export const a = 1\n',
+        originalFile: null,
+        structuredPatch: [
+          { oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, lines: ['+export const a = 1'] },
+        ],
+      },
+    }
+
+    expect(translateToolCall(input, creating, FORGE)).toMatchObject({
+      isNewFile: true,
+      linesBefore: null,
+      linesAdded: 1,
+    })
+  })
+
+  test('a Write that changed nothing is no event', () => {
+    const { input, result } = changes.writeOneLineChanged
+    const unchanged = { ...result, result: { ...result.result, structuredPatch: [] } }
+
+    expect(translateToolCall(input, unchanged, FORGE)).toBeNull()
+  })
+
+  test('a Write over a file too large to diff counts its new content as added', () => {
+    const { input, result } = changes.writeRewrite
+    const undiffed = {
+      ...result,
+      result: { ...result.result, structuredPatch: [], originalFile: null },
+    }
+
+    expect(translateToolCall(input, undiffed, FORGE)).toMatchObject({
+      isNewFile: false,
+      linesBefore: null,
+      linesAdded: 14,
+      linesRemoved: 0,
+    })
   })
 })

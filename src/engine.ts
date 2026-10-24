@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Battle, BattleEncounter, CheckKind, Difficulty, Encounter, GameState, Player, Quest, StatName, Vitals } from '../types'
+import type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, GameState, Player, Quest, StatName, Vitals } from '../types'
 
-export type { Battle, BattleEncounter, CheckKind, Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
+export type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, GameState, Player, Quest, Vitals } from '../types'
 
 export type GameEvent =
   /**
@@ -11,6 +11,23 @@ export type GameEvent =
    * null when it was outside the project, or where that is not known.
    */
   | { type: 'FILE_READ'; path: string; module: string | null }
+  /**
+   * A file created or changed (a Write, an Edit, a NotebookEdit), with its
+   * Module as for FILE_READ. `linesAdded` and `linesRemoved` count the lines of
+   * its diff, context left out: a line replaced is one of each. `diff` is the
+   * change as unified-diff hunks (`@@ -1,3 +1,3 @@` and the lines under it).
+   */
+  | {
+      type: 'FILE_EDIT'
+      path: string
+      module: string | null
+      isNewFile: boolean
+      /** The file's lines before the change; null for a new file, or when not known. */
+      linesBefore: number | null
+      linesAdded: number
+      linesRemoved: number
+      diff: string
+    }
   | {
       type: 'SESSION_MEASURED'
       /** Absent while the context window has no reading yet. */
@@ -34,6 +51,19 @@ export type Effect =
   /** Newly passing tests (or cleared errors) struck the check's monster. */
   | { type: 'MONSTER_HIT'; check: string; hits: number; hp: number }
   | { type: 'BATTLE_WON'; check: string; foe: CheckKind }
+  /**
+   * Code changed in a code-changing Encounter (a Crafting): what the Sage
+   * asks about. `diff` is the change as unified-diff hunks.
+   */
+  | {
+      type: 'CODE_CHANGED'
+      path: string
+      item: string
+      isNewFile: boolean
+      linesAdded: number
+      linesRemoved: number
+      diff: string
+    }
   /** XP earned; `stat` is the Stat whose kind of work earned it, if any. */
   | { type: 'XP_GAINED'; amount: number; stat?: StatName }
   /** The Player's first visit to a Module in this Region. */
@@ -57,6 +87,54 @@ export const DISCOVERY_XP = 10
  * the more that was failing, the bigger the win.
  */
 export const BATTLE_XP_PER_HP = 10
+
+/**
+ * How many lines an edit changes, at least, to be a major edit and forge an
+ * item. A line replaced counts once, so the lines changed are the larger of
+ * those added and those removed: 10 rewritten, 10 new, or 10 deleted.
+ */
+export const MAJOR_EDIT_LINES = 10
+
+/**
+ * The share of a file's lines a change replaces, at least, to be a
+ * near-complete rewrite, a major edit however small the file: 4 of 5 lines.
+ */
+export const REWRITE_SHARE = 0.8
+
+/** The XP a Crafting earns: something made. */
+export const CRAFTING_XP = 10
+
+/**
+ * Whether an Encounter changed code, for the Sage to ask about: a Crafting,
+ * or a Battle won.
+ */
+export const isCodeChanging = (encounter: Encounter): boolean =>
+  encounter.kind === 'Crafting' || (encounter.kind === 'Battle' && encounter.outcome === 'won')
+
+/** A file's stem says nothing of the component in these: its folder does. */
+const GENERIC_STEMS = new Set(['index', '__init__', 'mod'])
+
+/**
+ * The item a file forges, named after the component it is: its name without
+ * the last extension, in words. Words split at `-`, `_`, `.`, spaces and
+ * camelCase humps (`HTTPServer` is `HTTP Server`), each capitalised.
+ * An `index`, `__init__` or `mod` file is named after its folder.
+ */
+export const itemNameOf = (path: string): string => {
+  const segments = path.split(/[\\/]/).filter(Boolean)
+  const stemOf = (name: string) => name.replace(/^\.+/, '').replace(/\.[^.]+$/, '')
+  let stem = stemOf(segments.pop() ?? '')
+  if (GENERIC_STEMS.has(stem) && segments.length > 0) {
+    stem = segments.pop() ?? stem
+  }
+  const words = stem
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+
+  return words.map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+}
 
 /** How full Mana is: it turns `filling`, then `warning` before compaction. */
 export type ManaLevel = 'calm' | 'filling' | 'warning'
@@ -131,6 +209,52 @@ export const step = (
       return checkFailed(state, event)
     case 'TEST_PASS':
       return checkPassed(state, event.check)
+    case 'FILE_EDIT':
+      return craft(state, event)
+  }
+}
+
+// A new file, or a major edit, is forged: the blacksmith makes an item named
+// after the component. A major edit changes MAJOR_EDIT_LINES lines or more,
+// or rewrites a file near completely (REWRITE_SHARE of its lines replaced).
+// A minor edit plays nothing.
+const craft = (
+  state: GameState,
+  event: Extract<GameEvent, { type: 'FILE_EDIT' }>,
+): { state: GameState; effects: Effect[] } => {
+  const { linesBefore } = event
+  const changed = Math.max(event.linesAdded, event.linesRemoved)
+  // Emptying a file makes nothing, so a rewrite must add lines too.
+  const isRewrite =
+    linesBefore !== null &&
+    linesBefore > 0 &&
+    event.linesAdded > 0 &&
+    event.linesRemoved >= REWRITE_SHARE * linesBefore
+  if (!event.isNewFile && changed < MAJOR_EDIT_LINES && !isRewrite) {
+    return { state, effects: [] }
+  }
+
+  const { path, module, isNewFile, linesAdded, linesRemoved, diff } = event
+  const item = itemNameOf(path)
+  const encounter: CraftingEncounter = {
+    kind: 'Crafting',
+    target: path,
+    module,
+    item,
+    isNewFile,
+    linesAdded,
+    linesRemoved,
+  }
+  const gained = gainXp(state.player, CRAFTING_XP)
+
+  return {
+    state: { ...state, player: gained.player, encounter, quest: attach(state.quest, encounter) },
+    effects: [
+      { type: 'ENCOUNTER_STARTED', encounter },
+      { type: 'CODE_CHANGED', path, item, isNewFile, linesAdded, linesRemoved, diff },
+      { type: 'XP_GAINED', amount: CRAFTING_XP },
+      ...gained.effects,
+    ],
   }
 }
 

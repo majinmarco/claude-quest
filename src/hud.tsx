@@ -29,6 +29,10 @@ const describeEncounter = (encounter: Encounter): string => {
       : `Battle: ${MONSTERS[encounter.foe].name} ${encounter.hp}/${encounter.maxHp} HP`
   }
 
+  if (encounter.kind === 'Crafting') {
+    return `Crafting: ${encounter.item}`
+  }
+
   const name = encounter.target.split(/[\\/]/).filter(Boolean).pop() ?? '.'
 
   return `Exploring ${name}`

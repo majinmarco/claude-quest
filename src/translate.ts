@@ -10,6 +10,7 @@ export type ToolCallSeen = {
   file_path?: unknown
   path?: unknown
   command?: unknown
+  notebook_path?: unknown
 }
 
 /** The part of what `next(e)` resolved to that the translator reads. */
@@ -21,6 +22,9 @@ export type ToolCallOutcome = {
 }
 
 const SEARCHES = new Set(['Grep', 'Glob'])
+
+/** The tools that create or change a file. */
+const FILE_CHANGES = new Set(['Write', 'Edit', 'NotebookEdit'])
 
 /**
  * An absolute path with `.` and `..` resolved and no trailing slash; a
@@ -94,6 +98,10 @@ export const translateToolCall = (
     return { type: 'FILE_READ', path, module: moduleOf(folderOf(path), root) }
   }
 
+  if (FILE_CHANGES.has(input.tool)) {
+    return translateFileChange(input.tool, outcome.result, root)
+  }
+
   if (SEARCHES.has(input.tool)) {
     const path = typeof input.path === 'string' ? input.path : '.'
     const folder = input.tool === 'Grep' && namesFile(path) ? folderOf(path) : path
@@ -102,6 +110,166 @@ export const translateToolCall = (
   }
 
   return null
+}
+
+/** One hunk of a Write's or Edit's `structuredPatch`. */
+type Hunk = {
+  oldStart: number
+  oldLines: number
+  newStart: number
+  newLines: number
+  lines: string[]
+}
+
+/** A text's lines; a last newline ends the last line, it starts no other. */
+const linesOf = (text: string): string[] =>
+  text === '' ? [] : text.replace(/\n$/, '').split('\n')
+
+const isHunk = (value: unknown): value is Hunk =>
+  typeof value === 'object' &&
+  value !== null &&
+  Array.isArray((value as Hunk).lines) &&
+  typeof (value as Hunk).oldStart === 'number'
+
+/** Hunks as a unified diff, and how many lines they add and remove. */
+const asDiff = (hunks: Hunk[]) => {
+  const lines = hunks.flatMap(hunk => hunk.lines)
+
+  return {
+    linesAdded: lines.filter(line => line.startsWith('+')).length,
+    linesRemoved: lines.filter(line => line.startsWith('-')).length,
+    diff: hunks
+      .map(
+        hunk =>
+          `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@\n` +
+          hunk.lines.join('\n'),
+      )
+      .join('\n'),
+  }
+}
+
+/** All of `text` added, as one hunk: a new file, or one whose old content is unknown. */
+const allAdded = (text: string): Hunk => {
+  const lines = linesOf(text)
+
+  return { oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map(line => `+${line}`) }
+}
+
+/**
+ * The hunk turning `before` into `after`, for a NotebookEdit, which hands
+ * over no patch: the lines both share at the start and the end are left out,
+ * and everything between is removed and added.
+ */
+const hunkBetween = (before: string, after: string): Hunk => {
+  const old = linesOf(before)
+  const next = linesOf(after)
+  let start = 0
+  while (start < old.length && start < next.length && old[start] === next[start]) {
+    start += 1
+  }
+  let end = 0
+  while (
+    end < old.length - start &&
+    end < next.length - start &&
+    old[old.length - 1 - end] === next[next.length - 1 - end]
+  ) {
+    end += 1
+  }
+  const removed = old.slice(start, old.length - end)
+  const added = next.slice(start, next.length - end)
+
+  return {
+    oldStart: removed.length === 0 ? start : start + 1,
+    oldLines: removed.length,
+    newStart: added.length === 0 ? start : start + 1,
+    newLines: added.length,
+    lines: [...removed.map(line => `-${line}`), ...added.map(line => `+${line}`)],
+  }
+}
+
+/**
+ * A Write, Edit or NotebookEdit that changed a file becomes a FILE_EDIT of it,
+ * its lines counted from the diff Claude Code hands over; one that changed
+ * nothing (or was held for review, `staged`) is no event.
+ */
+const translateFileChange = (
+  tool: string,
+  result: unknown,
+  root: string | null,
+): GameEvent | null => {
+  if (typeof result !== 'object' || result === null) {
+    return null
+  }
+  const record = result as Record<string, unknown>
+  if (record.staged === true) {
+    return null
+  }
+
+  const path = tool === 'NotebookEdit' ? record.notebook_path : record.filePath
+  if (typeof path !== 'string') {
+    return null
+  }
+
+  // A Write says it created the file; an Edit with nothing to replace in a
+  // file that had no content to read (originalFile null) creates it too.
+  const isNewFile =
+    (tool === 'Write' && record.type === 'create') ||
+    (tool === 'Edit' && record.oldString === '' && record.originalFile === null)
+  // A notebook's original_file is its JSON, not lines of code: not counted.
+  const linesBefore =
+    !isNewFile && tool !== 'NotebookEdit' && typeof record.originalFile === 'string'
+      ? linesOf(record.originalFile).length
+      : null
+  const hunks = hunksOf(tool, record, isNewFile)
+  if (hunks === null) {
+    return null
+  }
+  const change = asDiff(hunks)
+  if (!isNewFile && change.linesAdded + change.linesRemoved === 0) {
+    return null
+  }
+
+  return {
+    type: 'FILE_EDIT',
+    path,
+    module: moduleOf(folderOf(path), root),
+    isNewFile,
+    linesBefore,
+    ...change,
+  }
+}
+
+/** The change a file-changing tool's record tells, as hunks; null when it tells none. */
+const hunksOf = (
+  tool: string,
+  record: Record<string, unknown>,
+  isNewFile: boolean,
+): Hunk[] | null => {
+  if (tool === 'NotebookEdit') {
+    if (typeof record.error === 'string' && record.error !== '') {
+      return null
+    }
+    const source = (value: unknown) => (typeof value === 'string' ? value : '')
+    const before = record.edit_mode === 'insert' ? '' : source(record.old_source)
+    const after = record.edit_mode === 'delete' ? '' : source(record.new_source)
+
+    return [hunkBetween(before, after)]
+  }
+
+  const content = typeof record.content === 'string' ? record.content : null
+  if (tool === 'Write' && isNewFile) {
+    return content === null ? null : [allAdded(content)]
+  }
+
+  const patch = Array.isArray(record.structuredPatch) ? record.structuredPatch.filter(isHunk) : []
+  // An update's patch is empty when nothing changed, or, with originalFile
+  // null, when the old content was too large to diff: then its new content is
+  // all that can be counted.
+  if (patch.length === 0 && tool === 'Write' && record.originalFile === null && content !== null) {
+    return [allAdded(content)]
+  }
+
+  return patch
 }
 
 /** A Bash call's output and exit code, or null when it did not run to an exit. */

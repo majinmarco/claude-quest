@@ -2,7 +2,7 @@
 // the bundled 16-bit sprites (src/sprites.ts). The animation is SMIL, so the
 // surface plays it with no script and no redraw from the mod.
 
-import type { BattleEncounter, CheckKind, Encounter } from '../types'
+import type { BattleEncounter, CheckKind, CraftingEncounter, Encounter } from '../types'
 import { SPRITE_SIZE, SPRITES } from './sprites'
 import type { Sprite, SpriteName } from './sprites'
 
@@ -239,6 +239,77 @@ const battle = (encounter: BattleEncounter): string => {
   return `<g><g>${monster}${bob(0.7)}</g>${flash}</g>` + hpBar(encounter) + theHero
 }
 
+/** The items the blacksmith forges; which one a component makes is fixed by its name. */
+const ITEMS: readonly SpriteName[] = ['sword', 'shield', 'axe', 'dagger', 'staff']
+
+/** The item sprite for `item`: the same name always forges the same kind. */
+const itemSpriteOf = (item: string): SpriteName => {
+  let hash = 0
+  for (const char of item) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 997
+  }
+
+  return ITEMS[hash % ITEMS.length] ?? 'sword'
+}
+
+/** Where the forge stands, in pixels from the left. */
+const SMITH_X = 3 * SPRITE_SIZE - 2
+const ANVIL_X = 4 * SPRITE_SIZE
+const ITEM_X = 6 * SPRITE_SIZE
+
+/** The Crafting's beat, in seconds: three strikes, then the item shines. */
+const CRAFT_BEAT = 3
+const FORGED_AT = 0.6
+
+/** One animation over the Crafting's beat: `values` at `keyTimes`, held between. */
+const craftBeat = (attribute: string, values: string, keyTimes: string): string =>
+  `<animate attributeName="${attribute}" values="${values}" keyTimes="${keyTimes}" calcMode="discrete" dur="${CRAFT_BEAT}s" repeatCount="indefinite"/>`
+
+/** The hammer's strikes on the anvil, as shares of the cycle. */
+const STRIKES = [0, 0.2, 0.4]
+
+/**
+ * A Crafting: the blacksmith beside the anvil swings the hammer three times,
+ * sparks fly at each strike, and the item named after the component appears
+ * under sparkles.
+ */
+const crafting = (encounter: CraftingEncounter): string => {
+  const smith =
+    `<g>${drawSprite('blacksmith', SMITH_X, PATH_Y)}` +
+    `<animateTransform attributeName="transform" type="translate" values="0 0;0 -1" calcMode="discrete" dur="0.6s" repeatCount="indefinite"/></g>`
+  const anvil = drawSprite('anvil', ANVIL_X, PATH_Y)
+  // Raised, then down on the anvil at each strike.
+  const swing = STRIKES.flatMap(() => ['0 -6', '0 0']).join(';')
+  const swingTimes = STRIKES.flatMap(at => [at, at + 0.1]).join(';')
+  const hammer =
+    `<g transform="translate(${ANVIL_X - 6} ${PATH_Y - 10})">` +
+    `<g>${drawSprite('hammer')}<animateTransform attributeName="transform" type="translate" values="${swing};0 -6" keyTimes="${swingTimes};1" calcMode="discrete" dur="${CRAFT_BEAT}s" repeatCount="indefinite"/></g></g>`
+  const sparks = STRIKES.map(
+    (at, n) =>
+      `<g opacity="0">` +
+      [
+        [ANVIL_X + 3, PATH_Y - 1],
+        [ANVIL_X + 12, PATH_Y - 2],
+        [ANVIL_X + 8, PATH_Y - 4],
+      ]
+        .map(([x, y]) => `<rect x="${(x ?? 0) + n}" y="${y}" width="1" height="1" fill="${n % 2 === 0 ? '#feae34' : '#fee761'}"/>`)
+        .join('') +
+      craftBeat('opacity', '0;1;0', `0;${at + 0.1};${at + 0.18}`) +
+      '</g>',
+  ).join('')
+  const item =
+    `<g opacity="0">${drawSprite(itemSpriteOf(encounter.item), ITEM_X, PATH_Y)}` +
+    craftBeat('opacity', '0;1', `0;${FORGED_AT}`) +
+    '</g>'
+  const shine = SPARKLES.map(
+    ({ x: left, y: top, begin }) =>
+      `<rect x="${left}" y="${top}" width="1" height="1" fill="#fee761" opacity="0">` +
+      `<animate attributeName="opacity" values="0;0;1;0" keyTimes="0;${FORGED_AT};${FORGED_AT + 0.1};1" calcMode="discrete" dur="${CRAFT_BEAT}s" begin="${begin}s" repeatCount="indefinite"/></rect>`,
+  ).join('')
+
+  return anvil + smith + hammer + sparks + item + shine
+}
+
 /**
  * The Scene for the current Encounter, as an SVG document `width` CSS pixels
  * wide. No Encounter yet: the hero waits at the corridor's start.
@@ -250,7 +321,9 @@ export const sceneSvg = (encounter: Encounter | null, width: number): string => 
       ? hero(SPRITE_SIZE, SPRITE_SIZE)
       : encounter.kind === 'Battle'
         ? battle(encounter)
-        : encounter.isFirstVisit
+        : encounter.kind === 'Crafting'
+          ? crafting(encounter)
+          : encounter.isFirstVisit
           ? discovery(REACHES_CHEST) + hero(0, BESIDE_CHEST, REACHES_CHEST)
           : hero(0, WIDTH - SPRITE_SIZE)
 

@@ -33,6 +33,23 @@ export type Encounter =
       isFirstVisit: boolean
     }
   | BattleEncounter
+  | CraftingEncounter
+
+/**
+ * A Crafting: a new file, or a major edit of one, forged by the blacksmith
+ * into an item named after it. `target` is the file, `module` its Module as
+ * for an Exploration; the lines count its diff, context left out.
+ */
+export type CraftingEncounter = {
+  kind: 'Crafting'
+  target: string
+  module: string | null
+  /** The item forged: the component the file is, in words (`Order Ledger`). */
+  item: string
+  isNewFile: boolean
+  linesAdded: number
+  linesRemoved: number
+}
 
 /**
  * A Battle against a failing check, as one run of it played: the monster's HP

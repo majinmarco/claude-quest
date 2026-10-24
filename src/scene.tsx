@@ -4,8 +4,8 @@
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
-import { BATTLE_XP_PER_HP, DISCOVERY_XP } from './engine'
-import type { BattleEncounter, CheckKind, Encounter } from './engine'
+import { BATTLE_XP_PER_HP, CRAFTING_XP, DISCOVERY_XP } from './engine'
+import type { BattleEncounter, CheckKind, CraftingEncounter, Encounter } from './engine'
 import { MONSTERS, sceneSvg } from './scene-art'
 
 /** How wide the scene is drawn, in CSS pixels: its 128 pixels at 3x. */
@@ -60,6 +60,19 @@ export const describeBattle = (battle: BattleEncounter): string => {
   }
 }
 
+/**
+ * A Crafting in one line: a new file is forged, a major edit reforges the
+ * item; then the file, its Module and the lines it changed.
+ */
+export const describeCrafting = (crafting: CraftingEncounter): string => {
+  const file = `${nameOf(crafting.target)} ${whereIn(crafting.module)}`
+  const made = crafting.isNewFile
+    ? `forges the ${crafting.item}: new file ${file}, ${plural(crafting.linesAdded, 'line')}`
+    : `reforges the ${crafting.item}: ${file}, +${crafting.linesAdded} -${crafting.linesRemoved} lines`
+
+  return `The blacksmith ${made} · +${CRAFTING_XP} XP`
+}
+
 /** The Encounter in one line, as the terminal shows it and the art's alt says. */
 export const describeScene = (encounter: Encounter | null): string => {
   if (encounter === null) {
@@ -68,6 +81,10 @@ export const describeScene = (encounter: Encounter | null): string => {
 
   if (encounter.kind === 'Battle') {
     return describeBattle(encounter)
+  }
+
+  if (encounter.kind === 'Crafting') {
+    return describeCrafting(encounter)
   }
 
   const where = `Exploring ${nameOf(encounter.target)} ${whereIn(encounter.module)}`

@@ -56,6 +56,14 @@ _Avoid_: Event (that's the raw session activity), scene
 The Encounter a failing Check plays: a monster (a bug for tests, a slime for lint, a ghost for type errors) whose HP is the failures the Check counts, or one HP when its output counts none readable. The next run of the same Check failing fewer lands a hit per failure gone; the Check passing wins, for Strength XP.
 _Avoid_: Fight, test encounter
 
+**Crafting**:
+The Encounter a new file or a major edit plays: the blacksmith forges an item named after the component, the file's name without its extension in words (`order-ledger.ts` forges the Order Ledger; an `index` file is named after its folder). A code-changing Encounter, as a Battle won is.
+_Avoid_: Forging, file encounter
+
+**Major edit**:
+An edit (an Edit, a Write over an existing file, a NotebookEdit) changing at least 10 lines of its diff, a line replaced counted once: the larger of the lines added and the lines removed. A near-complete rewrite is one too, however small the file: lines added, and at least 80% of the file's lines removed. A smaller edit plays no Encounter.
+_Avoid_: Big change, large diff
+
 **Check**:
 A test run, lint or type-check, read from a Bash command by its runner (vitest, jest, pytest, bun test, tsc, eslint, biome, ruff, or a package's test, lint or typecheck script) and kept as the command to rerun it, launchers and environment left out (`vitest run`, `npm test`). A Battle is against one Check.
 _Avoid_: Test suite, job (outside the event translator)
