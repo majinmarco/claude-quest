@@ -84,6 +84,10 @@ _Avoid_: Ticket (outside a Quest Source), task, mission
 Where Quests come from: a Jira project or a repo's GitHub Issues, as the Region file's `questSource` names it (GitHub Issues when it names none and the project is a git repo with a remote). When it cannot be read, its problem is one kind, each with its own hint on the Quest Board: `missing` (gh not installed or on the PATH, the Atlassian connection not connected), `unauthenticated` (not signed in), `misconfigured` (the Region file not JSON, `questSource` wrong, Jira refusing the query or reaching no site), `none` (no `questSource` and no GitHub repo), `forbidden` (the account may not see the Jira project) or `unreachable` (anything else, gh unable to run on this surface among them).
 _Avoid_: Tracker, backlog, provider
 
+**Quest Log**:
+The pane (`/quest`, `/quest <ticket>`) showing all the game knows of one Quest: its Scroll unrolled at full width, its ticket's whole description, the Quest Giver's briefing, and, for the Quest under way, its progress (Encounters, Questions, the Boss, XP earned by XP pool against each cap). It never opens itself.
+_Avoid_: Ticket view, details pane
+
 **Quest Board**:
 The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, each a Scroll, six to a page, under a red ribbon and a header of the Player's trophies and Badges. Take Quest on a card fills the prompt with the session's implement command in one click, never over a draft the Player is writing; Unroll beside it opens the Scroll. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
 _Avoid_: Ticket list, backlog view
@@ -153,6 +157,18 @@ _Avoid_: Character, bot
 **Question**:
 A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle), with the Quest's ticket title and summary as context. A Question is shown before it is answered: the Sage's pane drawing it, or `/sage`, starts its time, and `/sage A` on a Question never shown shows it instead of answering. A right answer earns XP to its Stat tag, Wisdom for `wisdom` and Intelligence otherwise (a quarter of it when hasty, half when Exhausted, from the sage XP pool), a wrong one costs HP; both show the explanation. A Question about a change already answered, or waiting, that session is not asked again.
 _Avoid_: Quiz, prompt
+
+**Briefing**:
+The Quest Giver's two lines on a Quest just started, with one Question about the ticket itself (what done means, what is out of scope, where the change belongs), asked once per ticket and paid as a Sage Question. A ticket its Quest Source did not find has none.
+_Avoid_: Intro, summary
+
+**Scouting**:
+The Cartographer's Question after every third Module discovered in a Quest, about how the Modules just read fit together (what imports what, where a name is defined, where a change belongs), answerable from the files read; paid as a Sage Question to Wisdom. A Module whose Scouting was answered right is **charted**.
+_Avoid_: Architecture quiz, exploration question
+
+**Prophecy**:
+The Player's call, made after Claude edits a test file and before the next Check runs, of how that Check will end: Red (one failure), Green (passing) or Rout (two or more). A right call pays Dexterity XP from the prophecy XP pool; a wrong one costs nothing. Five right in a row earn the Oracle Badge; Dexterity as the highest Stat makes the Player a Duelist.
+_Avoid_: Bet, prediction, wager
 
 **Content Generator**:
 What asks Haiku for a Question about a change and checks the reply against the contract; a reply that breaks it is skipped, never queued.
