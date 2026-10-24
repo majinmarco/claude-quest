@@ -5,7 +5,7 @@
 // terminal has the same box in text, Buttons included, and `/boss A`-`D` and
 // `/boss skip` answer there too.
 
-import type { EngineInterface, RenderInput } from 'claude-code'
+import type { EngineInterface, RenderChildren, RenderElement, RenderInput } from 'claude-code'
 
 import type { BossFight, QuestionAnswer } from '../types'
 import { isUnderWay } from './engine'
@@ -159,12 +159,23 @@ export function drawBoss(
   fight: BossFight | null,
   actions: BossActions,
   exhausted = false,
+  /** The Quest's one-line header (src/quest-log.tsx drawQuestHeader), above the box; none when null. */
+  header: RenderChildren = null,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text, Button, Code } = elements
+  const headed = (box: RenderElement) =>
+    header === null ? (
+      box
+    ) : (
+      <Box flexDirection="column" gap={1}>
+        {header}
+        {box}
+      </Box>
+    )
 
   if (fight === null) {
-    return <Text dimColor>{NO_BOSS}</Text>
+    return headed(<Text dimColor>{NO_BOSS}</Text>)
   }
 
   const first = fight.questions[0]
@@ -223,18 +234,18 @@ export function drawBoss(
 
   // The terminal's table lists Svg too, as a fragment: it draws no SVG.
   if (e.surface === 'terminal' || !('Svg' in elements)) {
-    return body
+    return headed(body)
   }
 
   const { Svg } = elements
 
-  return (
+  return headed(
     <Box flexDirection="row" gap={2}>
       <Svg
         source={portraitSvg('boss', PORTRAIT_WIDTH, { defeated: fight.status === 'won' })}
         alt={isUnderWay(fight) ? `The boss of Quest ${fight.ticket}` : bossHeaderOf(fight)}
       />
       {body}
-    </Box>
+    </Box>,
   )
 }

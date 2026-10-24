@@ -14,6 +14,7 @@ import {
   sizeFromLabels,
   statsOf,
   triageTagsOf,
+  wholePlainTextOf,
 } from './quest-source'
 import type { QuestCard, QuestSource, QuestSourceProblem, Sourced, TicketDetails } from './quest-source'
 import type { JiraSettings } from '../types'
@@ -42,8 +43,10 @@ type JiraIssue = {
   fields?: {
     summary?: string
     labels?: string[]
-    issuetype?: { name?: string }
+    issuetype?: { name?: string; subtask?: boolean }
     status?: { name?: string }
+    /** The issue's parent: its epic, or for a subtask its story. */
+    parent?: { key?: unknown; fields?: { summary?: unknown } }
     /** Markdown or HTML (the server's default), or Atlassian Document Format. */
     description?: unknown
     /** Custom fields by their label on the site: the server's mapping. */
@@ -80,6 +83,7 @@ const asQuest = (issue: JiraIssue, field: string | undefined): QuestCard => {
   const labels = issue.fields?.labels ?? []
   const type = issue.fields?.issuetype?.name
   const tags = triageTagsOf(labels)
+  const dungeon = dungeonOf(issue)
 
   return {
     ticket: issue.key,
@@ -89,13 +93,37 @@ const asQuest = (issue: JiraIssue, field: string | undefined): QuestCard => {
     recommendedStats: statsOf(type === undefined ? labels : [type, ...labels]),
     ...(issue.webUrl === undefined ? {} : { url: issue.webUrl }),
     ...(tags.length === 0 ? {} : { tags }),
+    ...(dungeon === undefined ? {} : { dungeon }),
   }
 }
 
+/**
+ * The issue's Dungeon: its parent, keyed by the parent's issue key and named
+ * by its summary (the key when it has none). A subtask's parent is a story,
+ * not an epic, so a subtask is in the Wilds. Classic "Epic Link" custom
+ * fields are not read.
+ */
+const dungeonOf = (issue: JiraIssue): QuestCard['dungeon'] => {
+  const parent = issue.fields?.parent
+  if (typeof parent?.key !== 'string' || issue.fields?.issuetype?.subtask === true) {
+    return undefined
+  }
+  const summary = parent.fields?.summary
+
+  return { key: parent.key, name: typeof summary === 'string' && summary.trim() !== '' ? summary : parent.key }
+}
+
+// The description as plain text, whole (ADF flattened, HTML's tags taken
+// out): the Quest Log's; the summary, Haiku's, is its start.
 const asDetails = (issue: JiraIssue, field: string | undefined): TicketDetails => {
   const summary = plainTextOf(issue.fields?.description)
+  const description = wholePlainTextOf(issue.fields?.description)
 
-  return { ...asQuest(issue, field), ...(summary === undefined ? {} : { summary }) }
+  return {
+    ...asQuest(issue, field),
+    ...(summary === undefined ? {} : { summary }),
+    ...(description === undefined ? {} : { description, descriptionFormat: 'text' as const }),
+  }
 }
 
 /** What a call answered: its JSON, or why it failed and Jira's status code. */
@@ -248,6 +276,7 @@ const fieldsFor = (settings: JiraSettings): string[] => [
   'status',
   'labels',
   'issuetype',
+  'parent',
   ...(settings.storyPointsField === undefined ? [] : [settings.storyPointsField]),
 ]
 
@@ -288,34 +317,42 @@ export const jiraIssues = (call: CallTool, settings: JiraSettings): QuestSource 
     return { ok: true, value: found }
   }
 
-  return {
-    list: async () => {
-      const site = await jiraSite()
-      if (!site.ok) {
-        return site
+  /** The issues a query finds, every page up to the cap, as cards. */
+  const search = async (query: string): Promise<Sourced<QuestCard[]>> => {
+    const site = await jiraSite()
+    if (!site.ok) {
+      return site
+    }
+
+    const quests: QuestCard[] = []
+    let next: string | undefined
+    do {
+      const answered = await callJira(call, server, settings.project, 'searchJiraIssuesUsingJql', {
+        cloudId: site.value,
+        jql: query,
+        fields,
+        maxResults: PAGE,
+        ...(next === undefined ? {} : { nextPageToken: next }),
+      })
+      if (!answered.ok) {
+        return { ok: false, problem: answered.problem }
       }
 
-      const quests: QuestCard[] = []
-      let next: string | undefined
-      do {
-        const answered = await callJira(call, server, settings.project, 'searchJiraIssuesUsingJql', {
-          cloudId: site.value,
-          jql,
-          fields,
-          maxResults: PAGE,
-          ...(next === undefined ? {} : { nextPageToken: next }),
-        })
-        if (!answered.ok) {
-          return { ok: false, problem: answered.problem }
-        }
+      const page = pageOf(answered.value)
+      quests.push(...page.issues.filter(isIssue).map(issue => asQuest(issue, pointsField)))
+      next = page.next
+    } while (next !== undefined && quests.length < LIMIT)
 
-        const page = pageOf(answered.value)
-        quests.push(...page.issues.filter(isIssue).map(issue => asQuest(issue, pointsField)))
-        next = page.next
-      } while (next !== undefined && quests.length < LIMIT)
+    return { ok: true, value: quests.slice(0, LIMIT) }
+  }
 
-      return { ok: true, value: quests.slice(0, LIMIT) }
-    },
+  return {
+    list: () => search(jql),
+
+    // The project's done issues, whatever the open listing's JQL: a sprint
+    // filter would hide the Dungeons' cleared Rooms.
+    listClosed: () =>
+      search(`project = "${settings.project}" AND statusCategory = Done ORDER BY updated DESC`),
 
     get: async ticket => {
       const ref = JIRA_REF.exec(ticket.trim())

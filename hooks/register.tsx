@@ -1,8 +1,10 @@
-import { atom, read, update } from 'claude-code'
+import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
+import { translateBashReads } from '../src/bash-reads'
 import { bossAnswerText, bossOutcomeText, bossQuestionText, bossStartText, drawBoss, NO_BOSS } from '../src/boss'
 import type { BossActions } from '../src/boss'
+import { briefingKeyOf, briefingLine, generateBriefing } from '../src/briefing'
 import {
   changesOfGitShow,
   generateQuestion,
@@ -11,35 +13,73 @@ import {
   REVIEW_QUESTION_COUNT,
 } from '../src/content-generator'
 import type { Model, ModelFailure, QuestionInput, TicketContext } from '../src/content-generator'
-import { isExhausted, isUnderWay, newGame, step, summonedChanges } from '../src/engine'
-import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
+import { changesSince, noteChanged, takeSnapshot } from '../src/diff-crafting'
+import type { Git, ReadFile, Snapshot } from '../src/diff-crafting'
+import { callName, isExhausted, isUnderWay, newGame, PROPHECY_CALLS, questProgressOf, step, summonedChanges } from '../src/engine'
+import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, Npc, ProphecyCall, QuestionContent, Rules } from '../src/engine'
 import { badgesText, drawHud } from '../src/hud'
+import type { HudActions } from '../src/hud'
 import {
+  loadCharted,
   loadDiscovered,
   loadPlayer,
   loadPlayerMigrated,
   migratePlayer,
   pruneStaleQuests,
   readRegionFile,
+  recordModulesCharted,
   recordModulesDiscovered,
+  recordsOf,
   recordQuestAbandoned,
   recordQuestClosed,
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
-import { drawQuestBoard, implementCommandOf, isImplementDraft, noFilters, PREFERRED_IMPLEMENT } from '../src/quest-board'
+import { drawOverview, emptyOverview, OVERVIEW } from '../src/overview'
+import type { OverviewActions, OverviewState } from '../src/overview'
+import { backText, comeBack, emptyParty, setOut, stillOut, tally } from '../src/party'
+import type { Party } from '../src/party'
+import { drawQuestBoard, noFilters } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
+import {
+  drawEmptyQuestLog,
+  drawQuestHeader,
+  drawQuestLog,
+  NO_ACTIVE_QUEST,
+  NOT_A_TICKET,
+  QUEST_LOG,
+  questArgOf,
+  scrollExcerptOf,
+} from '../src/quest-log'
+import type { QuestHeader, QuestLogActions } from '../src/quest-log'
 import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
-import { resolveQuestSource } from '../src/quest-source-setting'
-import type { ResolvedQuestSource } from '../src/quest-source-setting'
-import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
+import { regionQuestSource } from '../src/quest-source-setting'
+import { openRegionMap, redrawRegionMap, REGION_MAP, renderRegionMap } from '../src/region-map'
+import { clearedOf, readRegions, recordRegionQuestClosed, themeOf, touchRegion } from '../src/region-registry'
+import type { RegionEntry } from '../src/region-registry'
+import { answerText, choiceOf, drawSage, NO_QUESTION, NPC_NAMES, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
-import { autoOpenSceneOf, rulesOf } from '../src/settings'
-import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import {
+  cartographerText,
+  chartedModulesOf,
+  generateScouting,
+  MAX_SCOUTING_FILES,
+  outlinedFilesOf,
+  outlinesOf,
+  relativeTo,
+  scoutingKeyOf,
+} from '../src/scouting'
+import type { ScoutingInput } from '../src/scouting'
+import { takeQuest } from '../src/take-quest'
+import { themeRegion } from '../src/theming'
+import type { ThemingDeps } from '../src/theming'
+import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
+import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
-import type { QuestBoard, QuestCard, QuestSourceSetting, XpPool } from '../types'
+import type { QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketDetails, TicketFetch, XpPool } from '../types'
+import type { Sourced } from '../src/quest-source'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
@@ -66,8 +106,29 @@ const questionCache = atom(
   [] as QuestionCache,
 )
 
+/** The Quest Log pane: the ticket it shows, and that ticket's Region file history read as it opened. */
+const questLog = atom({ plugin: 'quest-mod', key: 'questLog' } as const, { ticket: null, history: [] } satisfies QuestLog)
+
+/**
+ * A ticket's details as fetched this session (TicketFetch), by its ticket:
+ * fetched once per ticket per session by the Quest Log, the Quest Board's
+ * Unroll or the ticket lookup, whichever comes first, and read by the others.
+ */
+const ticketDetails = { plugin: 'quest-mod', key: 'ticketDetails' } as const
+
+/** The Quest Giver's briefing of a ticket (`{ text }`), which the Briefing (#19) writes and the Quest Log shows. */
+const briefing = { plugin: 'quest-mod', key: 'briefing' } as const
+
 /** Whether the Scene has opened itself this session: it does so once at most. */
 const sceneOpened = atom({ plugin: 'quest-mod', key: 'sceneOpened' } as const, false)
+
+/**
+ * The Overview: the registry of Regions as last read (at session start, a
+ * Quest's close and /overview), the session's root, the page of Islands.
+ */
+const overview = atom({ plugin: 'quest-mod', key: 'overview' } as const, emptyOverview() satisfies OverviewState)
+/** The party: the companions (subagents) out during a Quest, and the Scene's beat of one setting out. */
+const party = atom({ plugin: 'quest-mod', key: 'party' } as const, emptyParty() as Party)
 
 const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 
@@ -278,18 +339,219 @@ async function makeSageQuestion($: EngineInterface, changes: FileChange[], key: 
 }
 
 /**
- * Queues a Question the Sage made about the change cached under `key`; the
- * Game Engine queues none for a change already answered this session, or
- * whose Question is waiting.
+ * Queues a Question `npc` (the Sage unless told) made about what is cached
+ * under `key`; the Game Engine queues none for a change already answered
+ * this session, or whose Question is waiting. Whether it was queued.
  */
 async function queueQuestion(
   $: EngineInterface,
   question: QuestionContent,
   key: string,
   rules: Rules,
-): Promise<void> {
-  await play($, { type: 'QUESTION_READY', question, key, at: await $.clock.now() }, rules)
+  npc: Npc = 'sage',
+  modules?: string[],
+): Promise<boolean> {
+  const effects = await play(
+    $,
+    {
+      type: 'QUESTION_READY',
+      question,
+      key,
+      at: await $.clock.now(),
+      ...(npc === 'sage' ? {} : { npc }),
+      ...(modules === undefined ? {} : { modules }),
+    },
+    rules,
+  )
   await showIfInView($, rules)
+
+  return effects.some(effect => effect.type === 'QUESTION_QUEUED')
+}
+
+/**
+ * The Briefings being made, by their cache key: a ticket looked up twice
+ * meanwhile waits on the one call. The module's own, as sageInFlight is.
+ */
+const briefingInFlight = new Map<string, Promise<void>>()
+
+/**
+ * The Quest Giver's Briefing of the Quest just started: from the cache when
+ * the ticket was briefed before with the same summary, at no cost; else,
+ * while the Sage's budget for the ticket lasts, Haiku writes it and its
+ * contract is checked. Its text is kept as `briefing:<ticket>` for the Quest
+ * Log and the Scene; its Question joins the Question Queue as the Quest
+ * Giver's, told in a toast. Started unawaited after the lookup; a Briefing
+ * that could not be made, or was over budget, is skipped, logged to the debug
+ * log alone. A Quest replaced meanwhile is briefed no more.
+ */
+async function askBriefing(
+  $: EngineInterface,
+  wanted: Extract<Effect, { type: 'BRIEFING_WANTED' }>,
+  rules: Rules,
+): Promise<void> {
+  const key = await briefingKeyOf(wanted.ticket, wanted.summary)
+  const making = briefingInFlight.get(key)
+  if (making !== undefined) {
+    return making
+  }
+
+  const made = makeBriefing($, wanted, key, rules).finally(() => briefingInFlight.delete(key))
+  briefingInFlight.set(key, made)
+
+  return made
+}
+
+async function makeBriefing(
+  $: EngineInterface,
+  { ticket, title, summary }: Extract<Effect, { type: 'BRIEFING_WANTED' }>,
+  key: string,
+  rules: Rules,
+): Promise<void> {
+  // Outside its Quest (closed, or replaced meanwhile) nothing is asked.
+  const isActive = async () => (await read($, game))?.quest?.ticket === ticket
+  if (!(await isActive())) {
+    return
+  }
+
+  const cached = cachedQuestion(await read($, questionCache), key)
+  if (cached !== undefined) {
+    const kept = await read($, { plugin: 'quest-mod', key: 'briefing', id: ticket })
+    if ((await queueQuestion($, cached, key, rules, 'quest-giver')) && kept !== undefined) {
+      $.ui.toast(briefingLine(kept.text))
+    }
+    return
+  }
+
+  const granted = await spendHaikuCall($, 'sage', rules, key)
+  if (granted === null) {
+    return
+  }
+  // Counted on another ticket (the Quest replaced as it was asked): given back.
+  if (granted.ticket !== ticket) {
+    await stepGame($, { type: 'HAIKU_CALL_REFUNDED', purpose: 'sage', ticket: granted.ticket }, rules)
+    return
+  }
+
+  // The ticket's Dungeon, from its card as fetched this session (else as the board listed it).
+  const fetched = await read($, memberOf(ticketDetails, { requestId: ticket }))
+  const dungeon = (fetched?.state === 'got' ? fetched.details?.dungeon : undefined) ?? (await listedCard($, ticket))?.dungeon
+  const generated = await generateBriefing(
+    { ref: ticket, summary, ...(title === undefined ? {} : { title }), ...(dungeon === undefined ? {} : { dungeon: dungeon.name }) },
+    haikuModel($),
+  )
+  if (!generated.ok) {
+    $.ui.log(`The Quest Giver skipped the Briefing (${generated.reason}): ${generated.detail}`, { to: 'debug' })
+    await noteModelFailure($, 'sage', granted, generated.failure, rules)
+    return
+  }
+
+  // Kept whatever happened meanwhile: the call is spent, and the ticket's
+  // next start reuses it. Asked only while its Quest is still the active one.
+  await update($, questionCache, cache => remember(cache, key, generated.question))
+  await update($, { plugin: 'quest-mod', key: 'briefing', id: ticket }, () => ({ text: generated.briefing }))
+  if ((await isActive()) && (await queueQuestion($, generated.question, key, rules, 'quest-giver'))) {
+    $.ui.toast(briefingLine(generated.briefing))
+  }
+}
+
+/** The biggest file whose outline a Scouting reads: anything larger is no source file. */
+const MAX_OUTLINED_BYTES = 512 * 1024
+
+/**
+ * What the Cartographer is shown of a Scouting the Game Engine wants: of the
+ * paths read, the files (a searched folder is none), the latest
+ * MAX_SCOUTING_FILES, relative to the project's root; and the outlines of a
+ * few of them, read with `$.fs.read`. A file that cannot be read is left out.
+ */
+async function scoutingInputOf(
+  $: EngineInterface,
+  { modules, files }: Extract<Effect, { type: 'SCOUTING_WANTED' }>,
+): Promise<ScoutingInput> {
+  const root = await $.session.root().catch(() => null)
+  const found: { path: string; size: number }[] = []
+  for (const path of files) {
+    const stat = await $.fs.stat(path).catch(() => null)
+    if (stat?.kind === 'file') {
+      found.push({ path, size: stat.size })
+    }
+  }
+  const kept = found.slice(-MAX_SCOUTING_FILES)
+  const shown = new Map(kept.map(file => [relativeTo(root, file.path), file]))
+
+  const read: { path: string; text: string }[] = []
+  for (const path of outlinedFilesOf([...shown.keys()])) {
+    const file = shown.get(path)
+    if (file !== undefined && file.size <= MAX_OUTLINED_BYTES) {
+      const text = await $.fs.read(file.path).catch(() => null)
+      if (typeof text === 'string') {
+        read.push({ path, text })
+      }
+    }
+  }
+
+  return { modules, files: [...shown.keys()], outlines: outlinesOf(read) }
+}
+
+/**
+ * The Scoutings being made, by their cache key: the same Modules read the
+ * same way meanwhile wait on the one call. The module's own, as sageInFlight is.
+ */
+const scoutingInFlight = new Map<string, Promise<void>>()
+
+/**
+ * The Cartographer's Scouting of the Modules just discovered: from the cache
+ * when the same Modules were outlined the same way before, at no cost; else,
+ * while the Sage's budget lasts (the ticket's in a Quest, the session's
+ * outside), Haiku makes it and its contract is checked. It joins the
+ * Question Queue as the Cartographer's, told in a toast, with the Modules a
+ * right answer charts. Started unawaited after the read that discovered the
+ * third Module; one that could not be made, or was over budget, is skipped,
+ * logged to the debug log alone. No file read in them asks nothing.
+ */
+async function askScouting(
+  $: EngineInterface,
+  wanted: Extract<Effect, { type: 'SCOUTING_WANTED' }>,
+  rules: Rules,
+): Promise<void> {
+  const input = await scoutingInputOf($, wanted)
+  if (input.files.length === 0) {
+    $.ui.log('The Cartographer skipped a Scouting: no file read in the Modules.', { to: 'debug' })
+    return
+  }
+
+  const key = await scoutingKeyOf(input)
+  const making = scoutingInFlight.get(key)
+  if (making !== undefined) {
+    return making
+  }
+
+  const made = makeScouting($, input, key, rules).finally(() => scoutingInFlight.delete(key))
+  scoutingInFlight.set(key, made)
+
+  return made
+}
+
+async function makeScouting($: EngineInterface, input: ScoutingInput, key: string, rules: Rules): Promise<void> {
+  const cached = cachedQuestion(await read($, questionCache), key)
+  if (cached !== undefined) {
+    await queueQuestion($, cached, key, rules, 'cartographer', input.modules)
+    return
+  }
+
+  const granted = await spendHaikuCall($, 'sage', rules, key)
+  if (granted === null) {
+    return
+  }
+
+  const generated = await generateScouting(input, haikuModel($))
+  if (!generated.ok) {
+    $.ui.log(`The Cartographer skipped a Scouting (${generated.reason}): ${generated.detail}`, { to: 'debug' })
+    await noteModelFailure($, 'sage', granted, generated.failure, rules)
+    return
+  }
+
+  await update($, questionCache, cache => remember(cache, key, generated.question))
+  await queueQuestion($, generated.question, key, rules, 'cartographer', input.modules)
 }
 
 /**
@@ -416,6 +678,40 @@ const bossActions = ($: EngineInterface, rules: Rules): BossActions => ({
   },
 })
 
+/** What the Overview's buttons do: an Island opens its Region's map, live for the session's own. */
+const overviewActions = ($: EngineInterface): OverviewActions => ({
+  open: island => {
+    void openRegionMap($, island.isHere ? { kind: 'live' } : { kind: 'snapshot', entry: island.entry }).catch(() => undefined)
+  },
+  page: page => {
+    void update($, overview, (current): OverviewState => ({ ...current, page }))
+  },
+})
+
+/**
+ * Puts the registry in the Overview's state, with the session's root: as
+ * given, or read from the store.
+ */
+async function showRegions($: EngineInterface, regions?: Record<string, RegionEntry>): Promise<void> {
+  const root = await $.session.root().catch(() => null)
+  const kept = regions ?? (await readRegions($).catch(() => ({})))
+  await update($, overview, (current): OverviewState => ({ ...current, regions: kept, root }))
+}
+
+/**
+ * What Haiku theming needs of the session (src/theming.ts): Haiku, whether
+ * it was found unavailable this session, and the panes to draw again once a
+ * theme is kept, the Overview and the Region map.
+ */
+const themingOf = ($: EngineInterface): ThemingDeps => ({
+  model: haikuModel($),
+  isHaikuUnavailable: async () => (await read($, game))?.haikuUnavailable === true,
+  onThemed: async regions => {
+    await showRegions($, regions)
+    await redrawRegionMap($)
+  },
+})
+
 /**
  * Opens the Scene, unasked, when one of `surfaces` draws its art, at most once
  * per session, and only with the `autoOpenScene` setting on. In the terminal
@@ -458,23 +754,6 @@ const withTicketCalls = (state: GameState): GameState => {
   }
 }
 
-/**
- * The Quest Source the Region chose in its Region file; when it chose none,
- * the repo's GitHub Issues, or none when the project is no git repo with a
- * remote. A file that is not JSON may hold a choice gone wrong, so the board
- * says so rather than guess. `$.process` runs only where Claude Code runs
- * commands (the CLI): elsewhere its rejection is told as such by the gh
- * adapter, never as gh missing.
- */
-async function regionQuestSource($: EngineInterface): Promise<ResolvedQuestSource> {
-  const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
-
-  return resolveQuestSource(region, () => $.session.repo(), {
-    run: argv => $.process.run(argv),
-    call: (server, tool, args) => $.mcp.call(server, tool, args),
-  })
-}
-
 /** The Quest Source as the Player knows it, for a toast: `GitHub Issues`, `Jira project CPI`. */
 const sourceName = (setting: QuestSourceSetting | undefined): string =>
   setting?.kind === 'jira' ? `Jira project ${setting.project}` : 'GitHub Issues'
@@ -496,45 +775,10 @@ async function listQuests($: EngineInterface): Promise<void> {
   }))
 }
 
-/**
- * Puts the implement command for `quest` in the prompt box, for the Player
- * to send: whichever implement command the session has (mattpocock-skills'
- * first). A draft the Player is writing is never written over: only an empty
- * one, or one that is itself an implement command, is replaced.
- */
-async function pickQuest($: EngineInterface, quest: QuestCard): Promise<void> {
-  // Commands that cannot be listed: the usual one is tried.
-  const names = await $.command.list().then(
-    commands => commands.map(command => command.name),
-    () => [PREFERRED_IMPLEMENT],
-  )
-  const implement = implementCommandOf(names)
-  if (implement === undefined) {
-    $.ui.toast(
-      `No implement command in this session: install one, such as ${PREFERRED_IMPLEMENT}, to start Quests from the board.`,
-    )
-    return
-  }
-
-  const command = `/${implement} ${quest.ticket}`
-  const draft = await $.prompt.read().then(box => box.text, () => '')
-  if (draft.trim() !== '' && !isImplementDraft(draft)) {
-    $.ui.toast(`Draft kept: clear it and pick again, or run ${command}`)
-    return
-  }
-
-  // Filled, never sent: the Player sends it, and command.run starts the
-  // Quest as for one they typed.
-  const unfilled = () => $.ui.toast(`Could not fill the prompt: run ${command} yourself.`)
-  await $.prompt
-    .fill({ text: command })
-    .then(filled => (filled.isFilled ? undefined : unfilled()), unfilled)
-}
-
 /** What the Quest Board's buttons do. */
 const boardActions = ($: EngineInterface): QuestBoardActions => ({
   pick: quest => {
-    void pickQuest($, quest).catch(() => undefined)
+    void takeQuest($, quest).catch(() => undefined)
   },
   // A filter changed shows its first page.
   filterStatus: status => {
@@ -550,11 +794,87 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
   refresh: () => {
     void listQuests($)
   },
+  // Unrolled, the card shows the start of its description: fetched now, once.
   select: ticket => {
     void update($, board, current => ({ ...current, selected: ticket }))
+    if (ticket !== null) {
+      void fetchTicket($, ticket).catch(() => undefined)
+    }
   },
   page: page => {
     void update($, board, current => ({ ...current, page }))
+  },
+  readMore: ticket => {
+    void openQuestLog($, ticket).catch(() => undefined)
+  },
+})
+
+/**
+ * Fetches `ticket`'s details from the Region's Quest Source into `$.state`,
+ * once per ticket per session: nothing when they are fetched, or being
+ * fetched, already; again when the source could not be reached, or when
+ * `isForced` (the log's Refresh).
+ */
+async function fetchTicket($: EngineInterface, ticket: string, isForced = false): Promise<void> {
+  let isMine = false
+  await update($, memberOf(ticketDetails, { requestId: ticket }), (current): TicketFetch => {
+    isMine = isForced || current === undefined || current.state === 'unavailable'
+
+    return isMine ? { state: 'loading' } : (current ?? { state: 'loading' })
+  })
+  if (!isMine) {
+    return
+  }
+
+  // Any failure, the Quest Source not even resolved included, is told as
+  // unreachable: the ticket never stays `loading` for the session.
+  const got = await regionQuestSource($)
+    .then(({ source }) => source.get(ticket))
+    .catch((error: unknown): Sourced<TicketDetails | null> => ({
+      ok: false,
+      problem: { kind: 'unreachable', message: String(error) },
+    }))
+  await keepTicket($, ticket, got)
+}
+
+/** Keeps what fetching `ticket` found (its details, or why it could not be reached), for the Quest Log and the Quest Board's Scroll. */
+async function keepTicket($: EngineInterface, ticket: string, got: Sourced<TicketDetails | null>): Promise<void> {
+  const fetched: TicketFetch = got.ok ? { state: 'got', details: got.value } : { state: 'unavailable', problem: got.problem }
+  await update($, memberOf(ticketDetails, { requestId: ticket }), (): TicketFetch => fetched)
+}
+
+/**
+ * Opens the Quest Log on `ticket`: its Region file history read now, its
+ * details fetched (once per session). Only the Player opens it: /quest, the
+ * Quest Board's Read more, the Quest Log Buttons of the Sage and Boss panes.
+ */
+async function openQuestLog($: EngineInterface, ticket: string): Promise<{ isPlaced: boolean }> {
+  const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
+  const history = region.ok ? recordsOf(region.value, ticket) : []
+  await update($, questLog, (): QuestLog => ({ ticket, history }))
+  const opened = await $.ui.open(QUEST_LOG)
+  void fetchTicket($, ticket).catch(() => undefined)
+
+  return opened
+}
+
+/** What the Quest Log's buttons do. */
+const questLogActions = ($: EngineInterface, ticket: string): QuestLogActions => ({
+  // The Quest Board's own Take Quest: the same implement command, the same draft guard.
+  take: quest => {
+    void takeQuest($, quest).catch(() => undefined)
+  },
+  refresh: () => {
+    void fetchTicket($, ticket, true).catch(() => undefined)
+  },
+})
+
+/** The Quest header the Sage's and Boss's panes draw for `ticket`, its Quest Log a press away. */
+const questHeaderOf = ($: EngineInterface, ticket: string, title: string | undefined): QuestHeader => ({
+  ticket,
+  ...(title === undefined ? {} : { title }),
+  openLog: () => {
+    void openQuestLog($, ticket).catch(() => undefined)
   },
 })
 
@@ -569,7 +889,13 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
  */
 async function lookUpTicket($: EngineInterface, ticket: string, listed: boolean, rules: Rules): Promise<void> {
   const { source, setting } = await regionQuestSource($)
-  const got = await source.get(ticket)
+  // The Quest Log (or an unrolled Scroll) may have fetched the ticket this
+  // session already: its details are taken rather than asked again. The
+  // lookup's own answer is kept for them in turn, description and all.
+  const kept = await read($, memberOf(ticketDetails, { requestId: ticket }))
+  const got: Awaited<ReturnType<typeof source.get>> =
+    kept?.state === 'got' && kept.details !== null ? { ok: true, value: kept.details } : await source.get(ticket)
+  await keepTicket($, ticket, got)
 
   if (!got.ok) {
     $.ui.log(`Could not look ${ticket} up in its Quest Source: ${got.problem.message}`, { to: 'debug' })
@@ -644,15 +970,63 @@ const cappedText = (pool: XpPool, inQuest: boolean): string => {
       return `Battle XP is full for ${scope}. The Sage's Questions still pay: /sage`
     case 'sage':
       return `The Sage's XP is full for ${scope}. ${inQuest ? 'The Boss Fight still pays.' : 'Start a Quest for more: /quest-board'}`
+    case 'prophecy':
+      return `Prophecy XP is full for ${scope}. Right calls still count toward the Oracle.`
   }
 }
+
+/** What a settled Prophecy's toast says: `Prophecy fulfilled: Red (+10 DEX)`, `Prophecy failed: it was Green`. */
+const prophecyText = ({ call, outcome, isRight, xp }: Extract<Effect, { type: 'PROPHECY_SETTLED' }>): string =>
+  isRight
+    ? `Prophecy fulfilled: ${callName(call)}${xp > 0 ? ` (+${xp} DEX)` : ''}`
+    : `Prophecy failed: it was ${callName(outcome)}`
+
+/** What the HUD's Buttons do: a Prophecy's call. */
+const hudActions = ($: EngineInterface, rules: Rules): HudActions => ({
+  prophesy: call => {
+    void play($, { type: 'PROPHECY_MADE', call }, rules)
+  },
+})
+
+/** How to call a Prophecy from the prompt. */
+const PROPHECY_USAGE = 'Call it with /prophecy red, green or rout.'
+
+/** The call `/prophecy <args>` names, in any case; undefined for anything else. */
+const prophecyCallOf = (args: string): ProphecyCall | undefined =>
+  PROPHECY_CALLS.find(call => call === args.trim().toLowerCase())
 
 /** What the session is told, once, when Haiku turns out unavailable. */
 const HAIKU_UNAVAILABLE_TEXT = "Questions are off: Haiku isn't available on this account"
 
-/** Steps the session's game by one event, keeps the Player, plays the effects. */
-async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise<void> {
+/**
+ * Steps the session's game by one event as playOne does and returns the
+ * effects; a FILE_EDIT of a test file, from whatever saw the change (a Write,
+ * Edit or NotebookEdit; a change read from git), then plays the
+ * TEST_FILE_EDITED that arms a Prophecy, its effects returned too.
+ * `agentId` is the loop the event happened in (a subagent's; absent on the
+ * main loop): its companion counts the Encounters it played.
+ */
+async function play($: EngineInterface, event: GameEvent, rules: Rules, agentId?: string): Promise<Effect[]> {
+  const effects = await playOne($, event, rules, agentId)
+
+  if (event.type === 'FILE_EDIT') {
+    const root = await $.session.root().catch(() => null)
+    const tested = testFileEditedOf(event, root, await $.clock.now())
+    if (tested !== null) {
+      return [...effects, ...(await playOne($, tested, rules, agentId))]
+    }
+  }
+
+  return effects
+}
+
+/** Steps the session's game by one event, keeps the Player, plays the effects, and returns them. */
+async function playOne($: EngineInterface, event: GameEvent, rules: Rules, agentId?: string): Promise<Effect[]> {
   const effects = await stepGame($, event, rules)
+
+  if (effects.some(effect => effect.type === 'ENCOUNTER_STARTED' || effect.type === 'ENCOUNTER_UPDATED' || effect.type === 'BATTLE_WON')) {
+    await update($, party, current => tally(current, agentId, effects))
+  }
 
   const saved = await read($, game)
   if (saved !== null) {
@@ -686,8 +1060,29 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
     if (effect.type === 'HAIKU_UNAVAILABLE') {
       $.ui.toast(HAIKU_UNAVAILABLE_TEXT)
     }
-    if (effect.type === 'QUESTION_QUEUED') {
+    // The Quest Giver's Question is told by the Briefing's own toast.
+    if (effect.type === 'QUESTION_QUEUED' && effect.npc === undefined) {
       $.ui.toast('The Sage has a Question for you: /sage')
+    }
+    if (effect.type === 'QUESTION_QUEUED' && effect.npc === 'cartographer') {
+      $.ui.toast(`${NPC_NAMES.cartographer} has a Question for you: /sage`)
+    }
+    if (effect.type === 'BRIEFING_WANTED') {
+      // Never awaited: the lookup that found the ticket returns at once.
+      void askBriefing($, effect, rules).catch(() => undefined)
+    }
+    if (effect.type === 'SCOUTING_WANTED') {
+      // Never awaited: the read that discovered the Module returns at once.
+      void askScouting($, effect, rules).catch(() => undefined)
+    }
+    if (effect.type === 'MODULES_CHARTED' && saved !== null) {
+      $.ui.toast(`Charted: ${effect.modules.join(', ')} · /badges`)
+      // The session's whole list goes to the Player's for this project, as
+      // the discovered Modules do.
+      void $.session
+        .root()
+        .then(root => recordModulesCharted($, root, saved.chartedModules ?? []))
+        .catch(() => undefined)
     }
     if (effect.type === 'BATTLE_WON') {
       const xp = effects.find(gained => gained.type === 'XP_GAINED' && gained.stat === 'strength')
@@ -700,7 +1095,7 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
       await recordQuestAbandoned($, effect.ticket)
     }
     if (effect.type === 'QUEST_STARTED') {
-      $.ui.toast(`Quest started: ${effect.ticket}`)
+      $.ui.toast(`Quest started: ${effect.ticket} · /quest for the brief`)
       await recordQuestStarted($, effect.ticket)
     }
     if (effect.type === 'BOSS_FIGHT_SUMMONED') {
@@ -717,6 +1112,9 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
     if (effect.type === 'TROPHY_EARNED') {
       $.ui.toast(`Trophy won: ${effect.trophy.name}`)
     }
+    if (effect.type === 'PROPHECY_SETTLED') {
+      $.ui.toast(prophecyText(effect))
+    }
     if (effect.type === 'XP_CAPPED') {
       $.ui.toast(cappedText(effect.pool, saved?.quest != null))
     }
@@ -730,8 +1128,21 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
         $.ui.toast(`${bossOutcomeText(fight)} /quest-board for your next Quest`)
       }
       await recordQuestClosed($, effect.ticket, effect.outcome)
+      // The registry's Region is touched; a ticket cleared here for the first
+      // time (its trophy just won) lights its Dungeon in the Snapshot, when
+      // the board's card says which.
+      const root = await $.session.root().catch(() => null)
+      if (root !== null) {
+        const isCleared = effect.outcome === 'won' && effects.some(each => each.type === 'TROPHY_EARNED')
+        const cleared = isCleared ? clearedOf(await listedCard($, effect.ticket)) : null
+        await recordRegionQuestClosed($, root, cleared)
+          .then(regions => showRegions($, regions))
+          .catch(() => undefined)
+      }
     }
   }
+
+  return effects
 }
 
 /** Plays a reading of the session's vitals, with the model it runs on. */
@@ -739,11 +1150,110 @@ async function measure($: EngineInterface, usage: MeasureSeen, rules: Rules): Pr
   await play($, translateMeasure(usage, await $.session.model()), rules)
 }
 
+/** How long one git run of the diff path may take: a stuck one gives up, and plays nothing. */
+const GIT_TIMEOUT_MS = 5000
+
+/** The Bash-triggered checks of the working tree come at most this often, in ms; `turn.complete` always checks. */
+export const BASH_CHECK_MS = 15_000
+
+/** A command that may commit: the working tree is checked before it runs, as the commit would hide its changes. */
+const MAY_COMMIT = /\bgit\b[^;&|\n]*\bcommit\b/
+
+/** git in the project's root, through `$.process` (CLI only: elsewhere it rejects, and the diff path is off). */
+const gitOf =
+  ($: EngineInterface, root: string): Git =>
+  async (args, stdin) =>
+    $.process.run(['git', ...args], { cwd: root, timeoutMs: GIT_TIMEOUT_MS, ...(stdin === undefined ? {} : { stdin }) })
+
+/** A file of the project, by its path relative to the root. */
+const readerOf =
+  ($: EngineInterface, root: string): ReadFile =>
+  async path =>
+    $.fs.read(`${root.replace(/[\\/]+$/, '')}/${path}`)
+
+/** The agent statuses of a companion still out. */
+const STILL_RUNNING = new Set(['pending', 'running', 'waiting'])
+
+/**
+ * Crafting from the diff (src/diff-crafting.ts): the session's snapshot of
+ * the working tree (null: the diff path off), when a Bash call last checked
+ * it, and the steps on it, run in turn, so a check never sees a change a
+ * Write is still being played for, and two checks never play one change
+ * twice. The module's own: session.start takes the snapshot again.
+ */
+let snapshot: Snapshot | null = null
+let lastBashCheck = Number.NEGATIVE_INFINITY
+let diffTurn: Promise<void> = Promise.resolve()
+
+/** Runs `work` after every step on the snapshot before it; a failure plays nothing more. */
+function inDiffTurn<T>(work: () => Promise<T>): Promise<T> {
+  const done = diffTurn.then(work)
+  diffTurn = done.then(
+    () => undefined,
+    () => undefined,
+  )
+
+  return done
+}
+
+/** The snapshot the session starts from; none (the diff path off) outside a git repo, or without git. */
+function startDiff($: EngineInterface, root: string | null): Promise<void> {
+  lastBashCheck = Number.NEGATIVE_INFINITY
+
+  return inDiffTurn(async () => {
+    snapshot = root === null ? null : await takeSnapshot(gitOf($, root), readerOf($, root))
+  }).catch(() => undefined)
+}
+
+/** Plays what changed in the working tree since the last check, in `agentId`'s loop: at every turn's end, and before a commit. */
+function checkDiff($: EngineInterface, root: string | null, agentId: string | undefined, rules: Rules): Promise<void> {
+  return inDiffTurn(async () => {
+    if (snapshot === null || root === null) {
+      return
+    }
+    for (const edit of await changesSince(snapshot, gitOf($, root), readerOf($, root), root)) {
+      await play($, edit, rules, agentId)
+    }
+  }).catch(() => undefined)
+}
+
+/** As checkDiff, after a Bash call that may have changed files: at most every BASH_CHECK_MS. */
+async function checkDiffAfterBash($: EngineInterface, root: string | null, agentId: string | undefined, rules: Rules): Promise<void> {
+  // The snapshot itself is read in turn: the first may still be being taken.
+  const now = await $.clock.now()
+  if (now - lastBashCheck < BASH_CHECK_MS) {
+    return
+  }
+  lastBashCheck = now
+  await checkDiff($, root, agentId, rules)
+}
+
+/**
+ * Plays a tool's FILE_EDIT, then takes its file into the snapshot, so the
+ * diff path never plays that change again. Called in the diff's turn.
+ */
+async function playFileEdit(
+  $: EngineInterface,
+  edit: Extract<GameEvent, { type: 'FILE_EDIT' }>,
+  root: string | null,
+  agentId: string | undefined,
+  rules: Rules,
+): Promise<void> {
+  await play($, edit, rules, agentId)
+  if (snapshot !== null && root !== null) {
+    await noteChanged(snapshot, gitOf($, root), readerOf($, root), root, edit.path)
+  }
+}
+
+/** The tools that change a file and hand over its change: played from their record, never from the diff. */
+const FILE_CHANGE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
+
 export const register: Register = (on, options) => {
   // The Player's settings, from /config: a change there reloads the mod, and
   // register runs again with the new values.
   const rules = rulesOf(options)
   const autoOpenScene = autoOpenSceneOf(options)
+  const hudStyle = hudStyleOf(options)
 
   on('session.start', async ($, e, next) => {
     // After a reload of the mod the session's game is still in $.state; one
@@ -767,10 +1277,29 @@ export const register: Register = (on, options) => {
     // The modules the Player explored in this project in earlier sessions
     // are no first visit (seeded once from an older mod's Region file).
     const discovered = root === null ? [] : await loadDiscovered($, root).catch(() => [])
+    const charted = root === null ? [] : await loadCharted($, root).catch(() => [])
     // Quests earlier sessions left active for over a week were abandoned.
     if (root !== null) {
       await pruneStaleQuests($).catch(() => undefined)
     }
+    // The project joins the World, or is touched there (the registry seeded
+    // once from an older Player's Regions); the World plays on without it.
+    if (root !== null) {
+      const repo = await $.session.repo().catch(() => null)
+      await touchRegion($, root, repo?.remote ?? null)
+        .then(regions => showRegions($, regions))
+        .catch(() => undefined)
+    }
+    // The working tree as it is now: work done before is never played. Not
+    // awaited: the checks wait their turn behind it.
+    void startDiff($, root)
+    // A companion whose agent no longer runs (killed, its session ended)
+    // quietly leaves the party.
+    const running = await Promise.resolve()
+      .then(() => $.agent.list())
+      .then(agents => new Set(agents.filter(agent => STILL_RUNNING.has(agent.status)).map(agent => agent.id)))
+      .catch(() => new Set<string>())
+    await update($, party, current => stillOut(current, running))
     await update($, game, current => {
       const resumed = withTicketCalls({ ...newGame(player), ...current })
 
@@ -783,6 +1312,7 @@ export const register: Register = (on, options) => {
         visitedModules: [
           ...new Set([...discovered, ...resumed.visitedModules.map(moduleOfFolder).filter(module => module !== null)]),
         ],
+        chartedModules: [...new Set([...charted, ...(resumed.chartedModules ?? [])])],
       }
     })
 
@@ -794,13 +1324,32 @@ export const register: Register = (on, options) => {
       .register({ name: 'scene', description: 'Open the Scene: the current Encounter, played' })
       .catch(() => undefined)
     await $.command
+      .register({ name: 'map', description: 'Open the Region map: this Region\'s Dungeons, the Wilds and its Modules' })
+      .catch(() => undefined)
+    await $.command
       .register({
         name: 'sage',
         description: 'Answer the Sage\'s Questions; /sage A-D answers the first one',
       })
       .catch(() => undefined)
     await $.command
-      .register({ name: 'badges', description: 'Your Badges, trophies, title and Stats' })
+      .register({ name: 'badges', description: 'Your character sheet as text: level, Stats, Badges, Trophies' })
+      .catch(() => undefined)
+    await $.command
+      .register({ name: 'overview', description: 'Open the Overview: your character sheet and the World of Islands' })
+      .catch(() => undefined)
+    await $.command
+      .register({
+        name: 'prophecy',
+        description: 'Call the armed Prophecy: /prophecy red, green or rout',
+      })
+      .catch(() => undefined)
+    await $.command
+      .register({
+        name: 'quest',
+        description: 'Open the Quest Log: the active Quest\'s ticket, description and progress; /quest #N for any ticket',
+        argumentHint: '[#N | ABC-123]',
+      })
       .catch(() => undefined)
     await $.command
       .register({
@@ -838,25 +1387,104 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', async ($, e, next) => {
-    const outcome = await next(e)
-    // Without the root, the read still explores, but discovers no Module.
+    const { agentId } = e
+    // A Check about to run: no Prophecy is called from now, with its output
+    // in sight.
+    const starting = translateCheckStart(e)
+    if (starting !== null) {
+      await play($, starting, rules, agentId)
+    }
+
+    // Without the root, a read still explores, but discovers no Module.
     const root = await $.session.root().catch(() => null)
+
+    // A file-changing tool runs in the diff's turn, from the call to its
+    // change noted: no check (another loop's) sees the change in between.
+    if (FILE_CHANGE_TOOLS.has(e.tool)) {
+      return inDiffTurn(async () => {
+        const changed = await next(e)
+        const edit = translateToolCall(e, changed, root)
+        if (edit?.type === 'FILE_EDIT') {
+          await playFileEdit($, edit, root, agentId, rules).catch(() => undefined)
+        }
+
+        return changed
+      })
+    }
+
+    // A commit hides what it commits from the diff: what changed is played first.
+    if (e.tool === 'Bash' && typeof e.command === 'string' && MAY_COMMIT.test(e.command)) {
+      await checkDiff($, root, agentId, rules)
+    }
+    const outcome = await next(e)
     const event = translateToolCall(e, outcome, root)
 
     if (event !== null) {
-      await play($, event, rules)
+      await play($, event, rules, agentId)
+    }
+
+    // A Bash call that is no Check may read the code, or change it (a
+    // heredoc, a script): its reads explore, and the working tree is checked.
+    if (e.tool === 'Bash' && event === null) {
+      const bash = translateBashReads(e, outcome, root)
+      for (const read of bash.reads) {
+        await play($, read, rules, agentId)
+      }
+      if (!bash.isReadOnly && outcome.deny === undefined) {
+        await checkDiffAfterBash($, root, agentId, rules)
+      }
     }
 
     // A Bash call may run a check and commit too (`npm test && git commit`).
     const commit = translateCommit(e, outcome)
     if (commit !== null) {
-      await play($, commit, rules)
+      await play($, commit, rules, agentId)
     }
 
     return outcome
   })
     // The game never blocks a tool call: on a failure the call's own result
     // stands.
+    .catch(($, e, next) => next(e))
+
+  // Every turn's end, the main loop's and each subagent's, checks the
+  // working tree; a subagent's brings its companion back, with what its
+  // loop played. Nothing pays for the return.
+  on('turn.complete', async ($, e, next) => {
+    const ended = await next(e)
+    const { agentId } = e
+    await checkDiff($, await $.session.root().catch(() => null), agentId, rules)
+
+    if (agentId !== undefined) {
+      let back: ReturnType<typeof comeBack>['companion'] = null
+      await update($, party, current => {
+        const returned = comeBack(current, agentId)
+        back = returned.companion
+
+        return returned.party
+      })
+      if (back !== null) {
+        $.ui.toast(backText(back))
+      }
+    }
+
+    return ended
+  })
+    // The game never holds up a turn's end: on a failure its answer stands.
+    .catch(($, e, next) => next(e))
+
+  // A subagent started during a Quest is a companion setting out. Nothing
+  // pays for it: spawning agents is Claude's activity (ADR 0002).
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    const { agentId } = spawned
+    if (spawned.deny === undefined && agentId !== undefined && (await read($, game))?.quest != null) {
+      await update($, party, current => setOut(current, agentId, e.description))
+    }
+
+    return spawned
+  })
+    // The game never blocks a spawn: on a failure it starts as asked.
     .catch(($, e, next) => next(e))
 
   on('command.run', { command: 'quest-board' }, async $ => {
@@ -867,6 +1495,18 @@ export const register: Register = (on, options) => {
       text: opened.isPlaced
         ? 'Quest Board opened.'
         : 'Quest Board opened: it shows once the window is wide enough.',
+    }
+  })
+
+  on('command.run', { command: 'map' }, async $ => {
+    await openRegionMap($, { kind: 'live' })
+    const opened = (await $.ui.panes().catch(() => [])).find(pane => pane.id === REGION_MAP.id)
+
+    return {
+      text:
+        opened === undefined || opened.isPlaced
+          ? 'Region map opened.'
+          : 'Region map opened: it shows once the window is wide enough.',
     }
   })
 
@@ -968,10 +1608,74 @@ export const register: Register = (on, options) => {
     }
   })
 
-  on('command.run', { command: 'badges' }, async $ => {
-    const player = (await read($, game))?.player ?? (await loadPlayer($))
+  // /prophecy tells the Prophecy armed; /prophecy red, green or rout calls
+  // it, as the HUD's Buttons do, for a band that cannot take the focus.
+  on('command.run', { command: 'prophecy' }, async ($, e) => {
+    const args = e.args.trim()
+    const call = args === '' ? undefined : prophecyCallOf(args)
+    if (args !== '' && call === undefined) {
+      return { text: PROPHECY_USAGE }
+    }
 
-    return { text: badgesText(player) }
+    const prophecy = (await read($, game))?.prophecy
+    if (prophecy == null) {
+      return { text: 'No Prophecy is armed: one is when Claude edits a test file.' }
+    }
+    if (prophecy.call !== undefined) {
+      return { text: `You called it already: ${callName(prophecy.call)}. The next Check will tell.` }
+    }
+    if (call === undefined) {
+      const file = prophecy.file.split(/[\\/]/).filter(Boolean).pop() ?? prophecy.file
+
+      return { text: `A Prophecy is armed (${file}): call the next Check with /prophecy red, green or rout.` }
+    }
+
+    await play($, { type: 'PROPHECY_MADE', call }, rules)
+
+    return { text: `You call it: ${callName(call)}. The next Check will tell.` }
+  })
+
+  // /quest opens the active Quest's log; /quest #N (or a Jira key) any ticket's.
+  on('command.run', { command: 'quest' }, async ($, e) => {
+    const arg = questArgOf(e.args)
+    if (arg.kind === 'invalid') {
+      return { text: NOT_A_TICKET }
+    }
+
+    const quest = (await read($, game))?.quest ?? null
+    const ticket = arg.kind === 'ticket' ? arg.ticket : quest?.ticket
+    if (ticket === undefined) {
+      return { text: NO_ACTIVE_QUEST }
+    }
+
+    const opened = await openQuestLog($, ticket)
+    const title = quest?.ticket === ticket ? quest.title : (await listedCard($, ticket))?.title
+    const named = `${ticket}${title === undefined ? '' : ` ${title}`}`
+
+    return {
+      text: opened.isPlaced
+        ? `Quest Log opened: ${named}.`
+        : `Quest Log opened: ${named}. It shows once the window is wide enough.`,
+    }
+  })
+
+  on('command.run', { command: 'badges' }, async $ => {
+    const current = await read($, game)
+    const player = current?.player ?? (await loadPlayer($))
+    const charted = current === null ? [] : chartedModulesOf(current)
+
+    return { text: `${badgesText(player)}\n${cartographerText(player, charted)}` }
+  })
+
+  on('command.run', { command: 'overview' }, async $ => {
+    await showRegions($)
+    const opened = await $.ui.open(OVERVIEW)
+
+    return {
+      text: opened.isPlaced
+        ? 'Overview opened.'
+        : 'Overview opened: it shows once the window is wide enough.',
+    }
   })
 
   on('session.attach', async ($, e, next) => {
@@ -1024,16 +1728,65 @@ export const register: Register = (on, options) => {
     // Vitals are a reading: a failed one leaves the last on the HUD.
     .catch(($, e, next) => next(e))
 
-  on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) =>
-    drawQuestBoard($, e, await read($, board), boardActions($), (await read($, game))?.player ?? null),
-  )
+  on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) => {
+    const shown = await read($, board)
+    // The unrolled card's excerpt of its description, as fetched on Unroll.
+    const excerpt = shown.selected == null ? undefined : scrollExcerptOf(await read($, memberOf(ticketDetails, { requestId: shown.selected })))
+
+    return drawQuestBoard($, e, shown, boardActions($), (await read($, game))?.player ?? null, excerpt)
+  })
+
+  // The Quest Log draws what is already kept: the fetch, the game, the
+  // briefing. It fetches nothing itself, and never opens itself.
+  on('ui.render', { component: 'Pane', requestId: QUEST_LOG.id }, async ($, e) => {
+    const { ticket, history } = await read($, questLog)
+    if (ticket === null) {
+      return drawEmptyQuestLog($, e)
+    }
+
+    const current = await read($, game)
+    const quest = current?.quest?.ticket === ticket ? current.quest : null
+    const briefed = await read($, memberOf(briefing, { requestId: ticket }))
+    const fetch = await read($, memberOf(ticketDetails, { requestId: ticket }))
+    const listed = await listedCard($, ticket)
+    // The Dungeon the ticket is in, as its Quest Source says (fetched, else listed).
+    const dungeon = (fetch?.state === 'got' ? fetch.details?.dungeon : undefined) ?? listed?.dungeon
+
+    return drawQuestLog(
+      $,
+      e,
+      {
+        ticket,
+        fetch,
+        listed,
+        quest,
+        progress: quest === null || current === null ? null : questProgressOf(current),
+        history,
+        briefing: typeof briefed?.text === 'string' && briefed.text.trim() !== '' ? briefed.text : null,
+        ...(dungeon === undefined ? {} : { dungeon: dungeon.name }),
+      },
+      questLogActions($, ticket),
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: REGION_MAP.id }, async ($, e) => {
+    const current = await read($, game)
+
+    return renderRegionMap($, e, current?.visitedModules ?? [], current === null ? [] : chartedModulesOf(current), themingOf($))
+  })
 
   // The Scene draws what the game already holds: it never runs in a tool
   // call, so it never slows one.
   on('ui.render', { component: 'Pane', requestId: SCENE.id }, async ($, e) => {
     const current = await read($, game)
+    // The Quest Giver's Briefing tells the Scene's line until the Quest's first Encounter.
+    const quest = current?.quest ?? null
+    const briefing =
+      quest !== null && quest.encounters.length === 0
+        ? ((await read($, { plugin: 'quest-mod', key: 'briefing', id: quest.ticket }))?.text ?? null)
+        : null
 
-    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null)
+    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null, briefing, (await read($, party)).beat)
   })
 
   on('ui.render', { component: 'Pane', requestId: SAGE.id }, async ($, e) => {
@@ -1047,18 +1800,51 @@ export const register: Register = (on, options) => {
       })
     }
 
+    const quest = current?.quest ?? null
+
     return drawSage(
       $,
       e,
       { questions: current?.questions ?? [], lastAnswer: current?.lastAnswer ?? null },
       sageActions($, rules),
+      quest === null ? null : drawQuestHeader($, e, questHeaderOf($, quest.ticket, quest.title)),
     )
   })
 
   on('ui.render', { component: 'Pane', requestId: BOSS.id }, async ($, e) => {
     const current = await read($, game)
+    const fight = current?.bossFight ?? null
+    // The Quest the fight ends, or ended: the active one's, else the fight's own ticket.
+    const ticket = fight?.ticket ?? current?.quest?.ticket
+    const title = current?.quest?.ticket === ticket ? current?.quest?.title : undefined
 
-    return drawBoss($, e, current?.bossFight ?? null, bossActions($, rules), current !== null && isExhausted(current.player))
+    return drawBoss(
+      $,
+      e,
+      fight,
+      bossActions($, rules),
+      current !== null && isExhausted(current.player),
+      ticket === undefined ? null : drawQuestHeader($, e, questHeaderOf($, ticket, title)),
+    )
+  })
+
+  // Drawing the World asks, just after (a drawing may not write), for the
+  // theme of each Island with none yet: once each at most (src/theming.ts).
+  on('ui.render', { component: 'Pane', requestId: OVERVIEW.id }, async ($, e) => {
+    const state = await read($, overview)
+    const unthemed = Object.entries(state.regions)
+      .filter(([, entry]) => themeOf(entry) === undefined)
+      .map(([key]) => key)
+    if (unthemed.length > 0) {
+      const theming = themingOf($)
+      $.clock.after(0, () => {
+        for (const key of unthemed) {
+          void themeRegion($, theming, key)
+        }
+      })
+    }
+
+    return drawOverview($, e, (await read($, game))?.player ?? (await loadPlayer($)), state, overviewActions($))
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -1068,6 +1854,6 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    return drawHud($, e, current)
+    return drawHud($, e, current, hudStyle, hudActions($, rules), (await read($, party)).companions.length)
   })
 }

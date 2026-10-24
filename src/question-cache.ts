@@ -3,12 +3,13 @@
 // same fix winning a Battle again) reuses its Question instead of asking
 // Haiku again. A hit spends no Haiku budget.
 //
-// The key is a SHA-256 of the change's files and diffs, through the
-// environment's Web Crypto (`crypto.subtle`, which a hooks module has). The
+// The key is a SHA-256 of the change's files and diffs, computed in plain
+// code (see sha256.ts for why not Web Crypto's `crypto.subtle`). The
 // cache is kept in the session's `$.state` beside the Question Queue, so it
 // survives a reload of the mod; it holds the latest MAX_CACHED_QUESTIONS.
 
 import type { FileChange, QuestionContent } from '../types'
+import { sha256Hex } from './sha256'
 
 /** A cached Question, under its change's key. */
 export type CachedQuestion = { key: string; question: QuestionContent }
@@ -19,18 +20,15 @@ export type QuestionCache = CachedQuestion[]
 /** The most Questions kept: enough for a long session, small in `$.state`. */
 export const MAX_CACHED_QUESTIONS = 50
 
-const hex = (buffer: ArrayBuffer): string =>
-  [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+/** A SHA-256 of `text`, in hex: what cache keys are made of. */
+export const sha256Of = async (text: string): Promise<string> => sha256Hex(new TextEncoder().encode(text))
 
 /**
  * The key a change is cached under: a SHA-256 of each file's path and diff,
  * in order. The path counts, since the Question names its file.
  */
-export const cacheKeyOf = async (changes: readonly FileChange[]): Promise<string> => {
-  const text = JSON.stringify(changes.map(({ path, diff }) => [path, diff]))
-
-  return hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))
-}
+export const cacheKeyOf = async (changes: readonly FileChange[]): Promise<string> =>
+  sha256Of(JSON.stringify(changes.map(({ path, diff }) => [path, diff])))
 
 /** The Question cached under `key`, if any. */
 export const cachedQuestion = (

@@ -1,11 +1,12 @@
 // The reward economy (ADR 0002): XP pools, the level curve, HP and
-// Exhaustion, the Quest reward, Badges, trophies and titles, through the Game
+// Exhaustion, the Quest reward, Prophecies, Badges, trophies and titles, through the Game
 // Engine's step and its pure helpers.
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import { earnedBadges, newGame, newPlayer, step, titleOf, xpToClear } from '../src/engine'
+import { CRAFTING_XP, earnedBadges, newGame, newPlayer, POOL_CAPS, step, titleOf, xpToClear } from '../src/engine'
 import type { GameEvent, GameState, Player, QuestionContent } from '../src/engine'
+import { comeBack, emptyParty, setOut, tally } from '../src/party'
 import { migratePlayer } from '../src/persistence'
 
 const play = (state: GameState, ...events: GameEvent[]) =>
@@ -75,7 +76,7 @@ describe('Economy: the ambient pool', () => {
     const { state, effects } = play(visited(), ...reads(25))
 
     expect(state.player.totalXp).toBe(20)
-    expect(state.pools).toEqual({ ambient: 20, battle: 0, sage: 0 })
+    expect(state.pools).toEqual({ ambient: 20, battle: 0, sage: 0, prophecy: 0 })
     expect(state.encounter).toMatchObject({ xp: 0 })
     expect(effects.filter(effect => effect.type === 'XP_CAPPED')).toEqual([
       { type: 'XP_CAPPED', pool: 'ambient' },
@@ -87,8 +88,8 @@ describe('Economy: the ambient pool', () => {
     const { state, effects } = play(questing, ...reads(70))
 
     expect(state.player.totalXp).toBe(60)
-    expect(state.quest?.pools).toEqual({ ambient: 60, battle: 0, sage: 0 })
-    expect(state.pools).toEqual({ ambient: 0, battle: 0, sage: 0 })
+    expect(state.quest?.pools).toEqual({ ambient: 60, battle: 0, sage: 0, prophecy: 0 })
+    expect(state.pools).toEqual({ ambient: 0, battle: 0, sage: 0, prophecy: 0 })
     expect(effects.filter(effect => effect.type === 'XP_CAPPED')).toHaveLength(1)
   })
 
@@ -102,7 +103,7 @@ describe('Economy: the ambient pool', () => {
   })
 
   test('a payment that would overflow the pool pays what is left', () => {
-    const nearlyFull = { ...visited(), pools: { ambient: 18, battle: 0, sage: 0 } }
+    const nearlyFull = { ...visited(), pools: { ambient: 18, battle: 0, sage: 0, prophecy: 0 } }
     const { state, effects } = step(nearlyFull, read('src/new/a.ts', 'src/new'))
 
     expect(state.player.totalXp).toBe(2)
@@ -111,7 +112,7 @@ describe('Economy: the ambient pool', () => {
   })
 
   test('a discovery in a full pool pays nothing but still counts toward the Cartographer', () => {
-    const full = { ...visited(), pools: { ambient: 20, battle: 0, sage: 0 } }
+    const full = { ...visited(), pools: { ambient: 20, battle: 0, sage: 0, prophecy: 0 } }
     const { state } = step(full, read('lib/a.ts', 'lib'))
 
     expect(state.player.totalXp).toBe(0)
@@ -498,6 +499,63 @@ describe('Economy: the Boss Fight and the Quest reward', () => {
   })
 })
 
+const testEdited: GameEvent = { type: 'TEST_FILE_EDITED', path: 'tests/vault.test.ts', at: T }
+const prophesy = (call: 'red' | 'green' | 'rout'): GameEvent => ({ type: 'PROPHECY_MADE', call })
+/** A Prophecy armed, called `call`, and settled by a passing Check: right when `call` is green. */
+const prophecy = (call: 'red' | 'green' | 'rout' = 'green'): GameEvent[] => [testEdited, prophesy(call), pass()]
+
+describe('Economy: the prophecy pool', () => {
+  test('during a Quest right Prophecies cap at 30 Dexterity XP, the XP_CAPPED told once', () => {
+    const questing = step(newGame(), { type: 'QUEST_START', ticket: '#18' }).state
+    const { state, effects } = play(questing, ...prophecy(), ...prophecy(), ...prophecy(), ...prophecy(), ...prophecy())
+
+    expect(state.player.stats.dexterity).toBe(30)
+    expect(state.quest?.pools).toEqual({ ambient: 0, battle: 0, sage: 0, prophecy: 30 })
+    expect(effects.filter(effect => effect.type === 'XP_CAPPED')).toEqual([{ type: 'XP_CAPPED', pool: 'prophecy' }])
+    // Past the cap they still count for the streak, paying 0.
+    expect(effects.filter(effect => effect.type === 'PROPHECY_SETTLED').map(effect => effect.type === 'PROPHECY_SETTLED' && effect.xp)).toEqual([10, 10, 10, 0, 0])
+    expect(state.player.tally.prophecyStreak).toBe(5)
+  })
+
+  test('outside a Quest they cap at 15 for the session', () => {
+    const { state, effects } = play(newGame(), ...prophecy(), ...prophecy(), ...prophecy())
+
+    expect(state.player.stats.dexterity).toBe(15)
+    expect(state.pools?.prophecy).toBe(15)
+    expect(effects.filter(effect => effect.type === 'XP_CAPPED')).toHaveLength(1)
+  })
+
+  test('pools kept by an older mod, without the prophecy pool, pay from an empty one', () => {
+    const older = { ...newGame(), pools: { ambient: 3, battle: 0, sage: 0 } as unknown as GameState['pools'] }
+    const { state } = play(older, ...prophecy())
+
+    expect(state.pools).toEqual({ ambient: 3, battle: 0, sage: 0, prophecy: 10 })
+  })
+
+  test('five right Prophecies in a row earn the Oracle', () => {
+    const { effects } = play(newGame(), ...prophecy(), ...prophecy(), ...prophecy(), ...prophecy(), ...prophecy())
+
+    expect(effects).toContainEqual({ type: 'BADGE_EARNED', badge: { id: 'oracle', name: 'Oracle' } })
+  })
+
+  test('a wrong one resets the streak; one never called, or never settled, leaves it', () => {
+    const wrong = play(newGame(), ...prophecy(), ...prophecy('red'), ...prophecy(), ...prophecy(), ...prophecy(), ...prophecy())
+    expect(wrong.state.player.tally.prophecyStreak).toBe(4)
+    expect(wrong.effects.some(effect => effect.type === 'BADGE_EARNED' && effect.badge.id === 'oracle')).toBe(false)
+
+    const uncalled = play(newGame(), ...prophecy(), ...prophecy(), testEdited, pass(), ...prophecy(), ...prophecy(), ...prophecy())
+    expect(uncalled.state.player.tally.prophecyStreak).toBe(5)
+
+    const unsettled = play(newGame(), { type: 'QUEST_START', ticket: '#18' }, ...prophecy(), ...prophecy(), testEdited, prophesy('red'), { type: 'QUEST_START', ticket: '#19' }, ...prophecy(), ...prophecy(), ...prophecy())
+    expect(unsettled.state.player.tally.prophecyStreak).toBe(5)
+  })
+
+  test('the earned Badge reads the lifetime streak', () => {
+    expect(earnedBadges({ ...newPlayer(), tally: { ...newPlayer().tally, prophecyStreak: 5 } })).toEqual(['oracle'])
+    expect(earnedBadges({ ...newPlayer(), tally: { ...newPlayer().tally, prophecyStreak: 4 } })).toEqual([])
+  })
+})
+
 describe('Economy: Badges', () => {
   const withTally = (tally: Partial<Player['tally']>, badges: Player['badges'] = []): Player => ({
     ...newPlayer(),
@@ -538,11 +596,21 @@ describe('Economy: titles', () => {
     stats: { ...newPlayer().stats, ...stats },
   })
 
-  test('from level 3 the highest MVP Stat names the Player', () => {
+  test('from level 3 the highest Stat in play names the Player', () => {
     expect(titleOf(at(2, { intelligence: 50 }))).toBeNull()
     expect(titleOf(at(3, { intelligence: 50, wisdom: 10 }))).toBe('Scholar')
     expect(titleOf(at(3, { wisdom: 60, strength: 10 }))).toBe('Pathfinder')
     expect(titleOf(at(5, { strength: 70, intelligence: 60 }))).toBe('Warrior')
+  })
+
+  test('Dexterity highest makes the Player a Duelist', () => {
+    expect(titleOf(at(3, { dexterity: 30, intelligence: 20, strength: 20 }))).toBe('Duelist')
+    expect(titleOf(at(10, { dexterity: 40 }))).toBe('Veteran Duelist')
+  })
+
+  test('a tie goes Intelligence, Wisdom, Dexterity, Strength', () => {
+    expect(titleOf(at(3, { wisdom: 30, dexterity: 30 }))).toBe('Pathfinder')
+    expect(titleOf(at(3, { dexterity: 30, strength: 30 }))).toBe('Duelist')
   })
 
   test('a tie goes to Intelligence, then Wisdom; from level 10 a Veteran', () => {
@@ -581,5 +649,48 @@ describe('Economy: migrating an older Player', () => {
     const { player } = migratePlayer(old)
 
     expect(migratePlayer(player)).toEqual({ player, levelChange: null })
+  })
+})
+
+describe('Economy: wait-time engagement adds no XP source (#22)', () => {
+  /** A file a Bash heredoc made, as the diff path plays it. */
+  const forgedByBash = (at: number): GameEvent => ({
+    type: 'FILE_EDIT',
+    path: `/work/forge/src/gen-${at}.ts`,
+    module: 'src',
+    isNewFile: true,
+    linesBefore: null,
+    linesAdded: 5,
+    linesRemoved: 0,
+    diff: '@@ -0,0 +1,5 @@\n+a\n+b\n+c\n+d\n+e',
+    source: 'diff',
+  })
+
+  test('Crafting seen in the diff pays from the ambient pool, as an Edit\'s does, and stops when it is full', () => {
+    const quest = play(newGame(), { type: 'QUEST_START', ticket: '#22' }).state
+    const { state, effects } = play(quest, ...Array.from({ length: 20 }, (_, at) => forgedByBash(at)))
+
+    expect(state.quest?.pools).toEqual({ ambient: POOL_CAPS.ambient, battle: 0, sage: 0, prophecy: 0 })
+    expect(state.player.totalXp).toBe(POOL_CAPS.ambient)
+    expect(effects.filter(effect => effect.type === 'XP_CAPPED')).toEqual([{ type: 'XP_CAPPED', pool: 'ambient' }])
+  })
+
+  test('Bash reads pay from the ambient pool as Read does: the pool is shared, not added to', () => {
+    const quest = play(visited(newGame()), { type: 'QUEST_START', ticket: '#22' }).state
+    const { state } = play(quest, ...reads(40), ...Array.from({ length: 20 }, (_, at) => forgedByBash(at)), ...reads(40))
+
+    expect(state.quest?.pools?.ambient).toBe(POOL_CAPS.ambient)
+    expect(state.player.totalXp).toBe(POOL_CAPS.ambient)
+  })
+
+  test('companions pay nothing: setting out, counting their loop and coming back never touch the Player', () => {
+    let party = setOut(emptyParty(), 'agent-7', 'Implement issue #22')
+    const forged = step(play(newGame(), { type: 'QUEST_START', ticket: '#22' }).state, forgedByBash(0))
+    party = tally(party, 'agent-7', forged.effects)
+    const back = comeBack(party, 'agent-7')
+
+    expect(back.companion).toMatchObject({ forged: 1 })
+    // The party is no part of the game: the only XP was the Crafting's own.
+    expect(forged.state.player.totalXp).toBe(CRAFTING_XP)
   })
 })

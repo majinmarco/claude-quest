@@ -138,6 +138,11 @@ const engine = (
     if (e.argv[0] === 'gh') {
       return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    // Crafting from the diff asks git about the working tree: no repo to
+    // it here, so only the Boss Fight's `git show` is answered.
+    if (e.argv[0] === 'git' && e.argv[1] !== 'show') {
+      return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     runs.push({ argv: [...e.argv], cwd: e.init?.cwd })
 
     return {
@@ -562,7 +567,9 @@ describe('The Boss Fight', () => {
 
     expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('The boss of Quest #12')
     expect((await ui.find({ type: 'Code' }))?.text).toBe('  if (vault.locked) {\n    throw new Error("The vault is locked")')
+    // Headed by its Quest, the Quest Log a press away.
     expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual([
+      'Quest Log',
       'A. It throws',
       'B. It adds the gold anyway',
       'C. It returns the vault unchanged',
@@ -607,7 +614,9 @@ describe('The Boss Fight', () => {
 
     const ui = await $.ui.mount({ ...BOSS, surface: 'desktop' })
     const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
-    expect(texts[0]).toBe('The boss of Quest #12 has fallen')
+    // The Quest's header, then the boss's.
+    expect(texts[0]).toBe('Quest #12')
+    expect(texts[1]).toBe('The boss of Quest #12 has fallen')
     expect(texts.some(text => /\d\/\d HP|Questions$/.test(text))).toBe(false)
     const portrait = await ui.find({ type: 'Svg' })
     expect(portrait?.props.alt).toBe('The boss of Quest #12 has fallen')

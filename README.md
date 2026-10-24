@@ -1,6 +1,6 @@
 # Claude Quest
 
-An RPG mod for Claude Code. Your real work in a session is played as a game: a ticket you implement is a **Quest**, reading code explores **Modules**, failing tests are **Battles**, new files and big edits are **Crafting**, and the first commit summons a **Boss Fight**, a short code review of that commit's diff. The **Sage** asks a comprehension Question about each change, so you keep reading the code being written. A HUD above the prompt shows your level, HP, XP, Badges and the active Quest.
+An RPG mod for Claude Code. Your real work in a session is played as a game: a ticket you implement is a **Quest**, reading code explores **Modules**, failing tests are **Battles**, new files and big edits are **Crafting**, and the first commit summons a **Boss Fight**, a short code review of that commit's diff. The **Sage** asks a comprehension Question about each change, so you keep reading the code being written. When Claude edits a test file you can make a **Prophecy**, calling how the next test run ends, for Dexterity XP. A HUD above the prompt shows your level, HP, XP, Badges, the active Quest and your Stats (`INT · WIS · DEX · STR`).
 
 The vision is in [`docs/vision.md`](docs/vision.md), the words the game uses in [`GLOSSARY.md`](GLOSSARY.md), and the decisions in [`docs/adr/`](docs/adr/).
 
@@ -8,11 +8,17 @@ The vision is in [`docs/vision.md`](docs/vision.md), the words the game uses in 
 
 | Command | What it does |
 |---|---|
-| `/quest-board` | Opens the Quest Board: the Region's open tickets as Quest cards, drawn as pixel scrolls (a text scroll in the terminal), six a page. Take Quest fills the prompt with your implement command; you send it. Unroll opens a card's details. |
+| `/quest-board` | Opens the Quest Board: the Region's open tickets as Quest cards, drawn as pixel scrolls (a text scroll in the terminal), six a page. Take Quest fills the prompt with your implement command; you send it. Unroll opens a card's details and the start of its description; Read more opens its Quest Log. |
+| `/quest` | Opens the Quest Log of the Quest under way: its Scroll, the ticket's link and whole description, the Quest Giver's briefing, and your progress (Encounters, Questions, the Boss, XP by pool against each cap). `/quest #4` or `/quest ABC-123` opens any ticket's, with Take Quest and its history in the Region file. |
+| `/map` | Opens the Region map: the project's epics as Dungeons and its loose tickets as the Wilds on an overworld, each opening to Floors of Rooms (one per ticket, lit once it is closed or its Quest won), and the Module view of the folders you have discovered. Pixel tiles on the desktop, a character grid in the terminal; numbered buttons choose. Take Quest on an open Room fills the prompt as the Quest Board does. With Haiku, the Region and its Dungeons get themed names (the real ones beside them) and their own land, walls and banners. |
 | `/scene` | Opens the Scene: the current Encounter, as pixel art on the desktop and one line in the terminal. |
 | `/sage` | Shows the Sage's first waiting Question; `/sage A` to `/sage D` answers it. |
 | `/boss` | Shows the Boss Fight's Question; `/boss A` to `/boss D` answers, `/boss skip` skips the fight. |
-| `/badges` | Your Badges, trophies, title and Stats. |
+| `/overview` | Opens the Overview: your character sheet (portrait, level and Title, XP to the next level, the six Stats, every Badge, Trophies by Region, your tally) above the World, every project you have played as an Island, sized by its Quests and lit by its cleared share, the one you are in marked. A numbered Button per Island (keys 1 to 9, paged) opens its Region map: live for this project, from its last Snapshot for another. In the terminal the World is a grid (`▓` cleared, `░` open, `◉` you are here). |
+| `/prophecy` | Tells the Prophecy armed; `/prophecy red`, `green` or `rout` calls the next Check: one failure, passing, or two or more. The HUD's `1 Red`, `2 Green`, `3 Rout` Buttons (hotkeys 1–3) do the same. A right call pays 10 Dexterity XP (30 a Quest at most); a wrong one costs nothing. See [ADR 0004](docs/adr/0004-prophecy.md). |
+| `/badges` | Your character sheet as text: the Overview's first part, then the Cartographer Badge's progress and the Modules you've charted here. |
+
+The game sees the work whatever tool or agent does it. Reads through Bash (`cat`, `head`, `sed -n`, `grep`, `rg`, `find`...) explore the code as Read and Grep do. Files written by a Bash heredoc, a script or a subagent are seen in git's diff of the working tree (after such a Bash call, before a commit and at every turn's end) and forge like an Edit's, once; outside a git repo only the Edit, Write and NotebookEdit tools' changes are seen, and files `.gitignore` ignores never count. A subagent Claude starts during a Quest is a **companion**: the Scene shows it setting out, the HUD counts the party (`Party: 1 out`), and it comes back with a toast of what its loop did. Companions pay no XP of their own.
 
 A Quest starts when you run `/implement <ticket>` or any plugin's `/<plugin>:implement <ticket>` (for example `/mattpocock-skills:implement #4`, or `ABC-123` for Jira). See [ADR 0001](docs/adr/0001-quest-starts-at-command-run.md).
 
@@ -20,15 +26,17 @@ A Quest starts when you run `/implement <ticket>` or any plugin's `/<plugin>:imp
 
 Change these in `/config` under the mod:
 
-- `sageCallsPerQuest` (10), `bossFightCallsPerQuest` (3), `sageCallsOutsideQuest` (5): the Haiku budget, per ticket for the session. 0 turns those Questions off.
+- `sageCallsPerQuest` (10), `bossFightCallsPerQuest` (3), `sageCallsOutsideQuest` (5): the Haiku budget, per ticket for the session. 0 turns those Questions off. The Quest Giver's Briefing at a Quest's start (two lines and a Question about the ticket) is one of the Sage's calls for that ticket: with `sageCallsPerQuest` at 0 there is none, and a ticket started again in the session costs none. The Cartographer's Scouting (a Question about how the Modules just read fit together, at the third, sixth and ninth Module discovered in a Quest; outside one, every fifth, twice a session at most) is one of the Sage's calls too, from `sageCallsPerQuest` in a Quest and `sageCallsOutsideQuest` outside: 0 turns it off. Haiku is shown the Modules' paths, the files read in them and their import and export lines, never whole files. Answer it right to chart its Modules.
+  Haiku also themes the World, outside this budget and with no setting: one call per project when its map or its Island is first drawn (a place name and a biome: meadow, forest, coast, desert, snow or swamp, from its folder name, its remote's owner/repo and the start of its README) and one per epic when its Dungeon's Floors are first drawn (a name and a kind: crypt, fortress, aqueduct, mine, library or tower, from its name and up to twenty ticket titles). Each is asked once and kept for ever; without Haiku, or when a reply is unusable, the project keeps its folder name on a meadow and the epic its own name in a crypt, and it is asked again next session. Themed names show with the real ones beside them. See [ADR 0005](docs/adr/0005-haiku-theming.md).
 - `hastyAnswerSeconds` (5) and `nonTrivialLines` (3): when a right answer counts as hasty and pays less.
 - `autoOpenScene` (on): open the Scene once per session on surfaces that draw its art.
+- `hudStyle` (`pixel`): on the desktop and in VS Code the HUD is a pixel-art strip (your portrait by Title, the HP, XP and Mana bars, the Quest on a banner, a Prophecy armed, the Stats); `text` brings back the text band there. The terminal always shows the text band. A Prophecy's Buttons show in the band either way, beside the strip.
 
 ## Quest Source
 
 The Quest Board reads Quests from the project's **Quest Source**, set in the Region file (below) as `questSource`.
 
-**GitHub Issues** is the default when the project is a git repo with a remote. It is read with the [`gh` CLI](https://cli.github.com), which must be installed, on the PATH and signed in (`gh auth login`). On macOS, Claude Code started from the Dock may not see Homebrew's PATH, so start it from a terminal. A Quest's difficulty comes from labels: `size: XS`…`size: XL`, or `points: N`.
+**GitHub Issues** is the default when the project is a git repo with a remote. It is read with the [`gh` CLI](https://cli.github.com), which must be installed, on the PATH and signed in (`gh auth login`). On macOS, Claude Code started from the Dock may not see Homebrew's PATH, so start it from a terminal. A Quest's difficulty comes from labels: `size: XS`…`size: XL`, or `points: N`. An issue's milestone is its Dungeon on the Region map; issues in none are the Wilds.
 
 ```json
 { "questSource": { "kind": "github" } }
@@ -49,7 +57,7 @@ The Quest Board reads Quests from the project's **Quest Source**, set in the Reg
 }
 ```
 
-Only `project` is required. `storyPointsField` is your site's story points field id; without it only `points: N` and `size: …` labels rate Quests. `site` defaults to the first Jira site the connection reaches. `jql` defaults to the project's issues that are not done, newest first.
+Only `project` is required. `storyPointsField` is your site's story points field id; without it only `points: N` and `size: …` labels rate Quests. An issue's Dungeon on the Region map is its `parent` (its epic; a subtask's parent is a story, so subtasks are in the Wilds). Classic "Epic Link" custom fields are not read: a project that links epics only that way draws as all Wilds. `site` defaults to the first Jira site the connection reaches. `jql` defaults to the project's issues that are not done, newest first. The Region map also lists the project's done issues (`statusCategory = Done`, whatever `jql` says), once a session, to light the cleared Rooms.
 
 When the board can't read its Quest Source, it says why and what to do: the tool is missing or signed out, the setting is wrong (`misconfigured`), there is no GitHub repo (`none`), or the account can't see the Jira project (`forbidden`).
 
@@ -61,10 +69,10 @@ Each project keeps `.claude/claude-quest.json`: its `questSource` and its Quest 
 .claude/claude-quest.json
 ```
 
-Your Player (level, XP, Badges, trophies, the Modules you've discovered) is kept by Claude Code across projects, not in the repo.
+Your Player (level, XP, Badges, trophies, the Modules you've discovered) and the World (every project you have played, by its folder, with its last Snapshot: Dungeon names and counts, never tickets) are kept by Claude Code across projects, not in the repo.
 
 ## Credits
 
-The pixel art is Kenney's (all CC0): Tiny Dungeon for the Scene and the portraits, UI Pack – Pixel Adventure for the Quest Board's scrolls, and the Kenney Mini font for their lettering. See [`assets/CREDITS.md`](assets/CREDITS.md).
+The pixel art is Kenney's (all CC0): Tiny Dungeon for the Scene, the portraits and the Region map's Rooms, Tiny Town for the Region map's overworld, UI Pack – Pixel Adventure for the Quest Board's scrolls, and the Kenney Mini font for their lettering. See [`assets/CREDITS.md`](assets/CREDITS.md).
 
-The art is baked into TypeScript, so nothing decodes a PNG or loads a font while a session runs: `node scripts/build-sprites.mjs` writes `src/sprites.ts` from the tilesheets, `node scripts/build-font.mjs` writes `src/pixel-font.ts` from the font. `node scripts/render-art.mjs <dir>` renders the Scene, the Boss Fight, the portraits and a sample Quest Board to SVG files (and the board as `board.html`) for a look; `--snapshot` writes the scroll art's test snapshot again after a deliberate change.
+The art is baked into TypeScript, so nothing decodes a PNG or loads a font while a session runs: `node scripts/build-sprites.mjs` writes `src/sprites.ts` from the tilesheets, `node scripts/build-font.mjs` writes `src/pixel-font.ts` from the font. `node scripts/render-art.mjs <dir>` renders the Scene, the Boss Fight, the portraits, a sample Quest Board, a sample Quest Log, the World (themed too) and a sample Region map's three views (and its overworld in each biome, a Floor in each Dungeon kind: `themed-*`) to SVG files (and the board as `board.html`, the log as `log.html` and `log-terminal.txt`, the Overview as `overview.html` and `overview-terminal.txt`, the map's terminal grid as `map-*.txt`) for a look; `--snapshot` writes the art's test snapshots again after a deliberate change.

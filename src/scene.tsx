@@ -7,7 +7,10 @@ import type { EngineInterface, RenderInput } from 'claude-code'
 import { isUnderWay } from './engine'
 import type { BattleEncounter, BossFight, CheckKind, CraftingEncounter, Encounter } from './engine'
 import { bossStartText, questionCountOf } from './boss'
-import { bossSceneSvg, MONSTERS, sceneSvg } from './scene-art'
+import { briefingLine } from './briefing'
+import { setOutText } from './party'
+import type { PartyBeat } from './party'
+import { bossSceneSvg, departureSvg, MONSTERS, sceneSvg } from './scene-art'
 
 /** How wide the scene is drawn, in CSS pixels: its 128 pixels at 3x. */
 const ART_WIDTH = 384
@@ -155,17 +158,36 @@ export const describeScene = (encounter: Encounter | null): string => {
   return `${where}${paidXp(readXp, ' · ')} · first visit${paidXp(discoveryXp, ', ', 'Wisdom')}`
 }
 
+/**
+ * The Scene pane: the Boss Fight while it is under way; else a companion
+ * setting out (`beat`), until the next Encounter; else as sceneOf says.
+ * `briefing` is the Quest Giver's Briefing of the active Quest while it has
+ * no Encounter yet, else null: it then takes the line.
+ */
 export function drawScene(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
   encounter: Encounter | null,
   fight: BossFight | null = null,
+  briefing: string | null = null,
+  beat: PartyBeat | null = null,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text } = elements
   const shown = sceneOf(encounter, fight)
-  const line = shown.kind === 'boss' ? describeBossFight(shown.fight) : describeScene(encounter)
-  const isIdle = shown.kind === 'encounter' && encounter === null
+  const isDeparture = beat !== null && !isUnderWay(fight)
+  // While the Quest has no Encounter yet, the Quest Giver's Briefing (its
+  // first line) is what the Scene tells.
+  const isBriefing = !isDeparture && shown.kind === 'encounter' && briefing !== null
+  const line =
+    beat !== null && isDeparture
+      ? setOutText(beat)
+      : shown.kind === 'boss'
+        ? describeBossFight(shown.fight)
+        : isBriefing
+          ? briefingLine(briefing)
+          : describeScene(encounter)
+  const isIdle = !isDeparture && shown.kind === 'encounter' && encounter === null && !isBriefing
 
   // The terminal's table lists Svg too, as a fragment: it draws no SVG.
   if (e.surface === 'terminal' || !('Svg' in elements)) {
@@ -173,7 +195,11 @@ export function drawScene(
   }
 
   const { Svg } = elements
-  const art = shown.kind === 'boss' ? bossSceneSvg(shown.fight, ART_WIDTH) : sceneSvg(encounter, ART_WIDTH)
+  const art = isDeparture
+    ? departureSvg(ART_WIDTH)
+    : shown.kind === 'boss'
+      ? bossSceneSvg(shown.fight, ART_WIDTH)
+      : sceneSvg(encounter, ART_WIDTH)
 
   return (
     <Box flexDirection="column" gap={1}>

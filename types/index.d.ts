@@ -1,6 +1,13 @@
 // Claude Quest's contract: the game's data types, and the values the mod keeps
 // in `$.state` for the session.
 
+/**
+ * A `$.state` key holding one value per `id` (a ticket), as Claude Code's
+ * StateFamily marks it: the same shape, written here so the contract stands
+ * alone. No value has this shape; a member reads as `T`.
+ */
+export type StateFamily<T> = { readonly byId: T }
+
 export type Stats = {
   intelligence: number
   wisdom: number
@@ -54,6 +61,11 @@ export type Tally = {
   modulesDiscovered: number
   /** The Regions a Quest was closed in (won, lost or unfought). */
   regions: string[]
+  /**
+   * Right Prophecies in a row: a wrong one resets it, one never called or
+   * never settled leaves it. Absent on a Player kept by an older mod.
+   */
+  prophecyStreak?: number
 }
 
 /** The ids of the Badges there are: a small, fixed set. */
@@ -68,6 +80,7 @@ export type BadgeId =
   | 'unbroken'
   | 'wayfarer'
   | 'second-wind'
+  | 'oracle'
 
 /** A Badge on the Player: a feat of play, earned once, across every project. */
 export type Badge = {
@@ -91,11 +104,33 @@ export type Trophy = {
   earnedAt: number
 }
 
-/** The three XP pools: Claude's own activity, Battles, and the Sage's answers. */
-export type XpPool = 'ambient' | 'battle' | 'sage'
+/** The four XP pools: Claude's own activity, Battles, the Sage's answers, and Prophecies. */
+export type XpPool = 'ambient' | 'battle' | 'sage' | 'prophecy'
 
-/** The XP paid into each pool so far, against its cap. */
+/**
+ * The XP paid into each pool so far, against its cap. Counters kept by an
+ * older mod lack the pools added since (`prophecy`): read them as 0.
+ */
 export type PoolCounters = Record<XpPool, number>
+
+/**
+ * How the Player calls a Check will end: `red`, one failure (or failures it
+ * counts none of); `green`, passing; `rout`, two failures or more.
+ */
+export type ProphecyCall = 'red' | 'green' | 'rout'
+
+/**
+ * A Prophecy armed by Claude editing a test file: the Player's call, once
+ * made, of how the next Check will end. Settled by that Check.
+ */
+export type Prophecy = {
+  /** The test file whose edit armed it, as the tool named it. */
+  file: string
+  /** The Player's call; absent until they make it. */
+  call?: ProphecyCall
+  /** When it was armed, in ms since the epoch. */
+  armedAt: number
+}
 
 /**
  * A game moment the session's activity played. An Exploration is a read or a
@@ -213,6 +248,8 @@ export type Quest = {
   pools?: PoolCounters
   /** Wrong Sage answers during the Quest: any one spoils a Flawless win. */
   sageWrong?: number
+  /** Right Sage answers during the Quest, as the Quest Log counts them; absent until the first. */
+  sageRight?: number
   /** The ticket's title, as its Quest Source lists it; absent until known. */
   title?: string
   /**
@@ -222,6 +259,11 @@ export type Quest = {
   summary?: string
   /** Whether the ticket's Quest Source found it; absent until looked up. */
   verified?: TicketVerified
+  /**
+   * The Modules discovered during the Quest, counted: the third, sixth and
+   * ninth want a Scouting. Absent until the first.
+   */
+  modulesDiscovered?: number
 }
 
 /**
@@ -302,6 +344,13 @@ export type QuestionContent = {
   source: SourceRef
 }
 
+/**
+ * The NPCs who put Questions in the Question Queue, each drawn with their own
+ * portrait and name in the dialogue box: the Sage (about a change), the Quest
+ * Giver (the Briefing, about the ticket), the Cartographer (Scouting).
+ */
+export type Npc = 'sage' | 'quest-giver' | 'cartographer'
+
 /** A comprehension Question an NPC put to the Player, in the Question Queue. */
 export type Question = QuestionContent & {
   /**
@@ -311,8 +360,18 @@ export type Question = QuestionContent & {
   key?: string
   /** Unique in the session: `sage-1`, `sage-2`, ... for the Sage, `boss-1` ... for the boss. */
   id: string
-  /** Who asks it: the Sage (the Question Queue) or the boss (the Boss Fight). */
-  npc: 'Sage' | 'Boss'
+  /**
+   * Who asks it: the Sage (the Question Queue) or the boss (the Boss Fight);
+   * another NPC of the Question Queue by its Npc name (`quest-giver`,
+   * `cartographer`). `Sage` is the Sage's spelling from before other NPCs
+   * asked; read it through npcOf (src/engine.ts), which takes either.
+   */
+  npc: 'Sage' | 'Boss' | Npc
+  /**
+   * The Modules a right answer charts: a Scouting's, the three it asks
+   * about. Absent for every other Question.
+   */
+  modules?: string[]
   /** When it joined the Question Queue, in ms since the epoch. */
   queuedAt: number
   /**
@@ -401,6 +460,27 @@ export type GameState = {
    * found, not allowed): no more calls are made, Sage or Boss Fight.
    */
   haikuUnavailable?: boolean
+  /**
+   * The Prophecy armed and not yet settled: a test file was edited, and the
+   * next Check settles it. Null or absent when none is armed.
+   */
+  prophecy?: Prophecy | null
+  /**
+   * The files read lately in the project's Modules, the latest
+   * MAX_RECENT_READS, each once, oldest first: what a Scouting is shown.
+   * A search's folder may be among them. Absent until the first.
+   */
+  recentReads?: { path: string; module: string }[]
+  /** The Modules discovered this session outside any Quest: every fifth wants a Scouting. */
+  modulesDiscoveredOutsideQuest?: number
+  /** The Scoutings wanted this session outside any Quest, two at most. */
+  scoutingsOutsideQuest?: number
+  /**
+   * The Modules of this Region the Player has charted (a Scouting about them
+   * answered right), in the order charted. Seeded at session start from the
+   * Player's `$.store` key `charted:<root>`; absent until known.
+   */
+  chartedModules?: string[]
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */
@@ -500,13 +580,26 @@ export type QuestCard = {
    * beside its status; absent or empty when it has none.
    */
   tags?: string[]
+  /**
+   * The Dungeon the Quest is in: its epic (a GitHub milestone, a Jira
+   * parent), by a key stable for the epic (the milestone's number, the
+   * parent's issue key) and its name; absent for a Quest of the Wilds.
+   */
+  dungeon?: { key: string; name: string }
 }
 
 /**
  * One ticket as its Quest Source gets it by reference: its card, and its
- * description as plain text (`summary`), when it has one.
+ * description, when it has one: as plain text, cut for Haiku (`summary`), and
+ * whole (`description`: Markdown for GitHub Issues, plain text for Jira), as
+ * the Quest Log shows it.
  */
-export type TicketDetails = QuestCard & { summary?: string }
+export type TicketDetails = QuestCard & {
+  summary?: string
+  description?: string
+  /** How `description` is written: `markdown` (GitHub Issues) or plain `text` (Jira); absent with no description. */
+  descriptionFormat?: 'markdown' | 'text'
+}
 
 /** Why a Quest Source could not list its Quests. */
 export type QuestSourceProblem = {
@@ -550,15 +643,145 @@ export type QuestBoard = {
   page?: number
 }
 
+/**
+ * One ticket as the Quest Log and the Quest Board's Scroll fetched it from
+ * its Quest Source, once per ticket per session: `loading` while asked,
+ * `got` its details (null: no such ticket), `unavailable` the source could
+ * not be reached, its problem told (asked again on the next open).
+ */
+export type TicketFetch =
+  | { state: 'loading' }
+  | { state: 'got'; details: TicketDetails | null }
+  | { state: 'unavailable'; problem: QuestSourceProblem }
+
+/**
+ * The Quest Log pane: the ticket it shows (null before it was first opened),
+ * and the Region file's records of that ticket, read as it opened.
+ */
+export type QuestLog = { ticket: string | null; history: QuestRecord[] }
+
+/** The Quest Giver's briefing of a ticket, as its Briefing writes it for the Quest Log. */
+export type QuestBriefing = { text: string }
+
+/** The land a Region is drawn on, as its theme chose it (`meadow` without one). */
+export type Biome = 'meadow' | 'forest' | 'coast' | 'desert' | 'snow' | 'swamp'
+
+/** How a Dungeon's walls, floors and banner are drawn, as its theme chose it (`crypt` without one). */
+export type DungeonKind = 'crypt' | 'fortress' | 'aqueduct' | 'mine' | 'library' | 'tower'
+
+/**
+ * A Region's theme, from one Haiku call (issue #17): the name it is shown
+ * by (its folder's name beside it) and its biome; when it was made, ISO 8601.
+ */
+export type RegionTheme = { name: string; biome: Biome; themedAt: string }
+
+/** A Dungeon's theme, from one Haiku call: the name it is shown by (its epic's beside it) and its kind. */
+export type DungeonTheme = { name: string; kind: DungeonKind; themedAt: string }
+
+/** What the World remembers of a Region: its Dungeons by name with their counts, the Wilds, the Modules. */
+export type RegionSnapshot = {
+  /** When it was taken, ISO 8601. */
+  takenAt: string
+  /** Its Dungeons, each with its theme once one was made (kept when the Snapshot is taken again). */
+  dungeons: { key: string; name: string; total: number; cleared: number; theme?: DungeonTheme }[]
+  wilds: { total: number; cleared: number }
+  modules: { discovered: number; total: number }
+}
+
+/**
+ * A Region in the registry (`$.store` key `regions`, by root): its id (the
+ * folder name), its root, its remote (null when none was read), when it was
+ * first and last played (ISO 8601), and its Snapshot once its map was drawn.
+ * A Region seeded from an older Player's tally alone has no root (`''`)
+ * until it is played again.
+ */
+export type RegionEntry = {
+  id: string
+  root: string
+  remote: string | null
+  firstPlayedAt: string
+  lastPlayedAt: string
+  snapshot?: RegionSnapshot
+  /** Its theme once Haiku made one: made at most once, kept for ever. */
+  theme?: RegionTheme
+}
+
+/** The Overview pane's state: the registry as last read, the session's root, the page of Islands shown. */
+export type OverviewState = { page: number; regions: Record<string, RegionEntry>; root: string | null }
+/** A companion out with the party: one subagent sent out during a Quest, by its loop's agent id. */
+export type Companion = {
+  agentId: string
+  /** The spawn's short description of its task: `Implement issue #22`. */
+  description: string
+  /** What its loop played so far: reads, Craftings, Battles won. */
+  read: number
+  forged: number
+  battlesWon: number
+}
+
+/** A beat of the party the Scene plays: a companion setting out, until the next Encounter. */
+export type PartyBeat = { kind: 'out'; description: string }
+
+/** The session's party: the companions out, oldest first, and the Scene's beat. */
+export type Party = { companions: Companion[]; beat: PartyBeat | null }
+
+/** A listing of tickets for the Region map: loading, listed, or why it could not be. */
+export type RegionMapListing =
+  | { state: 'loading' }
+  | { state: 'listed'; quests: QuestCard[] }
+  | { state: 'unavailable'; problem: QuestSourceProblem }
+
+/**
+ * The Region map pane: which Region it draws (the current project, or
+ * another from its Snapshot), the view and the place in it, and what it read
+ * of the current project. See src/region-map.tsx.
+ */
+export type RegionMapState = {
+  target: { kind: 'live' } | { kind: 'snapshot'; entry: RegionEntry }
+  view: 'overworld' | 'dungeon' | 'modules'
+  /** The site entered last: a Dungeon's key, or '' for the Wilds; null before any. */
+  site: string | null
+  /** The Floor shown, from 0. */
+  floor: number
+  /** The Room selected, by its place on the Floor (from 0); null when none. */
+  selected: number | null
+  /** The current project as read when the pane opened: its root, id (folder name), remote, history and Modules on disk. */
+  project: { root: string; id: string; remote: string | null; history: QuestRecord[]; folders: string[] } | null
+  /** Its open tickets, read each time the pane opens. */
+  open: RegionMapListing
+  /** Its closed tickets, by project root: read once a session per Region (again only after a failure). */
+  closed: Record<string, RegionMapListing>
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'quest-mod': {
       game: GameState | null
       board: QuestBoard
+      /** The Quest Log pane: the ticket shown, its Region file history. */
+      questLog: QuestLog
+      /** Each ticket's details fetched this session, by ticket (`#21`, `ABC-123`): see TicketFetch. */
+      ticketDetails: StateFamily<TicketFetch>
+      /** The Quest Giver's briefing, by ticket; written by the Briefing (#19), read by the Quest Log. */
+      briefing: StateFamily<QuestBriefing>
       /** Questions made, by their change's hash: see src/question-cache.ts. */
       questionCache: { key: string; question: QuestionContent }[]
       /** Whether the Scene opened itself this session: once at most. */
       sceneOpened: boolean
+      /**
+       * The Quest Giver's Briefing of each ticket, its two lines as they
+       * arrived: a family by ticket, `{ plugin: 'quest-mod', key: 'briefing',
+       * id: '#19' }` (see src/briefing.ts). Kept for the session.
+       */
+      briefing: StateFamily<{ text: string }>
+      /** The Overview: the registry as last read, the session's root, the page of Islands. */
+      overview: OverviewState
+      /** The companions out with the party: see src/party.ts. */
+      party: Party
+      /** The Region map pane: see src/region-map.tsx. */
+      regionMap: RegionMapState
+      /** The Regions and Dungeons a theme was asked for this session, by key: see src/theming.ts. */
+      themeAttempts: string[]
     }
   }
 }

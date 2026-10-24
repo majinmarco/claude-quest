@@ -16,6 +16,11 @@ export type QuestSource = {
   list: () => Promise<Sourced<QuestCard[]>>
   /** One Quest by its ticket reference, with its description; null when the reference names none. */
   get: (ticket: string) => Promise<Sourced<TicketDetails | null>>
+  /**
+   * The current Region's closed (done) tickets, as cards, newest first, up
+   * to LISTING_CAP: what the Region map lights as cleared Rooms.
+   */
+  listClosed: () => Promise<Sourced<QuestCard[]>>
 }
 
 /**
@@ -48,12 +53,20 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
  * (a paragraph or heading a line). Blank lines squeezed; undefined when it
  * holds no text.
  */
-export const plainTextOf = (description: unknown): string | undefined => {
+export const plainTextOf = (description: unknown): string | undefined =>
+  wholePlainTextOf(description)?.slice(0, SUMMARY_READ)
+
+/** A ticket's description as plain text, as plainTextOf reads it, but whole: the Quest Log's. */
+export const wholePlainTextOf = (description: unknown): string | undefined => {
   const raw = typeof description === 'string' ? htmlToText(description) : adfToText(description)
   const text = raw.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 
-  return text === '' ? undefined : text.slice(0, SUMMARY_READ)
+  return text === '' ? undefined : text
 }
+
+/** A description written as Markdown (a GitHub issue's body), whole, as written; undefined when blank. */
+export const markdownOf = (description: unknown): string | undefined =>
+  typeof description === 'string' && description.trim() !== '' ? description.trim() : undefined
 
 const htmlToText = (text: string): string => {
   if (!/<\/?[a-z][^>]*>/i.test(text)) {

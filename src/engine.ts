@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Badge, BadgeId, Battle, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
+import type { Badge, BadgeId, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Npc, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
 
-export type { Badge, Battle, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
+export type { Badge, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Npc, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
 
 export type GameEvent =
   /**
@@ -32,6 +32,11 @@ export type GameEvent =
        * across the file): never a major edit, however many lines it touched.
        */
       replaceAll?: boolean
+      /**
+       * `diff`: seen in the working tree's diff rather than in a tool's
+       * record of the change; played the same.
+       */
+      source?: 'diff'
     }
   | {
       type: 'SESSION_MEASURED'
@@ -82,6 +87,10 @@ export type GameEvent =
        * already answered this session is not queued again.
        */
       key?: string
+      /** The NPC who asks it, drawn in the dialogue box; the Sage when absent. */
+      npc?: Npc
+      /** The Modules a right answer charts: a Scouting's. */
+      modules?: string[]
     }
   /** The dialogue box put a waiting Question in front of the Player, at `at`. */
   | { type: 'QUESTION_SHOWN'; id: string; at: number }
@@ -130,6 +139,20 @@ export type GameEvent =
   | { type: 'BOSS_ANSWERED'; id: string; choice: number; at: number }
   /** The Player skipped the Boss Fight. */
   | { type: 'BOSS_FIGHT_SKIPPED' }
+  /**
+   * Claude wrote or edited a test file (`path`, as the change named it; see
+   * isTestFile), at `at`: a Prophecy is armed for the next Check. Played
+   * after every FILE_EDIT of a test file, whatever saw the change (a Write,
+   * Edit or NotebookEdit, a change read from git).
+   */
+  | { type: 'TEST_FILE_EDITED'; path: string; at: number }
+  /** The Player called the armed Prophecy: how the next Check will end. */
+  | { type: 'PROPHECY_MADE'; call: ProphecyCall }
+  /**
+   * A Check is about to run (its TEST_PASS or TEST_FAIL comes when it ends):
+   * no Prophecy can be called from now, as its output could be read first.
+   */
+  | { type: 'CHECK_STARTED' }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
@@ -143,8 +166,26 @@ export type Effect =
    * Question about. A Crafting's file, or the edits that won a Battle.
    */
   | { type: 'CODE_CHANGED'; changes: FileChange[] }
-  /** A Question joined the Question Queue; `waiting` is how many wait now. */
-  | { type: 'QUESTION_QUEUED'; id: string; waiting: number }
+  /**
+   * A Question joined the Question Queue; `waiting` is how many wait now.
+   * `npc` names who asks it when that is not the Sage.
+   */
+  | { type: 'QUESTION_QUEUED'; id: string; waiting: number; npc?: Exclude<Npc, 'sage'> }
+  /**
+   * The active Quest's ticket was found with a summary: the Quest Giver's
+   * Briefing is to be made from it (outside the engine), then queued as a
+   * QUESTION_READY from the `quest-giver`.
+   */
+  | { type: 'BRIEFING_WANTED'; ticket: string; title?: string; summary: string }
+  /**
+   * The Cartographer is to scout (outside the engine): one Question about
+   * `modules`, the three Modules just discovered, made from `files`, the
+   * paths read in them lately (searched folders among them), oldest first.
+   * Queued as a QUESTION_READY from the `cartographer`, with `modules`.
+   */
+  | { type: 'SCOUTING_WANTED'; modules: string[]; files: string[] }
+  /** A Scouting answered right charted `modules`, none of them charted before. */
+  | { type: 'MODULES_CHARTED'; modules: string[] }
   /** The Player answered a Question: right or wrong, its explanation shows. */
   | { type: 'QUESTION_ANSWERED'; answer: QuestionAnswer }
   /** HP lost: a wrong answer's cost. */
@@ -200,6 +241,14 @@ export type Effect =
   | { type: 'TROPHY_EARNED'; trophy: Trophy }
   /** The active Quest closed, its Boss Fight ended as `outcome`. */
   | { type: 'QUEST_CLOSED'; ticket: string; outcome: QuestOutcome }
+  /** A Prophecy is armed, not yet called, on the edit of test file `file`. */
+  | { type: 'PROPHECY_ARMED'; file: string }
+  /**
+   * A Check settled the Prophecy the Player called: `call` theirs, `outcome`
+   * how the Check ended, `xp` what a right call paid (0 when wrong, or its
+   * pool full).
+   */
+  | { type: 'PROPHECY_SETTLED'; call: ProphecyCall; outcome: ProphecyCall; isRight: boolean; xp: number }
 
 /**
  * What a Haiku call is for: the Sage's Question after a code-changing
@@ -324,13 +373,20 @@ export const UNFOUGHT_SHARE = 1 / 4
 /** How many Questions a full Boss Fight asks: fewer scale its reward down. */
 export const BOSS_QUESTIONS = 3
 
+/**
+ * The Dexterity XP a right Prophecy pays, from the prophecy pool: half a Sage
+ * answer, as it is a call made before the fact, not a reading of the code.
+ * A wrong one pays nothing and costs nothing (docs/adr/0004-prophecy.md).
+ */
+export const PROPHECY_XP = 10
+
 /** What each XP pool holds per Quest. */
-export const POOL_CAPS: Record<XpPool, number> = { ambient: 60, battle: 60, sage: 200 }
+export const POOL_CAPS: Record<XpPool, number> = { ambient: 60, battle: 60, sage: 200, prophecy: 30 }
 
 /** What each XP pool holds per session, outside any Quest. */
-export const SESSION_POOL_CAPS: Record<XpPool, number> = { ambient: 20, battle: 30, sage: 100 }
+export const SESSION_POOL_CAPS: Record<XpPool, number> = { ambient: 20, battle: 30, sage: 100, prophecy: 15 }
 
-const emptyPools = (): PoolCounters => ({ ambient: 0, battle: 0, sage: 0 })
+const emptyPools = (): PoolCounters => ({ ambient: 0, battle: 0, sage: 0, prophecy: 0 })
 
 /**
  * How many edits made during a Battle the Sage asks about once it is won:
@@ -431,6 +487,7 @@ export const emptyTally = (): Tally => ({
   sageRight: 0,
   modulesDiscovered: 0,
   regions: [],
+  prophecyStreak: 0,
 })
 
 export const newPlayer = (): Player => ({
@@ -474,21 +531,21 @@ export const step = (
 ): { state: GameState; effects: Effect[] } => {
   switch (event.type) {
     case 'FILE_READ':
-      return explore(state, event.path, event.module)
+      return scout(explore(withRead(state, event.path, event.module), event.path, event.module), rules)
     case 'SESSION_MEASURED':
       return measure(state, event)
     case 'QUEST_START':
       return startQuest(state, event.ticket, event.difficulty ?? 'Unrated')
     case 'QUEST_DETAILS':
-      return { state: withDetails(state, event), effects: [] }
+      return { state: withDetails(state, event), effects: briefingWanted(state, event, rules) }
     case 'TEST_FAIL':
-      return checkFailed(state, event)
+      return settleProphecy(checkFailed(state, event), event.failures === null || event.failures <= 1 ? 'red' : 'rout')
     case 'TEST_PASS':
-      return checkPassed(state, event.check)
+      return settleProphecy(checkPassed(state, event.check), 'green')
     case 'FILE_EDIT':
       return craft(withFix(withQuestChange(state, event), event), event)
     case 'QUESTION_READY':
-      return queueQuestion(state, event.question, event.at, event.key)
+      return queueQuestion(state, event.question, event.at, event.key, event.npc ?? 'sage', event.modules)
     case 'QUESTION_SHOWN':
       return showQuestion(state, event.id, event.at)
     case 'QUESTION_ANSWERED':
@@ -513,6 +570,12 @@ export const step = (
       return answerBoss(state, event)
     case 'BOSS_FIGHT_SKIPPED':
       return isUnderWay(state.bossFight) ? closeQuest(state, 'skipped') : { state, effects: [] }
+    case 'TEST_FILE_EDITED':
+      return armProphecy(state, event.path, event.at)
+    case 'PROPHECY_MADE':
+      return makeProphecy(state, event.call)
+    case 'CHECK_STARTED':
+      return { state: state.prophecy != null && state.prophecy.call === undefined ? { ...state, prophecy: null } : state, effects: [] }
   }
 }
 
@@ -702,6 +765,86 @@ const explore = (
   }
 }
 
+/** How many Modules discovered in a Quest make a Scouting: the third, sixth, ninth. */
+export const SCOUTING_EVERY = 3
+
+/** The most Scoutings a Quest has. */
+export const MAX_SCOUTINGS_PER_QUEST = 3
+
+/** How many Modules discovered outside a Quest make a Scouting. */
+export const SCOUTING_EVERY_OUTSIDE = 5
+
+/** The most Scoutings a session has outside any Quest. */
+export const MAX_SCOUTINGS_OUTSIDE = 2
+
+/** How many Modules a Scouting asks about: the latest discovered. */
+export const SCOUTING_MODULES = 3
+
+/** The most paths a Scouting is handed, the latest read, before the hook keeps the files among them. */
+export const MAX_SCOUTING_CANDIDATES = 24
+
+/** The most reads the game keeps for Scoutings. */
+export const MAX_RECENT_READS = 60
+
+/** The game with a read of `path` in `module` kept as the latest; a read in no Module is not kept. */
+const withRead = (state: GameState, path: string, module: string | null): GameState =>
+  module === null
+    ? state
+    : {
+        ...state,
+        recentReads: [...(state.recentReads ?? []).filter(read => read.path !== path), { path, module }].slice(
+          -MAX_RECENT_READS,
+        ),
+      }
+
+/** The Scouting the game wants now: about the latest Modules discovered and what was read in them. */
+const scoutingOf = (state: GameState): Effect => {
+  const modules = state.visitedModules.slice(-SCOUTING_MODULES)
+  const files = (state.recentReads ?? [])
+    .filter(read => modules.includes(read.module))
+    .map(read => read.path)
+    .slice(-MAX_SCOUTING_CANDIDATES)
+
+  return { type: 'SCOUTING_WANTED', modules, files }
+}
+
+// The Cartographer scouts as Modules are discovered: in a Quest at the third,
+// sixth and ninth; outside one at every fifth, twice a session at most. A
+// Scouting is a Sage Question: with no Sage budget where the Player is
+// (`sageCallsPerQuest` in a Quest, `sageCallsOutsideQuest` outside) there is
+// none. Whether it costs a call, or was asked already, is for
+// HAIKU_CALL_REQUESTED and the Question Queue to say.
+const scout = (
+  { state, effects }: { state: GameState; effects: Effect[] },
+  rules: Rules,
+): { state: GameState; effects: Effect[] } => {
+  if (!effects.some(effect => effect.type === 'MODULE_DISCOVERED')) {
+    return { state, effects }
+  }
+
+  const { quest } = state
+  if (quest !== null) {
+    const count = (quest.modulesDiscovered ?? 0) + 1
+    const counted: GameState = { ...state, quest: { ...quest, modulesDiscovered: count } }
+    const isDue =
+      count % SCOUTING_EVERY === 0 && count / SCOUTING_EVERY <= MAX_SCOUTINGS_PER_QUEST && rules.sageCallsPerQuest > 0
+
+    return { state: counted, effects: isDue ? [...effects, scoutingOf(counted)] : effects }
+  }
+
+  const count = (state.modulesDiscoveredOutsideQuest ?? 0) + 1
+  const scoutings = state.scoutingsOutsideQuest ?? 0
+  const isDue =
+    count % SCOUTING_EVERY_OUTSIDE === 0 && scoutings < MAX_SCOUTINGS_OUTSIDE && rules.sageCallsOutsideQuest > 0
+  const counted: GameState = {
+    ...state,
+    modulesDiscoveredOutsideQuest: count,
+    ...(isDue ? { scoutingsOutsideQuest: scoutings + 1 } : {}),
+  }
+
+  return { state: counted, effects: isDue ? [...effects, scoutingOf(counted)] : effects }
+}
+
 /** An Encounter belongs to the active Quest; between Quests, to none. */
 const attach = (quest: Quest | null, encounter: Encounter): Quest | null =>
   quest === null
@@ -747,7 +890,8 @@ const pay = (
 
   if (pool !== null) {
     const { quest } = state
-    const counters = (quest !== null ? quest.pools : state.pools) ?? emptyPools()
+    // Counters kept by an older mod lack the pools added since.
+    const counters = { ...emptyPools(), ...(quest !== null ? quest.pools : state.pools) }
     const cap = (quest !== null ? POOL_CAPS : SESSION_POOL_CAPS)[pool]
     const before = counters[pool]
     paid = Math.min(paid, Math.max(0, cap - before))
@@ -797,6 +941,7 @@ export const BADGES: Record<BadgeId, string> = {
   unbroken: 'Unbroken',
   wayfarer: 'Wayfarer',
   'second-wind': 'Second Wind',
+  oracle: 'Oracle',
 }
 
 /** What just happened, for the Badges a single moment earns. */
@@ -811,7 +956,7 @@ export type BadgeContext = {
 export const DRAGON_HP = 20
 
 /** How many of a lifetime count earn its Badge. */
-export const BADGE_COUNTS = { modules: 25, sageRight: 25, bossStreak: 5, regions: 3 } as const
+export const BADGE_COUNTS = { modules: 25, sageRight: 25, bossStreak: 5, regions: 3, prophecyStreak: 5 } as const
 
 /**
  * The Badges the Player earns now and does not hold yet, by their lifetime
@@ -831,6 +976,7 @@ export const earnedBadges = (player: Player, context: BadgeContext = {}): BadgeI
     unbroken: tally.bossStreak >= BADGE_COUNTS.bossStreak,
     wayfarer: tally.regions.length >= BADGE_COUNTS.regions,
     'second-wind': context.bossWon?.exhausted === true,
+    oracle: (tally.prophecyStreak ?? 0) >= BADGE_COUNTS.prophecyStreak,
   }
 
   return (Object.keys(BADGES) as BadgeId[]).filter(id => earned[id] && !held.has(id))
@@ -855,10 +1001,20 @@ const award = (
   }
 }
 
-/** The MVP's Stats and the title each names, in the order a tie goes. */
+/**
+ * The Stats in play: earned by play and shown at full strength. The others
+ * stay at 0, drawn dimmed as not yet in play (the Overview's sheet).
+ */
+export const STATS_IN_PLAY: readonly StatName[] = ['intelligence', 'wisdom', 'dexterity', 'strength']
+
+/** Whether `stat` is in play. */
+export const isInPlay = (stat: StatName): boolean => STATS_IN_PLAY.includes(stat)
+
+/** The Stats in play and the title each names, in the order a tie goes. */
 const TITLES: [StatName, string][] = [
   ['intelligence', 'Scholar'],
   ['wisdom', 'Pathfinder'],
+  ['dexterity', 'Duelist'],
   ['strength', 'Warrior'],
 ]
 
@@ -869,9 +1025,9 @@ export const TITLE_LEVEL = 3
 export const VETERAN_LEVEL = 10
 
 /**
- * The Player's title: from level 3, named by their highest MVP Stat (Scholar,
- * Pathfinder, Warrior), Veteran from level 10; null before, or with no Stat
- * earned yet.
+ * The Player's title: from level 3, named by their highest Stat in play
+ * (Scholar, Pathfinder, Duelist, Warrior), Veteran from level 10; null
+ * before, or with no Stat earned yet.
  */
 export const titleOf = (player: Player): string | null => {
   if (player.level < TITLE_LEVEL) {
@@ -918,7 +1074,7 @@ const measure = (
 // Quest already running, started again, carries on with its Encounters. A new
 // Quest heals QUEST_HEAL HP; the Quest just closed, started again, does not.
 // The Battles under way are cleared, silently: they belong to the work before
-// it, and a win now would pay the new Quest for it.
+// it, and a win now would pay the new Quest for it. So is a Prophecy armed.
 const startQuest = (
   state: GameState,
   ticket: string,
@@ -935,13 +1091,58 @@ const startQuest = (
 
   // The Boss Fight belongs to the Quest it ends: a new Quest has none yet.
   return {
-    state: { ...state, player: rested.player, quest, bossFight: null, battles: [] },
+    state: { ...state, player: rested.player, quest, bossFight: null, battles: [], prophecy: null },
     effects: [...abandoned, { type: 'QUEST_STARTED', ticket }, ...rested.effects],
   }
 }
 
 /** The most of a ticket's summary a Quest keeps, in characters: what Haiku is shown of it. */
 export const MAX_SUMMARY_CHARS = 1500
+
+/** Where a Question about the ticket itself points (the Briefing's): no file, no lines. */
+export const TICKET_SOURCE = '<ticket>'
+
+/** Whether `question` is about the ticket itself (the Briefing's), pointing at no file. */
+export const isAboutTicket = (question: Pick<QuestionContent, 'source'>): boolean =>
+  question.source.path === TICKET_SOURCE
+
+/** Who asks `question`: its Npc, the Sage for one queued before other NPCs asked. */
+export const npcOf = (question: Pick<Question, 'npc'>): Npc =>
+  question.npc === 'quest-giver' || question.npc === 'cartographer' ? question.npc : 'sage'
+
+// The Quest Giver briefs a Quest once its ticket is found with a summary:
+// details for the active Quest's ticket, not verified missing, with a summary
+// to read. The Briefing is a Sage Question, so with no Sage budget per ticket
+// (`sageCallsPerQuest` 0) there is none, not even from the cache. Whether it
+// costs a call, or was asked already, is for HAIKU_CALL_REQUESTED and the
+// Question Queue to say.
+const briefingWanted = (
+  state: GameState,
+  { ticket, title, summary, verified }: Extract<GameEvent, { type: 'QUEST_DETAILS' }>,
+  rules: Rules,
+): Effect[] => {
+  const { quest } = state
+  if (
+    quest === null ||
+    quest.ticket !== ticket ||
+    summary === undefined ||
+    summary.trim() === '' ||
+    (verified ?? quest.verified) === 'not-found' ||
+    rules.sageCallsPerQuest <= 0
+  ) {
+    return []
+  }
+  const known = title ?? quest.title
+
+  return [
+    {
+      type: 'BRIEFING_WANTED',
+      ticket,
+      summary: summary.slice(0, MAX_SUMMARY_CHARS),
+      ...(known === undefined ? {} : { title: known }),
+    },
+  ]
+}
 
 // What is known of a ticket arrives after its Quest started (looked up
 // unawaited): it is kept on the Quest if that ticket's Quest is still the
@@ -1112,6 +1313,81 @@ const checkPassed = (
   }
 }
 
+/** The three calls of a Prophecy, in the order of their Buttons and hotkeys. */
+export const PROPHECY_CALLS: readonly ProphecyCall[] = ['red', 'green', 'rout']
+
+/** A call as the Player reads it: `Red`, `Green`, `Rout`. */
+export const callName = (call: ProphecyCall): string => call.charAt(0).toUpperCase() + call.slice(1)
+
+// A Prophecy: when Claude writes or edits a test file, the Player may call
+// how the next Check will end before it runs. Once a Check starts
+// (CHECK_STARTED), one not yet called goes: none is made with the Check's
+// output in sight. Re-arming replaces a Prophecy
+// not yet called (its file and time); one called stays until its Check.
+const armProphecy = (
+  state: GameState,
+  file: string,
+  armedAt: number,
+): { state: GameState; effects: Effect[] } => {
+  if (state.prophecy?.call !== undefined) {
+    return { state, effects: [] }
+  }
+
+  return {
+    state: { ...state, prophecy: { file, armedAt } },
+    effects: [{ type: 'PROPHECY_ARMED', file }],
+  }
+}
+
+// The Player's call: taken only while a Prophecy is armed and not yet called.
+const makeProphecy = (state: GameState, call: ProphecyCall): { state: GameState; effects: Effect[] } => {
+  const { prophecy } = state
+  if (prophecy == null || prophecy.call !== undefined) {
+    return { state, effects: [] }
+  }
+
+  return { state: { ...state, prophecy: { ...prophecy, call } }, effects: [] }
+}
+
+// The next Check run, of any kind, settles the Prophecy armed: `outcome` is
+// how it ended (green passing; red one failure, or failures it counts none
+// of; rout two or more). Not the Check the test file belongs to: the mod
+// cannot tell which that is (docs/adr/0004-prophecy.md). A right call pays
+// PROPHECY_XP of Dexterity from the prophecy pool and adds to the streak
+// the Oracle counts, paid or not; a wrong one pays nothing, costs nothing
+// and resets the streak. One never called goes, leaving the streak.
+const settleProphecy = (
+  played: { state: GameState; effects: Effect[] },
+  outcome: ProphecyCall,
+): { state: GameState; effects: Effect[] } => {
+  const { prophecy } = played.state
+  if (prophecy == null) {
+    return played
+  }
+
+  const cleared: GameState = { ...played.state, prophecy: null }
+  const { call } = prophecy
+  if (call === undefined) {
+    return { state: cleared, effects: played.effects }
+  }
+
+  const isRight = call === outcome
+  const paid = isRight ? pay(cleared, 'prophecy', 'dexterity', PROPHECY_XP) : { state: cleared, effects: [], paid: 0 }
+  const { player } = paid.state
+  const streak = isRight ? (player.tally.prophecyStreak ?? 0) + 1 : 0
+  const awarded = award({ ...paid.state, player: { ...player, tally: { ...player.tally, prophecyStreak: streak } } }, {})
+
+  return {
+    state: awarded.state,
+    effects: [
+      ...played.effects,
+      { type: 'PROPHECY_SETTLED', call, outcome, isRight, xp: paid.paid },
+      ...paid.effects,
+      ...awarded.effects,
+    ],
+  }
+}
+
 /**
  * Whether the change cached under `key` was asked about already this
  * session: its Question answered, or waiting. It is not asked again.
@@ -1123,12 +1399,16 @@ export const isAsked = (state: GameState, key: string): boolean =>
 // them; nothing in it ever holds up the session. A Question about a change
 // whose Question was already answered this session (a cache hit, the same
 // diff again) is not queued: an answer known pays once. Nor is one about a
-// change whose Question is waiting already: it is asked once.
+// change whose Question is waiting already: it is asked once. Another NPC's
+// Question (the Quest Giver's Briefing) waits in the same queue, answered
+// and paid as the Sage's are; the Sage keeps her older spelling, `Sage`.
 const queueQuestion = (
   state: GameState,
   content: QuestionContent,
   at: number,
   key: string | undefined,
+  npc: Npc,
+  modules?: string[],
 ): { state: GameState; effects: Effect[] } => {
   if (key !== undefined && isAsked(state, key)) {
     return { state, effects: [] }
@@ -1138,8 +1418,9 @@ const queueQuestion = (
   const question: Question = {
     ...content,
     ...(key !== undefined ? { key } : {}),
+    ...(modules !== undefined && modules.length > 0 ? { modules } : {}),
     id: `sage-${questionsAsked}`,
-    npc: 'Sage',
+    npc: npc === 'sage' ? 'Sage' : npc,
     queuedAt: at,
     shownAt: null,
   }
@@ -1147,7 +1428,9 @@ const queueQuestion = (
 
   return {
     state: { ...state, questions, questionsAsked },
-    effects: [{ type: 'QUESTION_QUEUED', id: question.id, waiting: questions.length }],
+    effects: [
+      { type: 'QUESTION_QUEUED', id: question.id, waiting: questions.length, ...(npc === 'sage' ? {} : { npc }) },
+    ],
   }
 }
 
@@ -1172,10 +1455,15 @@ const showQuestion = (
  * answered in under `hastyAnswerMs` from when it was shown. With no answer
  * time (never recorded as shown: `/sage A` on a Question never told is shown
  * instead, and the Sage's pane records what it draws) it could not have been
- * read, so it is hasty.
+ * read, so it is hasty. A Question about the ticket itself (the Briefing's)
+ * points at no lines but asks for the ticket read: it is non-trivial. So is
+ * a Scouting (the Cartographer's), which asks for files read.
  */
 const isHasty = (question: Question, answerMs: number | null, rules: Rules): boolean =>
-  question.source.lines.length >= rules.nonTrivialLines && (answerMs === null || answerMs < rules.hastyAnswerMs)
+  (isAboutTicket(question) ||
+    npcOf(question) === 'cartographer' ||
+    question.source.lines.length >= rules.nonTrivialLines) &&
+  (answerMs === null || answerMs < rules.hastyAnswerMs)
 
 // A right answer pays QUESTION_XP to the Question's Stat (Wisdom for a
 // `wisdom` tag, else Intelligence) from the sage pool, HASTY_ANSWER_XP when it
@@ -1230,10 +1518,30 @@ const answerQuestion = (
     ? paid.state
     : { ...paid.state, player: { ...player, tally: { ...player.tally, sageRight: player.tally.sageRight + 1 } } }
   const awarded = award(tallied, {}, at)
+  const { quest } = awarded.state
+  const charted = chart(awarded.state, question.modules ?? [])
 
   return {
-    state: { ...awarded.state, lastAnswer: answer },
-    effects: [{ type: 'QUESTION_ANSWERED', answer }, ...paid.effects, ...awarded.effects],
+    state: {
+      ...charted.state,
+      quest: quest === null ? null : { ...quest, sageRight: (quest.sageRight ?? 0) + 1 },
+      lastAnswer: answer,
+    },
+    effects: [{ type: 'QUESTION_ANSWERED', answer }, ...paid.effects, ...awarded.effects, ...charted.effects],
+  }
+}
+
+/** The game with `modules` charted, those not charted already told as MODULES_CHARTED. */
+const chart = (state: GameState, modules: readonly string[]): { state: GameState; effects: Effect[] } => {
+  const kept = state.chartedModules ?? []
+  const fresh = [...new Set(modules)].filter(module => !kept.includes(module))
+  if (fresh.length === 0) {
+    return { state, effects: [] }
+  }
+
+  return {
+    state: { ...state, chartedModules: [...kept, ...fresh] },
+    effects: [{ type: 'MODULES_CHARTED', modules: fresh }],
   }
 }
 
@@ -1456,6 +1764,7 @@ const isConsoled = (player: Player, region: string | null, ticket: string): bool
 // Fight stays, ended, until the next Quest starts; the Encounter under way is
 // put away, so the Scene shows how the Quest ended until the next Encounter.
 // The Battles under way are cleared, paying nothing: the Quest's work is done.
+// A Prophecy armed is cleared too, silently.
 const closeQuest = (
   state: GameState,
   outcome: QuestOutcome,
@@ -1525,7 +1834,7 @@ const closeQuest = (
   }
 }
 
-/** The game once its Quest closed: no Quest, Encounter or Battle; the Boss Fight ended. */
+/** The game once its Quest closed: no Quest, Encounter, Battle or Prophecy; the Boss Fight ended. */
 const closedState = (
   state: GameState,
   fight: BossFight | null,
@@ -1538,6 +1847,7 @@ const closedState = (
   quest: null,
   encounter: null,
   battles: [],
+  prophecy: null,
   bossFight:
     fight === null
       ? null
@@ -1549,3 +1859,90 @@ const closedState = (
           ...(trophy === undefined ? {} : { trophy: trophy.name }),
         },
 })
+
+/**
+ * The Boss Fight as the Quest Log tells it: none yet, approaching (its
+ * Questions being made), fighting (its HP and the Questions left), or how it
+ * ended, once its Quest closed.
+ */
+export type BossProgress =
+  | { status: 'none' }
+  | { status: 'approaching' }
+  | { status: 'fighting'; hp: number; maxHp: number; questionsLeft: number }
+  | { status: QuestOutcome }
+
+/** One XP pool as the Quest Log tells it: what the Quest paid into it, against its cap. */
+export type PoolProgress = { pool: XpPool; earned: number; cap: number; isFull: boolean }
+
+/**
+ * The active Quest's progress, as the Quest Log shows it: its Encounters so
+ * far (the Modules first discovered in it, in order, the items forged, the
+ * Battles won and those standing), its Sage Questions answered right and
+ * wrong and waiting, its Boss Fight, and the XP paid into each pool against
+ * the Quest's cap.
+ */
+export type QuestProgress = {
+  ticket: string
+  encounters: number
+  modulesDiscovered: string[]
+  itemsForged: string[]
+  battlesWon: number
+  battlesStanding: Pick<Battle, 'check' | 'foe' | 'hp' | 'maxHp'>[]
+  questions: { right: number; wrong: number; waiting: number }
+  boss: BossProgress
+  pools: PoolProgress[]
+}
+
+const POOLS: readonly XpPool[] = ['ambient', 'battle', 'sage']
+
+/** The Boss Fight of `ticket`'s Quest, as the Quest Log tells it. */
+const bossProgressOf = (fight: BossFight | null | undefined, ticket: string): BossProgress => {
+  if (fight == null || fight.ticket !== ticket) {
+    return { status: 'none' }
+  }
+  if (fight.status === 'summoned') {
+    return { status: 'approaching' }
+  }
+
+  return fight.status === 'fighting'
+    ? { status: 'fighting', hp: fight.hp, maxHp: fight.maxHp, questionsLeft: fight.questions.length }
+    : { status: fight.status }
+}
+
+/**
+ * The active Quest's progress, from the game alone; null between Quests.
+ * Deterministic: the same game, the same progress.
+ */
+export const questProgressOf = (state: GameState): QuestProgress | null => {
+  const { quest } = state
+  if (quest === null) {
+    return null
+  }
+
+  const pools = quest.pools ?? emptyPools()
+  const discovered = quest.encounters.flatMap(encounter =>
+    encounter.kind === 'Exploration' && encounter.isFirstVisit && encounter.module !== null ? [encounter.module] : [],
+  )
+  const forged = quest.encounters.flatMap(encounter => (encounter.kind === 'Crafting' ? [encounter.item] : []))
+
+  return {
+    ticket: quest.ticket,
+    encounters: quest.encounters.length,
+    modulesDiscovered: [...new Set(discovered)],
+    itemsForged: [...new Set(forged)],
+    battlesWon: quest.encounters.filter(encounter => encounter.kind === 'Battle' && encounter.outcome === 'won').length,
+    battlesStanding: state.battles.map(({ check, foe, hp, maxHp }) => ({ check, foe, hp, maxHp })),
+    questions: {
+      right: quest.sageRight ?? 0,
+      wrong: quest.sageWrong ?? 0,
+      waiting: state.questions.filter(question => question.npc === 'Sage').length,
+    },
+    boss: bossProgressOf(state.bossFight, quest.ticket),
+    pools: POOLS.map(pool => ({
+      pool,
+      earned: pools[pool],
+      cap: POOL_CAPS[pool],
+      isFull: pools[pool] >= POOL_CAPS[pool],
+    })),
+  }
+}

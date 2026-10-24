@@ -175,6 +175,21 @@ function changeQuests(
   return changeRegion($, region => ({ ...region, quests: change(region.quests) }))
 }
 
+const isRecord = (value: unknown): value is QuestRecord =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as QuestRecord).ticket === 'string' &&
+  typeof (value as QuestRecord).startedAt === 'string' &&
+  typeof (value as QuestRecord).status === 'string'
+
+/**
+ * The runs of `ticket`'s Quest a Region file's JSON (readRegionFile's value)
+ * records, oldest first, as the Quest Log shows them; none when it holds no
+ * Region.
+ */
+export const recordsOf = (region: unknown, ticket: string): QuestRecord[] =>
+  isRegion(region) ? region.quests.filter(isRecord).filter(record => record.ticket === ticket) : []
+
 /** The `$.store` key the Player keeps a project's discovered Modules under. */
 export const discoveredKey = (root: string): string =>
   `discovered:${root.replace(/\\/g, '/').replace(/(.)\/+$/, '$1')}`
@@ -219,6 +234,35 @@ export async function recordModulesDiscovered(
   // Seeded first when it never was, so a Region file's list is never lost.
   const kept = await loadDiscovered($, root)
   await $.store.set(discoveredKey(root), [...new Set([...kept, ...modules])])
+}
+
+/**
+ * The `$.store` key the Player keeps a project's charted Modules under: a
+ * sibling of its discovered ones, so a mod reading `discovered:<root>` as a
+ * list of Modules reads it as before.
+ */
+export const chartedKey = (root: string): string =>
+  `charted:${root.replace(/\\/g, '/').replace(/(.)\/+$/, '$1')}`
+
+/** The Modules the Player has charted in the project at `root`; none until the first. */
+export async function loadCharted($: EngineInterface, root: string): Promise<string[]> {
+  const kept = await $.store.get(chartedKey(root))
+
+  return isModuleList(kept) ? kept : []
+}
+
+/**
+ * Adds the Modules the session has charted to the Player's for the project
+ * at `root`: the session's whole list, so a write that failed is made good
+ * by the next.
+ */
+export async function recordModulesCharted(
+  $: EngineInterface,
+  root: string,
+  modules: readonly string[],
+): Promise<void> {
+  const kept = await loadCharted($, root)
+  await $.store.set(chartedKey(root), [...new Set([...kept, ...modules])])
 }
 
 /**
