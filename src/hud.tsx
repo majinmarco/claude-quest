@@ -15,6 +15,7 @@ import type { Encounter, GameState, ManaLevel, Player, ProphecyCall } from './en
 import { COMPACTION_WARNING, hudStrip, PIXELS_PER_COLUMN, portraitOf, STILL, STRIP_HEIGHT, stripWidth } from './hud-art'
 import type { StripMotion, StripSegment } from './hud-art'
 import { MONSTERS } from './scene-art'
+import { sheetText } from './sheet'
 import type { HudStyle } from './settings'
 import type { SpriteName } from './sprites'
 
@@ -95,24 +96,10 @@ export const levelLine = (player: Player): string => {
 }
 
 /**
- * The Player's Badges, trophies, title and Stats as text, for `/badges`: in the
- * terminal, until the v0.2 sheet.
+ * The Player's character sheet as text, for `/badges`: the Overview's first
+ * part (src/sheet.ts).
  */
-export const badgesText = (player: Player): string => {
-  const badges = player.badges ?? []
-  const trophies = player.trophies ?? []
-  const total = Object.keys(BADGES).length
-
-  return [
-    `${levelLine(player)} · ${player.totalXp} XP lifetime · ${statsLine(player)}`,
-    badges.length === 0
-      ? `Badges (0/${total}): none yet.`
-      : `Badges (${badges.length}/${total}): ${badges.map(badge => badge.name).join(', ')}`,
-    trophies.length === 0
-      ? 'Trophies (0): none yet. Win a Boss Fight to earn its Quest\'s.'
-      : `Trophies (${trophies.length}): ${trophies.map(trophy => trophy.name).join(', ')}`,
-  ].join('\n')
-}
+export const badgesText = (player: Player): string => sheetText(player)
 
 /** A Text of the HUD: its words and how it is drawn. */
 type Piece = { text: string; color?: string; bold?: boolean; dimColor?: boolean }

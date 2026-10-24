@@ -31,7 +31,7 @@ The single map holding all of the Player's Regions, each an Island, as the Overv
 _Avoid_: Game, universe
 
 **Island**:
-A Region as the World draws it: one of three sizes by how many Quests the Region holds, lit by the share of them cleared, the Region the Player is in marked. Choosing an Island opens that Region's map.
+A Region as the World draws it: one of three sizes by how many Quests its Snapshot holds (1 to 10, 11 to 40, more), lit by the share of them cleared, the Region the Player is in marked ("you are here"); a Region with no Snapshot yet is a small grey Island, not mapped yet. Two Regions of one folder name are told apart by their remote's owner/repo. Choosing an Island opens that Region's map.
 _Avoid_: Tile, node
 
 **Region**:
@@ -205,7 +205,7 @@ The band above the prompt showing the Player's level and Title, HP (or Exhausted
 _Avoid_: Status bar, header
 
 **Overview**:
-The pane (`/overview`) with the Player's character sheet, their portrait, level, Title, XP to the next level, all six Stats (those not in play dimmed), Badges and Trophies, and the World below it, an Island to choose per Region.
+The pane (`/overview`) with the Player's character sheet, their portrait, level, Title, XP to the next level, all six Stats (those not in play dimmed), every Badge (those not earned dimmed), Trophies by Region and the tally, and the World below it, a numbered Button per Island (nine a page). `/badges` prints the sheet as text; in the terminal the World is a grid of characters.
 _Avoid_: Character sheet (the vision's word for its first half), profile, stats page
 
 **Mana**:

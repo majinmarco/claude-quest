@@ -197,6 +197,8 @@ describe('Prophecy', () => {
     await run($, 'prophecy', 'rout')
     await call($, vitestFailing3)
 
-    expect((await run($, 'badges')).text?.split('\n')[0]).toContain('INT 0 · WIS 0 · DEX 10 · STR 0')
+    const sheet = (await run($, 'badges')).text?.split('\n') ?? []
+    expect(sheet).toContain('  DEX Dexterity 10')
+    expect(sheet.some(line => line.startsWith('  DEX') && line.includes('not yet in play'))).toBe(false)
   })
 })

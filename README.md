@@ -13,8 +13,9 @@ The vision is in [`docs/vision.md`](docs/vision.md), the words the game uses in 
 | `/scene` | Opens the Scene: the current Encounter, as pixel art on the desktop and one line in the terminal. |
 | `/sage` | Shows the Sage's first waiting Question; `/sage A` to `/sage D` answers it. |
 | `/boss` | Shows the Boss Fight's Question; `/boss A` to `/boss D` answers, `/boss skip` skips the fight. |
+| `/overview` | Opens the Overview: your character sheet (portrait, level and Title, XP to the next level, the six Stats, every Badge, Trophies by Region, your tally) above the World, every project you have played as an Island, sized by its Quests and lit by its cleared share, the one you are in marked. A numbered Button per Island (keys 1 to 9, paged) opens its Region map: live for this project, from its last Snapshot for another. In the terminal the World is a grid (`▓` cleared, `░` open, `◉` you are here). |
 | `/prophecy` | Tells the Prophecy armed; `/prophecy red`, `green` or `rout` calls the next Check: one failure, passing, or two or more. The HUD's `1 Red`, `2 Green`, `3 Rout` Buttons (hotkeys 1–3) do the same. A right call pays 10 Dexterity XP (30 a Quest at most); a wrong one costs nothing. See [ADR 0004](docs/adr/0004-prophecy.md). |
-| `/badges` | Your Badges, trophies, title and Stats. |
+| `/badges` | Your character sheet as text: the Overview's first part. |
 
 A Quest starts when you run `/implement <ticket>` or any plugin's `/<plugin>:implement <ticket>` (for example `/mattpocock-skills:implement #4`, or `ABC-123` for Jira). See [ADR 0001](docs/adr/0001-quest-starts-at-command-run.md).
 
@@ -64,10 +65,10 @@ Each project keeps `.claude/claude-quest.json`: its `questSource` and its Quest 
 .claude/claude-quest.json
 ```
 
-Your Player (level, XP, Badges, trophies, the Modules you've discovered) is kept by Claude Code across projects, not in the repo.
+Your Player (level, XP, Badges, trophies, the Modules you've discovered) and the World (every project you have played, by its folder, with its last Snapshot: Dungeon names and counts, never tickets) are kept by Claude Code across projects, not in the repo.
 
 ## Credits
 
 The pixel art is Kenney's (all CC0): Tiny Dungeon for the Scene and the portraits, UI Pack – Pixel Adventure for the Quest Board's scrolls, and the Kenney Mini font for their lettering. See [`assets/CREDITS.md`](assets/CREDITS.md).
 
-The art is baked into TypeScript, so nothing decodes a PNG or loads a font while a session runs: `node scripts/build-sprites.mjs` writes `src/sprites.ts` from the tilesheets, `node scripts/build-font.mjs` writes `src/pixel-font.ts` from the font. `node scripts/render-art.mjs <dir>` renders the Scene, the Boss Fight, the portraits, a sample Quest Board and a sample Quest Log to SVG files (and the board as `board.html`, the log as `log.html` and `log-terminal.txt`) for a look; `--snapshot` writes the scroll art's test snapshot again after a deliberate change.
+The art is baked into TypeScript, so nothing decodes a PNG or loads a font while a session runs: `node scripts/build-sprites.mjs` writes `src/sprites.ts` from the tilesheets, `node scripts/build-font.mjs` writes `src/pixel-font.ts` from the font. `node scripts/render-art.mjs <dir>` renders the Scene, the Boss Fight, the portraits, a sample Quest Board, a sample Quest Log and the World to SVG files (and the board as `board.html`, the log as `log.html` and `log-terminal.txt`, the Overview as `overview.html` and `overview-terminal.txt`) for a look; `--snapshot` writes the art's test snapshots again after a deliberate change.
