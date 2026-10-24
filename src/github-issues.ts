@@ -4,8 +4,17 @@
 
 import type { ProcessRunResult } from 'claude-code'
 
-import { difficultyOf, pointsFromLabels, sizeFromLabels, statsOf } from './quest-source'
-import type { QuestCard, QuestSource, QuestSourceProblem } from './quest-source'
+import {
+  difficultyOf,
+  LISTING_CAP,
+  plainTextOf,
+  pointsFromLabels,
+  sizeFromLabels,
+  statsOf,
+  TRIAGE,
+  triageTagsOf,
+} from './quest-source'
+import type { QuestCard, QuestSource, QuestSourceProblem, TicketDetails } from './quest-source'
 
 /** Runs a command by argv, as `$.process.run` does; rejects when it cannot start. */
 export type RunCommand = (argv: readonly string[]) => Promise<ProcessRunResult>
@@ -17,26 +26,22 @@ type GhIssue = {
   labels?: { name: string }[]
   url?: string
   state?: string
+  /** Only asked for when one issue is got. */
+  body?: string
 }
 
 const FIELDS = 'number,title,labels,url,state'
 
 /** The most issues one listing reads; gh's own default is 30. */
-const LIMIT = '200'
+const LIMIT = String(LISTING_CAP)
 
-// This repo's triage labels (docs/agents/triage-labels.md), shown as status.
-const TRIAGE = new Set([
-  'needs-triage',
-  'needs-info',
-  'ready-for-agent',
-  'ready-for-human',
-  'wontfix',
-])
-
+// A GitHub issue has no status of its own beyond open and closed: its first
+// triage label is its status, and every triage label a tag.
 const asQuest = (issue: GhIssue): QuestCard => {
   const labels = (issue.labels ?? []).map(label => label.name)
   const triage = labels.find(label => TRIAGE.has(label))
   const closed = issue.state?.toUpperCase() === 'CLOSED'
+  const tags = triageTagsOf(labels)
 
   return {
     ticket: `#${issue.number}`,
@@ -45,7 +50,14 @@ const asQuest = (issue: GhIssue): QuestCard => {
     difficulty: difficultyOf({ points: pointsFromLabels(labels), size: sizeFromLabels(labels) }),
     recommendedStats: statsOf(labels),
     ...(issue.url === undefined ? {} : { url: issue.url }),
+    ...(tags.length === 0 ? {} : { tags }),
   }
+}
+
+const asDetails = (issue: GhIssue): TicketDetails => {
+  const summary = plainTextOf(issue.body)
+
+  return { ...asQuest(issue), ...(summary === undefined ? {} : { summary }) }
 }
 
 /** The first line gh wrote to say what went wrong. */
@@ -55,10 +67,23 @@ const firstLine = (text: string): string =>
 // gh exits 4 when it needs signing in (gh 2.x); older ones say so in words.
 const NEEDS_AUTH = /gh auth login|not logged in/i
 const NO_SUCH_ISSUE = /could not resolve to an issue/i
+// A project that is no GitHub repo: not a git repo at all, or its remotes on
+// another host. gh's message for the second mentions `gh auth login`, so it
+// is read before sign-in is.
+const NO_GITHUB_REPO = /not a git repository|no known GitHub host|none of the git remotes .*known GitHub host/i
+
+/** What the Quest Board says when the project has no GitHub Issues to read. */
+const NO_GITHUB: QuestSourceProblem = {
+  kind: 'none',
+  message: 'This project is no GitHub repo, so it has no GitHub Issues to list.',
+}
 
 const problemOf = (ran: ProcessRunResult): QuestSourceProblem => {
   const said = firstLine(ran.stderr) || firstLine(ran.stdout)
 
+  if (NO_GITHUB_REPO.test(ran.stderr)) {
+    return NO_GITHUB
+  }
   if (ran.exitCode === 4 || NEEDS_AUTH.test(ran.stderr)) {
     return { kind: 'unauthenticated', message: 'gh is not signed in: run `gh auth login`.' }
   }
@@ -68,7 +93,25 @@ const problemOf = (ran: ProcessRunResult): QuestSourceProblem => {
 
 const MISSING: QuestSourceProblem = {
   kind: 'missing',
-  message: 'gh, the GitHub CLI, is not installed: see https://cli.github.com.',
+  message:
+    'gh, the GitHub CLI, is not installed or not on the PATH: see https://cli.github.com. ' +
+    '(On macOS, Claude Code started from the Dock may not see Homebrew\'s PATH: start it from a terminal.)',
+}
+
+// A command that could not start because it was not found: Node's spawn
+// error, or a shell's words for it.
+const NOT_FOUND = /ENOENT|not found|no such file/i
+
+/** Why gh could not be run at all: not there, or the surface runs no commands. */
+const cannotRun = (error: unknown): QuestSourceProblem => {
+  const said = error instanceof Error ? error.message : String(error)
+
+  return NOT_FOUND.test(said)
+    ? MISSING
+    : {
+        kind: 'unreachable',
+        message: `gh could not be run here (${said}): the GitHub Quest Source needs a surface that runs commands, such as Claude Code in a terminal.`,
+      }
 }
 
 /**
@@ -82,8 +125,8 @@ const runGh = async (
   let ran: ProcessRunResult
   try {
     ran = await run(['gh', ...argv])
-  } catch {
-    return { ok: false, problem: MISSING, stderr: '' }
+  } catch (error) {
+    return { ok: false, problem: cannotRun(error), stderr: '' }
   }
 
   if (ran.exitCode !== 0) {
@@ -142,13 +185,13 @@ export const githubIssues = (run: RunCommand): QuestSource => ({
       return { ok: true, value: null }
     }
 
-    const answered = await runGh(run, ['issue', 'view', n, '--json', FIELDS])
+    const answered = await runGh(run, ['issue', 'view', n, '--json', `${FIELDS},body`])
     if (!answered.ok) {
       return NO_SUCH_ISSUE.test(answered.stderr)
         ? { ok: true, value: null }
         : { ok: false, problem: answered.problem }
     }
 
-    return { ok: true, value: isIssue(answered.value) ? asQuest(answered.value) : null }
+    return { ok: true, value: isIssue(answered.value) ? asDetails(answered.value) : null }
   },
 })

@@ -19,6 +19,7 @@ import {
   loadPlayer,
   loadPlayerMigrated,
   migratePlayer,
+  pruneStaleQuests,
   readRegionFile,
   recordModulesDiscovered,
   recordQuestAbandoned,
@@ -26,19 +27,19 @@ import {
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
-import { drawQuestBoard, noFilters } from '../src/quest-board'
+import { drawQuestBoard, implementCommandOf, isImplementDraft, noFilters, PREFERRED_IMPLEMENT } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
 import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
-import type { QuestSource } from '../src/quest-source'
-import { questSourceFor, questSourceSettingOf, unavailable } from '../src/quest-source-setting'
+import { resolveQuestSource } from '../src/quest-source-setting'
+import type { ResolvedQuestSource } from '../src/quest-source-setting'
 import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
 import { autoOpenSceneOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
-import type { QuestBoard, QuestCard, XpPool } from '../types'
+import type { QuestBoard, QuestCard, QuestSourceSetting, XpPool } from '../types'
 
 /** The session's game, which the HUD draws from; it survives a reload. */
 const game = atom({ plugin: 'quest-mod', key: 'game' } as const, null)
@@ -451,55 +452,81 @@ const withTicketCalls = (state: GameState): GameState => {
   }
 }
 
-/** The command a Quest card fills the prompt with; the Player sends it. */
-const IMPLEMENT = '/mattpocock-skills:implement'
-
 /**
- * The Quest Source the Region chose in its Region file, GitHub Issues when it
- * chose none or the file cannot be read. A file that is not JSON may hold a
- * choice gone wrong, so the board says so rather than guess.
+ * The Quest Source the Region chose in its Region file; when it chose none,
+ * the repo's GitHub Issues, or none when the project is no git repo with a
+ * remote. A file that is not JSON may hold a choice gone wrong, so the board
+ * says so rather than guess. `$.process` runs only where Claude Code runs
+ * commands (the CLI): elsewhere its rejection is told as such by the gh
+ * adapter, never as gh missing.
  */
-async function regionQuestSource($: EngineInterface): Promise<QuestSource> {
+async function regionQuestSource($: EngineInterface): Promise<ResolvedQuestSource> {
   const region = await readRegionFile($).catch(() => ({ ok: true as const, value: undefined }))
-  if (!region.ok) {
-    return unavailable({ kind: 'unreachable', message: region.reason })
-  }
 
-  const setting = questSourceSettingOf(region.value)
-  if (!setting.ok) {
-    return unavailable(setting.problem)
-  }
-
-  return questSourceFor(setting.value, {
+  return resolveQuestSource(region, () => $.session.repo(), {
     run: argv => $.process.run(argv),
     call: (server, tool, args) => $.mcp.call(server, tool, args),
   })
 }
 
+/** The Quest Source as the Player knows it, for a toast: `GitHub Issues`, `Jira project CPI`. */
+const sourceName = (setting: QuestSourceSetting | undefined): string =>
+  setting?.kind === 'jira' ? `Jira project ${setting.project}` : 'GitHub Issues'
+
 /** Lists the Region's open Quests again, from its Quest Source. */
 async function listQuests($: EngineInterface): Promise<void> {
   await update($, board, (current): QuestBoard => ({ ...current, listing: { state: 'loading' } }))
 
-  const listed = await (await regionQuestSource($)).list()
+  const { source, setting } = await regionQuestSource($)
+  const listed = await source.list()
 
   await update($, board, (current): QuestBoard => ({
     ...current,
     listing: listed.ok
-      ? { state: 'listed', quests: listed.value }
+      ? { state: 'listed', quests: listed.value, ...(setting === undefined ? {} : { source: setting }) }
       : { state: 'unavailable', problem: listed.problem },
   }))
+}
+
+/**
+ * Puts the implement command for `quest` in the prompt box, for the Player
+ * to send: whichever implement command the session has (mattpocock-skills'
+ * first). A draft the Player is writing is never written over: only an empty
+ * one, or one that is itself an implement command, is replaced.
+ */
+async function pickQuest($: EngineInterface, quest: QuestCard): Promise<void> {
+  // Commands that cannot be listed: the usual one is tried.
+  const names = await $.command.list().then(
+    commands => commands.map(command => command.name),
+    () => [PREFERRED_IMPLEMENT],
+  )
+  const implement = implementCommandOf(names)
+  if (implement === undefined) {
+    $.ui.toast(
+      `No implement command in this session: install one, such as ${PREFERRED_IMPLEMENT}, to start Quests from the board.`,
+    )
+    return
+  }
+
+  const command = `/${implement} ${quest.ticket}`
+  const draft = await $.prompt.read().then(box => box.text, () => '')
+  if (draft.trim() !== '' && !isImplementDraft(draft)) {
+    $.ui.toast(`Draft kept: clear it and pick again, or run ${command}`)
+    return
+  }
+
+  // Filled, never sent: the Player sends it, and command.run starts the
+  // Quest as for one they typed.
+  const unfilled = () => $.ui.toast(`Could not fill the prompt: run ${command} yourself.`)
+  await $.prompt
+    .fill({ text: command })
+    .then(filled => (filled.isFilled ? undefined : unfilled()), unfilled)
 }
 
 /** What the Quest Board's buttons do. */
 const boardActions = ($: EngineInterface): QuestBoardActions => ({
   pick: quest => {
-    // Filled, never sent: the Player sends it, and command.run starts the
-    // Quest as for one they typed.
-    const command = `${IMPLEMENT} ${quest.ticket}`
-    const unfilled = () => $.ui.toast(`Could not fill the prompt: run ${command} yourself.`)
-    void $.prompt
-      .fill({ text: command })
-      .then(filled => (filled.isFilled ? undefined : unfilled()), unfilled)
+    void pickQuest($, quest).catch(() => undefined)
   },
   filterStatus: status => {
     void update($, board, current => ({ ...current, filters: { ...current.filters, status } }))
@@ -514,6 +541,48 @@ const boardActions = ($: EngineInterface): QuestBoardActions => ({
     void listQuests($)
   },
 })
+
+/**
+ * Looks the active Quest's ticket up in the Region's Quest Source, after it
+ * started: its title, description and difficulty (taken only by a Quest
+ * started Unrated), and whether the source has it. Started unawaited, so the
+ * command never waits on gh or MCP. A ticket the source has not got, and the
+ * board never listed, runs Unrated for no Quest reward, told in a toast; a
+ * source that cannot be reached is logged to the debug log alone, and the
+ * Quest rewarded as before.
+ */
+async function lookUpTicket($: EngineInterface, ticket: string, listed: boolean, rules: Rules): Promise<void> {
+  const { source, setting } = await regionQuestSource($)
+  const got = await source.get(ticket)
+
+  if (!got.ok) {
+    $.ui.log(`Could not look ${ticket} up in its Quest Source: ${got.problem.message}`, { to: 'debug' })
+    if (!listed) {
+      await play($, { type: 'QUEST_DETAILS', ticket, verified: 'unknown' }, rules)
+    }
+    return
+  }
+
+  if (got.value === null) {
+    // Listed by the board, the ticket is there: the lookup's reference missed it.
+    if (listed) {
+      await play($, { type: 'QUEST_DETAILS', ticket, verified: 'found' }, rules)
+      return
+    }
+    await play($, { type: 'QUEST_DETAILS', ticket, verified: 'not-found' }, rules)
+    if ((await read($, game))?.quest?.ticket === ticket) {
+      $.ui.toast(`No ticket ${ticket} in ${sourceName(setting)}: the Quest runs Unrated and pays no Quest reward`)
+    }
+    return
+  }
+
+  const { title, summary, difficulty } = got.value
+  await play(
+    $,
+    { type: 'QUEST_DETAILS', ticket, title, difficulty, verified: 'found', ...(summary === undefined ? {} : { summary }) },
+    rules,
+  )
+}
 
 /**
  * Steps the session's game by one event under the Player's rules (the mod's
@@ -642,7 +711,7 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
     if (effect.type === 'QUEST_CLOSED') {
       const fight = saved?.bossFight
       if (fight != null) {
-        $.ui.toast(bossOutcomeText(fight))
+        $.ui.toast(`${bossOutcomeText(fight)} /quest-board for your next Quest`)
       }
       await recordQuestClosed($, effect.ticket, effect.outcome)
     }
@@ -682,6 +751,10 @@ export const register: Register = (on, options) => {
     // The modules the Player explored in this project in earlier sessions
     // are no first visit (seeded once from an older mod's Region file).
     const discovered = root === null ? [] : await loadDiscovered($, root).catch(() => [])
+    // Quests earlier sessions left active for over a week were abandoned.
+    if (root !== null) {
+      await pruneStaleQuests($).catch(() => undefined)
+    }
     await update($, game, current => {
       const resumed = withTicketCalls({ ...newGame(player), ...current })
 
@@ -899,16 +972,23 @@ export const register: Register = (on, options) => {
 
     if (event?.type === 'QUEST_START') {
       // The difficulty is the Quest Board's (Unrated when it never listed
-      // the ticket, so the Quest reward is never lost to it), and so is the
-      // title the Sage and the boss show Haiku. Looking the ticket up in its
-      // Quest Source for the rest comes later (QUEST_DETAILS).
-      const card = await listedCard($, event.ticket)
+      // the ticket, until its lookup rates it), and so is the title the Sage
+      // and the boss show Haiku. Looking the ticket up in its Quest Source
+      // for the rest comes after, unawaited (QUEST_DETAILS).
+      const { ticket } = event
+      const card = await listedCard($, ticket)
       try {
         await play($, { ...event, difficulty: card?.difficulty ?? 'Unrated' }, rules)
       } finally {
         // Kept even when the Region file could not record the start.
         if (card !== undefined) {
-          await play($, { type: 'QUEST_DETAILS', ticket: event.ticket, title: card.title }, rules)
+          await play($, { type: 'QUEST_DETAILS', ticket, title: card.title }, rules)
+        }
+        // A Quest whose ticket was looked up (started again) is not again;
+        // one whose source could not be reached is tried again.
+        const quest = (await read($, game))?.quest
+        if (quest?.ticket === ticket && (quest.verified === undefined || quest.verified === 'unknown')) {
+          void lookUpTicket($, ticket, card !== undefined, rules).catch(() => undefined)
         }
       }
     } else if (event !== null) {
@@ -929,7 +1009,7 @@ export const register: Register = (on, options) => {
     .catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: QUEST_BOARD.id }, async ($, e) =>
-    drawQuestBoard($, e, await read($, board), boardActions($)),
+    drawQuestBoard($, e, await read($, board), boardActions($), (await read($, game))?.player ?? null),
   )
 
   // The Scene draws what the game already holds: it never runs in a tool

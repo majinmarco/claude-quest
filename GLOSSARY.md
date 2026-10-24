@@ -53,12 +53,24 @@ One ticket, played as a run of Encounters ending in a Boss Fight.
 _Avoid_: Ticket (outside a Quest Source), task, mission
 
 **Quest Source**:
-Where Quests come from: a Jira project or a repo's GitHub Issues.
+Where Quests come from: a Jira project or a repo's GitHub Issues, as the Region file's `questSource` names it (GitHub Issues when it names none and the project is a git repo with a remote). When it cannot be read, its problem is one kind, each with its own hint on the Quest Board: `missing` (gh not installed or on the PATH, the Atlassian connection not connected), `unauthenticated` (not signed in), `misconfigured` (the Region file not JSON, `questSource` wrong, Jira refusing the query or reaching no site), `none` (no `questSource` and no GitHub repo), `forbidden` (the account may not see the Jira project) or `unreachable` (anything else, gh unable to run on this surface among them).
 _Avoid_: Tracker, backlog, provider
 
 **Quest Board**:
-The view listing the available Quests of the current Region, from which the Player starts one.
+The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, its difficulty, Quest reward, recommended Stats, status and tags, under a header of the Player's trophies and Badges. Picking a card fills the prompt with the session's implement command, never over a draft the Player is writing. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
 _Avoid_: Ticket list, backlog view
+
+**Tag**:
+A ticket's triage label (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), shown on its Quest card beside its status; the Quest Board's status filter steps through statuses and tags alike. A GitHub issue, which has no status of its own, takes its first as its status.
+_Avoid_: Label (outside a Quest Source)
+
+**Ticket lookup**:
+After a Quest starts, its ticket is looked up in the Quest Source, unawaited: its title (shown on the HUD), its description as plain text for Haiku, its difficulty when it started Unrated, and whether it was found. A ticket not found runs Unrated and pays no Quest reward (said in a toast); a Quest Source that cannot be reached leaves the Quest and its reward as they were (tried again when the ticket is started again).
+_Avoid_: Sync
+
+**Region file**:
+A project's `.claude/claude-quest.json`: its `questSource` and its Quest history, one record per run of a Quest: its ticket, `startedAt`, `status` (`active`, `abandoned`, or how its Boss Fight closed it), `endedAt`, the `sessionId` that started it or took it up again, and `resumedAt`. Starting a ticket whose latest run is still active takes that run up again; a session starting marks runs left active for over 7 days abandoned.
+_Avoid_: Save file, config
 
 **Encounter**:
 A game moment produced by real session activity during a Quest (Exploration, Battle, Crafting, Puzzle, Trap, Rest).
@@ -89,7 +101,7 @@ The code-review challenge that ends a Quest, built from the Quest's actual diff:
 _Avoid_: Final review, boss battle
 
 **Quest reward**:
-The XP a Quest's Boss Fight won pays, by its ticket's difficulty alone (Trivial 40 to Epic 180, Unrated 80), shown on its Quest card, scaled down when fewer than three Questions could be made; half again when Flawless (every Boss answer right, finishing blows included, and no wrong Sage answer in the Quest). Paid once per Region and ticket.
+The XP a Quest's Boss Fight won pays, by its ticket's difficulty alone (Trivial 40 to Epic 180, Unrated 80), shown on its Quest card, scaled down when fewer than three Questions could be made; half again when Flawless (every Boss answer right, finishing blows included, and no wrong Sage answer in the Quest). Paid once per Region and ticket, and never for a ticket its Quest Source did not find.
 _Avoid_: Bounty, Quest XP
 
 **Badge**:

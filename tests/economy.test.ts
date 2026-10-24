@@ -390,6 +390,25 @@ describe('Economy: the Boss Fight and the Quest reward', () => {
     expect(win(summon('Medium', { ...once, region: 'other' })).state.bossFight?.reward).toBe(150)
   })
 
+  test('a ticket its Quest Source has not found pays no Quest reward and no trophy; its answers still pay', () => {
+    const unverified = step(summon(), { type: 'QUEST_DETAILS', ticket: '#12', verified: 'not-found' }).state
+    const { state, effects } = win(unverified)
+
+    expect(state.bossFight).toMatchObject({ status: 'won', reward: 0 })
+    expect(state.bossFight?.trophy).toBeUndefined()
+    expect(state.player.totalXp).toBe(90)
+    expect(state.player.trophies ?? []).toEqual([])
+    expect(effects.map(effect => effect.type)).not.toContain('TROPHY_EARNED')
+    const unfought = step(unverified, { type: 'BOSS_FIGHT_UNAVAILABLE', ticket: '#12', reason: 'no Haiku' }).state
+    expect(unfought.bossFight?.reward).toBe(0)
+  })
+
+  test('a ticket its Quest Source could not be asked about (unknown) is rewarded as usual', () => {
+    const unknown = step(summon(), { type: 'QUEST_DETAILS', ticket: '#12', verified: 'unknown' }).state
+
+    expect(win(unknown).state.bossFight?.reward).toBe(150)
+  })
+
   test('a Boss Fight lost, then won in a rematch, still pays the Quest reward once', () => {
     const lost = play(summon(), bossReady(), bossAnswer(1, 1), bossAnswer(2, 1), bossAnswer(3)).state
     expect(lost.bossFight?.status).toBe('lost')

@@ -352,6 +352,15 @@ describe('Game Engine: Quest details', () => {
     expect(state.quest?.summary).toHaveLength(1500)
   })
 
+  test('a difficulty fixed at the start is kept: only an Unrated Quest takes one from its details', () => {
+    const rated = step(newGame(), { type: 'QUEST_START', ticket: '#4', difficulty: 'Easy' }).state
+
+    expect(step(rated, { type: 'QUEST_DETAILS', ticket: '#4', difficulty: 'Epic' }).state.quest?.difficulty).toBe('Easy')
+    expect(step(questing, { type: 'QUEST_DETAILS', ticket: '#4', difficulty: 'Epic' }).state.quest?.difficulty).toBe('Epic')
+    const older = { ...questing, quest: { ...questing.quest!, difficulty: undefined } }
+    expect(step(older, { type: 'QUEST_DETAILS', ticket: '#4', difficulty: 'Hard' }).state.quest?.difficulty).toBe('Hard')
+  })
+
   test('details of another ticket (a Quest since replaced) change nothing', () => {
     const { state } = step(questing, { type: 'QUEST_DETAILS', ticket: '#5', title: 'Elsewhere' })
 

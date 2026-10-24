@@ -338,6 +338,63 @@ describe('Quests', () => {
     })
   })
 
+  test('a Quest record names the session that started it', async ($, on) => {
+    keptStore(on)
+    const files = projectFiles(on)
+    on('session.id', () => ({ value: 'session-b' }))
+    on('command.run', () => ({}))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    await implement($, '#4')
+
+    expect(JSON.parse(files.get(REGION) ?? 'null').quests).toEqual([
+      { ticket: '#4', startedAt: '2026-10-23T20:00:00.000Z', status: 'active', sessionId: 'session-b' },
+    ])
+  })
+
+  test('starting a ticket whose Quest is still active in the history takes that run up again', async ($, on) => {
+    keptStore(on)
+    const yesterday = { ticket: '#4', startedAt: '2026-10-22T09:00:00.000Z', status: 'active', sessionId: 'session-a' }
+    const other = { ticket: '#7', startedAt: '2026-10-22T10:00:00.000Z', status: 'active', sessionId: 'session-c' }
+    const files = projectFiles(on, { [REGION]: JSON.stringify({ quests: [yesterday, other] }) })
+    on('session.id', () => ({ value: 'session-b' }))
+    on('command.run', () => ({}))
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    await implement($, '#4')
+
+    expect(JSON.parse(files.get(REGION) ?? 'null').quests).toEqual([
+      { ...yesterday, sessionId: 'session-b', resumedAt: '2026-10-23T20:00:00.000Z' },
+      other,
+    ])
+  })
+
+  test('a session starting marks Quests left active for over 7 days abandoned', async ($, on) => {
+    keptStore(on)
+    const stale = { ticket: '#2', startedAt: '2026-10-15T19:00:00.000Z', status: 'active' }
+    const recent = { ticket: '#3', startedAt: '2026-10-17T09:00:00.000Z', status: 'active' }
+    const closed = { ticket: '#1', startedAt: '2026-09-01T09:00:00.000Z', status: 'won', endedAt: '2026-09-02T09:00:00.000Z' }
+    const files = projectFiles(on, { [REGION]: JSON.stringify({ quests: [closed, stale, recent], questSource: { kind: 'github' } }) })
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    expect(JSON.parse(files.get(REGION) ?? 'null')).toEqual({
+      quests: [closed, { ...stale, status: 'abandoned', endedAt: '2026-10-23T20:00:00.000Z' }, recent],
+      questSource: { kind: 'github' },
+    })
+  })
+
+  test('a session starting with no stale Quest leaves the Region file as it is', async ($, on) => {
+    keptStore(on)
+    const files = projectFiles(on)
+    on('session.start', (_, e) => ({ cwd: e.cwd }))
+    await $.session.start(START)
+
+    expect(files.has(REGION)).toBe(false)
+  })
+
   test('a second Quest replaces the first, which the history records as abandoned', async ($, on) => {
     const toasts: string[] = []
     keptStore(on)

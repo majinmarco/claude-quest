@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from 'claude-code/testing'
 
-import type { QuestSource } from '../src/quest-source'
+import type { QuestSource, QuestSourceProblem } from '../src/quest-source'
 
 /** A T-shirt size, as a ticket's size field or label names it. */
 export type ContractSize = 'XS' | 'S' | 'M' | 'L' | 'XL'
@@ -23,12 +23,19 @@ export type ContractTicket = {
   kind?: 'bug' | 'feature' | 'docs'
   /** The ticket's status, as the Quest Source names it; the harness's default when absent. */
   status?: string
+  /** A triage label (`needs-info`), as the Quest Source labels its tickets. */
+  triage?: string
+  /** The ticket's description, as the Quest Source writes it. */
+  description?: string
 }
+
+/** A way the tool behind a Quest Source can fail, named as the problem it is. */
+export type ContractFailure = QuestSourceProblem['kind']
 
 /** The fake world an adapter runs against: some tickets, or a failure. */
 export type ContractWorld =
   | { tickets: ContractTicket[] }
-  | { failure: 'missing' | 'unauthenticated' | 'unreachable' }
+  | { failure: ContractFailure }
 
 export type ContractHarness = {
   /** The adapter's name, for the test titles. */
@@ -37,10 +44,12 @@ export type ContractHarness = {
   source: (world: ContractWorld) => QuestSource
   /** Ticket `n`'s reference as the adapter's Quest Source writes it. */
   ticket: (n: number) => string
+  /** The failures the adapter's tool can have, each its own problem kind. */
+  failures: readonly ContractFailure[]
 }
 
 export function questSourceContract(harness: ContractHarness): void {
-  const { name, source, ticket } = harness
+  const { name, source, ticket, failures } = harness
 
   const listed = async (tickets: ContractTicket[]) => {
     const result = await source({ tickets }).list()
@@ -111,6 +120,20 @@ export function questSourceContract(harness: ContractHarness): void {
       expect((await one({ status: 'ready-for-agent' }))?.status).toBe('ready-for-agent')
     })
 
+    test('a triage label is a tag', async () => {
+      expect((await one({ triage: 'needs-info' }))?.tags).toEqual(['needs-info'])
+      expect((await one({}))?.tags ?? []).toEqual([])
+    })
+
+    test('gets a ticket\'s description, as text, with its Quest', async () => {
+      const result = await source({
+        tickets: [{ n: 5, title: 'Five', description: 'Orders of **10** or more get 10% off.' }],
+      }).get(ticket(5))
+
+      expect(result.ok && result.value?.summary).toContain('Orders of')
+      expect(result.ok && result.value?.summary).toContain('10% off.')
+    })
+
     test('gets one Quest by its reference', async () => {
       const result = await source({
         tickets: [
@@ -135,7 +158,7 @@ export function questSourceContract(harness: ContractHarness): void {
       expect(result).toEqual({ ok: true, value: null })
     })
 
-    for (const failure of ['missing', 'unauthenticated', 'unreachable'] as const) {
+    for (const failure of failures) {
       test(`a ${failure} tool lists nothing and says why`, async () => {
         const quests = source({ failure })
         const list = await quests.list()

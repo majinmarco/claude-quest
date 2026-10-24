@@ -468,12 +468,18 @@ export const translateMeasure = (
 /** The part of a `command.run` input the translator reads. */
 export type CommandSeen = { command: string; args: string }
 
-// `/mattpocock-skills:implement`, or `/implement` as typed without its plugin.
-const IMPLEMENT = new Set(['implement', 'mattpocock-skills:implement'])
+/**
+ * Whether `command` is an implement command: `/implement`, or any plugin's
+ * (`/mattpocock-skills:implement`, `/acme:implement`).
+ */
+export const isImplementCommand = (command: string): boolean => /^(?:[^:\s]+:)?implement$/.test(command)
+
 
 const GITHUB_ISSUE = /^#?(\d+)$/
 const GITHUB_ISSUE_URL = /^https?:\/\/[^\s]*\/issues\/(\d+)\/?$/
-const KEY = '([A-Za-z][A-Za-z0-9_]*-\\d+)'
+// A Jira key's project is upper case (`ABC-123`), as Jira writes it: a word
+// in lower case (`utf-8`) names no ticket.
+const KEY = '([A-Z][A-Z0-9_]*-\\d+)'
 const JIRA_KEY = new RegExp(`^${KEY}$`)
 const JIRA_URL = new RegExp(`^https?://\\S*/browse/${KEY}/?$`)
 
@@ -491,7 +497,7 @@ const ticketOf = (args: string): string | null => {
 
   const key = JIRA_KEY.exec(first) ?? JIRA_URL.exec(first)
 
-  return key?.[1] === undefined ? null : key[1].toUpperCase()
+  return key?.[1] ?? null
 }
 
 // `/implement` starts a Quest when it names a ticket. It is read at
@@ -501,7 +507,7 @@ const ticketOf = (args: string): string | null => {
 // `disable-model-invocation`, so the Skill tool never runs it: every run is a
 // slash command that `command.run` sees.
 export const translateCommand = (input: CommandSeen): GameEvent | null => {
-  if (!IMPLEMENT.has(input.command)) {
+  if (!isImplementCommand(input.command)) {
     return null
   }
 

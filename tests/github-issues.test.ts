@@ -12,6 +12,7 @@ type GhIssue = {
   labels: { name: string }[]
   url: string
   state?: 'OPEN' | 'CLOSED'
+  body?: string
 }
 
 const ran = (exitCode: number, stdout: string, stderr = ''): ProcessRunResult => ({
@@ -28,6 +29,10 @@ const NOT_LOGGED_IN =
   'Alternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.\n'
 const NOT_A_REPO =
   'failed to run git: fatal: not a git repository (or any of the parent directories): .git\n'
+// gh in a repo whose remotes are not on GitHub (gh 2.x), and offline.
+const NO_GITHUB_HOST =
+  'none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`\n'
+const OFFLINE = 'error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n'
 const NO_SUCH_ISSUE = (n: string) =>
   `GraphQL: Could not resolve to an issue or pull request with the number of ${n}. (repository.issue)\n`
 
@@ -80,7 +85,9 @@ const asIssue = (ticket: ContractTicket): GhIssue => ({
     ...(ticket.size === undefined ? [] : [`size: ${ticket.size}`]),
     ...(ticket.kind === undefined ? [] : [KIND_LABEL[ticket.kind]]),
     ...(ticket.status === undefined ? [] : [ticket.status]),
+    ...(ticket.triage === undefined ? [] : [ticket.triage]),
   ].map(name => ({ name })),
+  ...(ticket.description === undefined ? {} : { body: ticket.description }),
 })
 
 const failing = (failure: Extract<ContractWorld, { failure: unknown }>['failure']) =>
@@ -91,7 +98,11 @@ const failing = (failure: Extract<ContractWorld, { failure: unknown }>['failure'
       case 'unauthenticated':
         return ran(4, '', NOT_LOGGED_IN)
       case 'unreachable':
+        return ran(1, '', OFFLINE)
+      case 'none':
         return ran(1, '', NOT_A_REPO)
+      default:
+        throw new Error(`gh cannot fail as ${failure}`)
     }
   }
 
@@ -100,6 +111,7 @@ questSourceContract({
   source: world =>
     githubIssues('failure' in world ? failing(world.failure) : fakeGh(world.tickets.map(asIssue)).run),
   ticket: n => `#${n}`,
+  failures: ['missing', 'unauthenticated', 'unreachable', 'none'],
 })
 
 const issue = (labels: string[], number = 7): GhIssue => ({
@@ -194,6 +206,38 @@ describe('GitHub Issues adapter', () => {
 
     expect(result).toEqual({ ok: true, value: null })
     expect(gh.calls).toHaveLength(0)
+  })
+
+  test('without gh on the PATH, the problem says to install it and mentions the PATH', async () => {
+    const result = await githubIssues(failing('missing')).list()
+
+    expect(result).toMatchObject({ ok: false, problem: { kind: 'missing' } })
+    expect(!result.ok && result.problem.message).toContain('https://cli.github.com')
+    expect(!result.ok && result.problem.message).toContain('PATH')
+  })
+
+  test('gh that cannot be run here for another reason says so, not that gh is missing', async () => {
+    const result = await githubIssues(async () => {
+      throw new Error('process.run is not available on this surface')
+    }).list()
+
+    expect(result).toMatchObject({ ok: false, problem: { kind: 'unreachable' } })
+    expect(!result.ok && result.problem.message).not.toContain('not installed')
+    expect(!result.ok && result.problem.message).toContain('process.run is not available on this surface')
+  })
+
+  test('a project that is no GitHub repo has no GitHub Issues: the problem is none, not sign-in', async () => {
+    for (const said of [NOT_A_REPO, NO_GITHUB_HOST]) {
+      const result = await githubIssues(async () => ran(1, '', said)).list()
+
+      expect(result).toMatchObject({ ok: false, problem: { kind: 'none' } })
+    }
+  })
+
+  test('an issue got by its reference carries its body as its summary', async () => {
+    const result = await githubIssues(fakeGh([{ ...issue([]), body: 'Orders of 10 or more.' }]).run).get('#7')
+
+    expect(result).toMatchObject({ ok: true, value: { summary: 'Orders of 10 or more.' } })
   })
 
   test('output gh did not write as JSON is unreachable, not a crash', async () => {

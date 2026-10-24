@@ -253,17 +253,54 @@ export async function readRegionFile(
   }
 }
 
-/** Adds a Quest, just started, to the Region's history. */
+/**
+ * Adds a Quest, just started, to the Region's history, named after the
+ * session that started it. A ticket whose latest run is still active (left by
+ * an earlier session, or the same one reloaded) is taken up again instead:
+ * that run now names this session, and when it was resumed.
+ */
 export async function recordQuestStarted(
   $: EngineInterface,
   ticket: string,
 ): Promise<void> {
-  const startedAt = new Date(await $.clock.now()).toISOString()
+  const now = new Date(await $.clock.now()).toISOString()
+  const sessionId = await $.session.id().catch(() => null)
+  const session = sessionId === null ? {} : { sessionId }
 
-  await changeQuests($, quests => [
-    ...quests,
-    { ticket, startedAt, status: 'active' },
-  ])
+  await changeQuests($, quests => {
+    const latest = quests.findLastIndex(quest => quest.ticket === ticket)
+    if (latest !== -1 && quests[latest]?.status === 'active') {
+      return quests.map((quest, index) => (index === latest ? { ...quest, ...session, resumedAt: now } : quest))
+    }
+
+    return [...quests, { ticket, startedAt: now, status: 'active', ...session }]
+  })
+}
+
+/** How long a Quest may stay active in the history before a session start calls it abandoned. */
+export const STALE_QUEST_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Marks the Quests the history holds active for more than STALE_QUEST_MS
+ * (since they started, or were last taken up again) abandoned, ended now:
+ * sessions that ended without closing them. Run at session start; a Region
+ * file with none stale is left as it is, and none is created.
+ */
+export async function pruneStaleQuests($: EngineInterface): Promise<void> {
+  const now = await $.clock.now()
+  const isStale = (quest: QuestRecord) =>
+    quest.status === 'active' && now - Date.parse(quest.resumedAt ?? quest.startedAt) > STALE_QUEST_MS
+
+  const region = await readRegionFile($)
+  const quests = region.ok && isRegion(region.value) ? region.value.quests : []
+  if (!quests.some(isStale)) {
+    return
+  }
+
+  const endedAt = new Date(now).toISOString()
+  await changeQuests($, kept =>
+    kept.map(quest => (isStale(quest) ? { ...quest, status: 'abandoned', endedAt } : quest)),
+  )
 }
 
 /**

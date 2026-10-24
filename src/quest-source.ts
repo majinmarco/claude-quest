@@ -4,9 +4,9 @@
 // recommended Stats are here, shared, so a ticket means the same whichever
 // Quest Source it comes from.
 
-import type { Difficulty, QuestCard, QuestSourceProblem, StatName } from '../types'
+import type { Difficulty, QuestCard, QuestSourceProblem, StatName, TicketDetails } from '../types'
 
-export type { Difficulty, QuestCard, QuestSourceProblem, StatName } from '../types'
+export type { Difficulty, QuestCard, QuestSourceProblem, StatName, TicketDetails } from '../types'
 
 /** What a Quest Source answers: its value, or why it could not reach it. */
 export type Sourced<T> = { ok: true; value: T } | { ok: false; problem: QuestSourceProblem }
@@ -14,8 +14,76 @@ export type Sourced<T> = { ok: true; value: T } | { ok: false; problem: QuestSou
 export type QuestSource = {
   /** The current Region's open Quests. */
   list: () => Promise<Sourced<QuestCard[]>>
-  /** One Quest by its ticket reference; null when the reference names none. */
-  get: (ticket: string) => Promise<Sourced<QuestCard | null>>
+  /** One Quest by its ticket reference, with its description; null when the reference names none. */
+  get: (ticket: string) => Promise<Sourced<TicketDetails | null>>
+}
+
+/**
+ * The most Quests one listing reads. A listing this long may have been cut
+ * short: the Quest Board says `200+`.
+ */
+export const LISTING_CAP = 200
+
+// The triage labels (docs/agents/triage-labels.md), shown as a ticket's tags,
+// and as a GitHub issue's status, which has none of its own.
+export const TRIAGE: ReadonlySet<string> = new Set([
+  'needs-triage',
+  'needs-info',
+  'ready-for-agent',
+  'ready-for-human',
+  'wontfix',
+])
+
+/** The triage labels among `labels`, in their order. */
+export const triageTagsOf = (labels: readonly string[]): string[] => labels.filter(label => TRIAGE.has(label))
+
+/** The most of a description a ticket's summary keeps, in characters, before the Quest cuts it further. */
+const SUMMARY_READ = 4000
+
+const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
+
+/**
+ * A ticket's description as plain text: Markdown and plain text as written,
+ * HTML with its tags taken out, Atlassian Document Format's text nodes joined
+ * (a paragraph or heading a line). Blank lines squeezed; undefined when it
+ * holds no text.
+ */
+export const plainTextOf = (description: unknown): string | undefined => {
+  const raw = typeof description === 'string' ? htmlToText(description) : adfToText(description)
+  const text = raw.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+
+  return text === '' ? undefined : text.slice(0, SUMMARY_READ)
+}
+
+const htmlToText = (text: string): string => {
+  if (!/<\/?[a-z][^>]*>/i.test(text)) {
+    return text
+  }
+
+  return text
+    .replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&(#39|[a-z]+);/gi, (entity, name: string) => ENTITIES[name.toLowerCase()] ?? entity)
+}
+
+const BLOCKS = new Set(['paragraph', 'heading', 'listItem', 'codeBlock', 'blockquote', 'tableRow', 'rule'])
+
+const adfToText = (node: unknown): string => {
+  if (typeof node !== 'object' || node === null) {
+    return ''
+  }
+
+  const { type, text, content } = node as { type?: unknown; text?: unknown; content?: unknown }
+  if (typeof text === 'string') {
+    return text
+  }
+  if (type === 'hardBreak') {
+    return '\n'
+  }
+
+  const inner = Array.isArray(content) ? content.map(adfToText).join('') : ''
+
+  return typeof type === 'string' && BLOCKS.has(type) ? `${inner.replace(/\n+$/, '')}\n` : inner
 }
 
 export type Size = 'XS' | 'S' | 'M' | 'L' | 'XL'

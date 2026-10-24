@@ -224,7 +224,6 @@ describe('Event translator: command.run', () => {
     ['#4', '#4'],
     ['4', '#4'],
     ['ABC-123', 'ABC-123'],
-    ['abc-123', 'ABC-123'],
     ['https://github.com/majinmarco/claude-quest/issues/4', '#4'],
     ['https://acme.atlassian.net/browse/ABC-123', 'ABC-123'],
     ['  #4  then review it', '#4'],
@@ -243,6 +242,20 @@ describe('Event translator: command.run', () => {
     })
   })
 
+  test('any plugin\'s implement command starts a Quest too', () => {
+    expect(translateCommand(implement('#4', 'acme-skills:implement'))).toEqual({
+      type: 'QUEST_START',
+      ticket: '#4',
+    })
+  })
+
+  test('a lowercase word with a number is no Jira key: /implement utf-8 starts no Quest', () => {
+    expect(translateCommand(implement('utf-8 decoding of the Region file'))).toBeNull()
+    expect(translateCommand(implement('abc-123'))).toBeNull()
+    expect(translateCommand(implement('Abc-123'))).toBeNull()
+    expect(translateCommand(implement('https://acme.atlassian.net/browse/abc-123'))).toBeNull()
+  })
+
   test('/implement with no ticket reference is no game event', () => {
     expect(translateCommand(implement(''))).toBeNull()
     expect(translateCommand(implement('the spec in docs/spec.md'))).toBeNull()
@@ -250,6 +263,8 @@ describe('Event translator: command.run', () => {
 
   test('another command with a ticket reference is no game event', () => {
     expect(translateCommand(implement('#4', 'mattpocock-skills:triage'))).toBeNull()
+    expect(translateCommand(implement('#4', 'implementation'))).toBeNull()
+    expect(translateCommand(implement('#4', 'acme:reimplement'))).toBeNull()
   })
 })
 

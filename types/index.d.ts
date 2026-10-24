@@ -409,8 +409,16 @@ export type QuestRecord = {
   /** When the Quest started, as an ISO 8601 timestamp. */
   startedAt: string
   /**
-   * `abandoned` once another Quest replaced it before it closed; how its
-   * Boss Fight closed it (QuestOutcome) once it did.
+   * The session that started it, or last took it up again (`$.session.id()`);
+   * absent in a record kept by an older mod, or when the id was not known.
+   */
+  sessionId?: string
+  /** When a later start of the same ticket took the active run up again, as an ISO 8601 timestamp. */
+  resumedAt?: string
+  /**
+   * `abandoned` once another Quest replaced it before it closed, or it was
+   * left active for over 7 days; how its Boss Fight closed it (QuestOutcome)
+   * once it did.
    */
   status: 'active' | 'abandoned' | QuestOutcome
   /**
@@ -487,15 +495,30 @@ export type QuestCard = {
   recommendedStats: StatName[]
   /** Where the ticket lives, for the Player to open; absent when unknown. */
   url?: string
+  /**
+   * The ticket's triage labels (`needs-info`, `ready-for-agent`), as tags
+   * beside its status; absent or empty when it has none.
+   */
+  tags?: string[]
 }
+
+/**
+ * One ticket as its Quest Source gets it by reference: its card, and its
+ * description as plain text (`summary`), when it has one.
+ */
+export type TicketDetails = QuestCard & { summary?: string }
 
 /** Why a Quest Source could not list its Quests. */
 export type QuestSourceProblem = {
   /**
-   * `missing`: the tool it calls is not installed; `unauthenticated`: it is
-   * not signed in; `unreachable`: any other failure, told in `message`.
+   * `missing`: the tool it calls is not installed or not connected;
+   * `unauthenticated`: it is not signed in; `misconfigured`: the Region's
+   * `questSource` (or the Region file) is wrong, or Jira refused the query
+   * (400) or has no site; `none`: the Region names no Quest Source and the
+   * project is no GitHub repo; `forbidden`: the account may not see the
+   * project (403); `unreachable`: any other failure, told in `message`.
    */
-  kind: 'missing' | 'unauthenticated' | 'unreachable'
+  kind: 'missing' | 'unauthenticated' | 'misconfigured' | 'none' | 'forbidden' | 'unreachable'
   message: string
 }
 
@@ -503,7 +526,12 @@ export type QuestSourceProblem = {
 export type QuestBoard = {
   listing:
     | { state: 'loading' }
-    | { state: 'listed'; quests: QuestCard[] }
+    | {
+        state: 'listed'
+        quests: QuestCard[]
+        /** The Quest Source listed, for the board's hints; absent in a board kept by an older mod. */
+        source?: QuestSourceSetting
+      }
     | { state: 'unavailable'; problem: QuestSourceProblem }
   /** null shows every status, or every difficulty. */
   filters: { status: string | null; difficulty: Difficulty | null }

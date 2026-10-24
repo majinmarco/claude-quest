@@ -16,6 +16,8 @@ type JiraIssue = {
     labels: string[]
     issuetype: { name: string }
     status: { name: string; statusCategory: { key: 'new' | 'indeterminate' | 'done' } }
+    /** Markdown, as the server writes a description by default. */
+    description?: string
     /** Custom fields by their label on the site, as the Atlassian MCP maps them. */
     customFields?: Record<string, { id: string; value: unknown }>
   }
@@ -98,9 +100,13 @@ const asIssue = (ticket: ContractTicket): JiraIssue => ({
   webUrl: `${SITE}/browse/QUEST-${ticket.n}`,
   fields: {
     summary: ticket.title,
-    labels: ticket.size === undefined ? [] : [`size: ${ticket.size}`],
+    labels: [
+      ...(ticket.size === undefined ? [] : [`size: ${ticket.size}`]),
+      ...(ticket.triage === undefined ? [] : [ticket.triage]),
+    ],
     issuetype: { name: ticket.kind === undefined ? 'Task' : KIND_TYPE[ticket.kind] },
     status: { name: ticket.status ?? 'To Do', statusCategory: { key: 'new' } },
+    ...(ticket.description === undefined ? {} : { description: ticket.description }),
     ...(ticket.points === undefined
       ? {}
       : { customFields: { 'Story point estimate': { id: POINTS_FIELD, value: ticket.points } } }),
@@ -118,6 +124,12 @@ const failing = (failure: Extract<ContractWorld, { failure: unknown }>['failure'
         return answered({ error: true, message: 'Unauthorized', statusCode: 401 }, true)
       case 'unreachable':
         return answered({ error: true, message: 'Service Unavailable', statusCode: 503 }, true)
+      case 'misconfigured':
+        return answered({ error: true, message: "JQL validation failed: The value 'QUEST' does not exist for the field 'project'.", statusCode: 400 }, true)
+      case 'forbidden':
+        return answered({ error: true, message: 'Forbidden', statusCode: 403 }, true)
+      default:
+        throw new Error(`Jira cannot fail as ${failure}`)
     }
   }
 
@@ -129,6 +141,7 @@ questSourceContract({
       SETTINGS,
     ),
   ticket: n => `QUEST-${n}`,
+  failures: ['missing', 'unauthenticated', 'unreachable', 'misconfigured', 'forbidden'],
 })
 
 const issue = (
@@ -286,16 +299,70 @@ describe('Jira adapter', () => {
     }
   })
 
-  test('an account with no Jira site is unreachable, and says so', async () => {
+  test('an account with no Jira site is misconfigured, and says so', async () => {
     const result = await jiraIssues(
       async () => answered({ data: { resources: [] } }),
       SETTINGS,
     ).list()
 
-    expect(result).toMatchObject({ ok: false, problem: { kind: 'unreachable' } })
+    expect(result).toMatchObject({ ok: false, problem: { kind: 'misconfigured' } })
   })
 
-  test('a JQL error is unreachable, in Jira’s own words', async () => {
+  test('a project the account cannot see (403) is forbidden, and says what to check', async () => {
+    const result = await jiraIssues(failing('forbidden'), { ...SETTINGS, site: SITE }).list()
+
+    expect(result).toEqual({
+      ok: false,
+      problem: {
+        kind: 'forbidden',
+        message: "Your Atlassian account can't see project QUEST (403): check questSource.project or ask for Browse permission.",
+      },
+    })
+  })
+
+  test('getJiraIssue answering with the bare issue, not a page, still gets it', async () => {
+    const bare = async (_: string, tool: string): Promise<McpToolResult> =>
+      tool === 'getJiraIssue' ? answered(issue({ description: 'Orders of 10 or more.' })) : answered({})
+    const result = await jiraIssues(bare, { ...SETTINGS, site: SITE }).get('QUEST-7')
+
+    expect(result).toMatchObject({ ok: true, value: { ticket: 'QUEST-7', summary: 'Orders of 10 or more.' } })
+  })
+
+  test('a description in Atlassian Document Format is read as its text', async () => {
+    const adf = {
+      type: 'doc',
+      version: 1,
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Orders of 10' }, { type: 'text', text: ' or more.' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Get 10% off.' }] },
+      ],
+    }
+    const described = async (_: string, tool: string): Promise<McpToolResult> =>
+      tool === 'getJiraIssue'
+        ? answered({ issues: { nodes: [{ ...issue(), fields: { ...issue().fields, description: adf } }] } })
+        : answered({})
+    const result = await jiraIssues(described, { ...SETTINGS, site: SITE }).get('QUEST-7')
+
+    expect(result).toMatchObject({ ok: true, value: { summary: 'Orders of 10 or more.\nGet 10% off.' } })
+  })
+
+  test('a description the server wrote as HTML is read as its text', async () => {
+    const described = async (_: string, tool: string): Promise<McpToolResult> =>
+      tool === 'getJiraIssue'
+        ? answered(issue({ description: '<p>Orders of <strong>10</strong> or more.</p><p>Get 10% off.</p>' }))
+        : answered({})
+    const result = await jiraIssues(described, { ...SETTINGS, site: SITE }).get('QUEST-7')
+
+    expect(result).toMatchObject({ ok: true, value: { summary: 'Orders of 10 or more.\nGet 10% off.' } })
+  })
+
+  test('the status is the issue\'s, and its triage labels are tags', async () => {
+    const [quest] = await listed([issue({ labels: ['needs-info', 'frontend'] })])
+
+    expect(quest).toMatchObject({ status: 'To Do', tags: ['needs-info'] })
+  })
+
+  test('a JQL error is misconfigured, in Jira’s own words', async () => {
     const result = await jiraIssues(
       async () =>
         answered(
@@ -312,7 +379,7 @@ describe('Jira adapter', () => {
     expect(result).toEqual({
       ok: false,
       problem: {
-        kind: 'unreachable',
+        kind: 'misconfigured',
         message: "JQL validation failed: The value 'NOPE' does not exist for the field 'project'.",
       },
     })

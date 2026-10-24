@@ -49,8 +49,10 @@ export type GameEvent =
    * What is known of the ticket of Quest `ticket`: its title, a summary of
    * its description, its difficulty and whether its Quest Source found it.
    * Kept on the active Quest when it is that ticket's; each field given
-   * replaces the one kept, the others stay. The Sage and the boss show the
-   * title and summary to Haiku, as data.
+   * replaces the one kept, the others stay, but the difficulty, fixed at the
+   * start, is taken only by a Quest still Unrated. The Sage and the boss show
+   * the title and summary to Haiku, as data. A ticket `not-found` pays no
+   * Quest reward.
    */
   | {
       type: 'QUEST_DETAILS'
@@ -943,7 +945,9 @@ export const MAX_SUMMARY_CHARS = 1500
 
 // What is known of a ticket arrives after its Quest started (looked up
 // unawaited): it is kept on the Quest if that ticket's Quest is still the
-// active one, and dropped otherwise.
+// active one, and dropped otherwise. The difficulty is fixed at the start (the
+// Quest Board's): a lookup only rates a Quest started Unrated, as one the board
+// never listed is.
 const withDetails = (state: GameState, details: Extract<GameEvent, { type: 'QUEST_DETAILS' }>): GameState => {
   const { quest } = state
   if (quest === null || quest.ticket !== details.ticket) {
@@ -958,7 +962,7 @@ const withDetails = (state: GameState, details: Extract<GameEvent, { type: 'QUES
       ...quest,
       ...(title === undefined ? {} : { title }),
       ...(summary === undefined ? {} : { summary: summary.slice(0, MAX_SUMMARY_CHARS) }),
-      ...(difficulty === undefined ? {} : { difficulty }),
+      ...(difficulty === undefined || (quest.difficulty ?? 'Unrated') !== 'Unrated' ? {} : { difficulty }),
       ...(verified === undefined ? {} : { verified }),
     },
   }
@@ -1445,7 +1449,9 @@ const isConsoled = (player: Player, region: string | null, ticket: string): bool
 // Won, it pays the Quest reward by the Quest's difficulty (and half again
 // when Flawless) and its trophy, once per (Region, ticket), and heals fully;
 // unfought, it pays UNFOUGHT_SHARE of the reward, once per (Region, ticket)
-// and never after a win; lost or skipped, nothing. The tally and Badges follow. The Boss
+// and never after a win; lost or skipped, nothing. A ticket its Quest Source
+// did not find (`verified` not-found) pays no reward and earns no trophy: the
+// answers' XP is all it earns. The tally and Badges follow. The Boss
 // Fight stays, ended, until the next Quest starts; the Encounter under way is
 // put away, so the Scene shows how the Quest ended until the next Encounter.
 // The Battles under way are cleared, paying nothing: the Quest's work is done.
@@ -1462,14 +1468,15 @@ const closeQuest = (
   const region = state.region ?? null
   const difficulty = state.quest?.difficulty ?? 'Unrated'
   const fight = state.bossFight ?? null
-  const isNew = !isRewarded(state.player, region, ticket)
+  // Paid once per (Region, ticket), and never for a ticket its Quest Source did not find.
+  const isPayable = !isRewarded(state.player, region, ticket) && state.quest?.verified !== 'not-found'
   let played = state
   const effects: Effect[] = []
   let reward = 0
   let trophy: Trophy | undefined
 
   if (outcome === 'won') {
-    if (isNew) {
+    if (isPayable) {
       const earned = pay(played, null, 'intelligence', bossRewardOf(difficulty, fight?.questionCount ?? fight?.maxHp ?? BOSS_QUESTIONS))
       const bonus = flawless ? pay(earned.state, null, 'intelligence', Math.floor(earned.paid / 2)) : { state: earned.state, effects: [], paid: 0 }
       reward = earned.paid + bonus.paid
@@ -1482,7 +1489,7 @@ const closeQuest = (
     effects.push(...healed.effects, ...(trophy === undefined ? [] : [{ type: 'TROPHY_EARNED', trophy } as const]))
   }
 
-  if (outcome === 'unfought' && isNew && !isConsoled(state.player, region, ticket)) {
+  if (outcome === 'unfought' && isPayable && !isConsoled(state.player, region, ticket)) {
     const earned = pay(played, null, 'intelligence', Math.floor(questXp(difficulty) * UNFOUGHT_SHARE))
     reward = earned.paid
     const { player } = earned.state

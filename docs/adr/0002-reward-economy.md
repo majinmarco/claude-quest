@@ -179,3 +179,4 @@ No new `userConfig`. Every economy number stays a constant:
 - Persistence: `migratePlayer`, used by every load.
 - HUD: `Lv N <title>`, `Exhausted`, `★n`, the Stats line. `/badges`.
 - Tests: pools, Battles, Questions and Stat tags, the Boss reward and the unfought share, HP and Exhaustion, the level table and migration, Badges and titles (`tests/economy.test.ts`).
+- Later (after 240d668): the ticket lookup runs after QUEST_STARTED and settles the two risks above. A ticket its Quest Source did not find pays no Quest reward, unfought share included, and earns no trophy; a source that can't be reached rewards as Unrated. The lookup rates only a Quest started Unrated: a difficulty fixed at the start is never changed.

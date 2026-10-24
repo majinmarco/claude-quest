@@ -133,6 +133,11 @@ const engine = (
 
   const runs: { argv: string[]; cwd?: string }[] = []
   on('process.run', (_, e) => {
+    // The Quest's ticket looked up in GitHub Issues: offline, so the Quest is
+    // left as it started. Only git's runs are the Boss Fight's.
+    if (e.argv[0] === 'gh') {
+      return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com\n', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     runs.push({ argv: [...e.argv], cwd: e.init?.cwd })
 
     return {
@@ -418,7 +423,7 @@ describe('The Boss Fight', () => {
 
     expect(asked).toHaveLength(0)
     // Unfought, an Unrated Quest pays a quarter of its 80.
-    expect(toasts).toContain('No boss came for Quest #12: it closes without a Boss Fight. +20 XP (Intelligence).')
+    expect(toasts).toContain('No boss came for Quest #12: it closes without a Boss Fight. +20 XP (Intelligence). /quest-board for your next Quest')
     expect(region().quests?.[0]).toMatchObject({ ticket: '#12', status: 'unfought', endedAt: '2026-10-23T21:00:00.000Z' })
     expect((await hud($)).some(text => text?.startsWith('Quest '))).toBe(false)
   })

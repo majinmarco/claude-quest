@@ -6,8 +6,16 @@
 
 import type { McpToolResult } from 'claude-code'
 
-import { difficultyOf, pointsFromLabels, sizeFromLabels, statsOf } from './quest-source'
-import type { QuestCard, QuestSource, QuestSourceProblem, Sourced } from './quest-source'
+import {
+  difficultyOf,
+  LISTING_CAP,
+  plainTextOf,
+  pointsFromLabels,
+  sizeFromLabels,
+  statsOf,
+  triageTagsOf,
+} from './quest-source'
+import type { QuestCard, QuestSource, QuestSourceProblem, Sourced, TicketDetails } from './quest-source'
 import type { JiraSettings } from '../types'
 
 export type { JiraSettings } from '../types'
@@ -23,7 +31,7 @@ export type CallTool = (
 export const DEFAULT_SERVER = 'claude.ai Atlassian MCP'
 
 /** The most issues one listing reads, as for GitHub Issues. */
-const LIMIT = 200
+const LIMIT = LISTING_CAP
 /** The most the search tool returns a page. */
 const PAGE = 100
 
@@ -36,6 +44,8 @@ type JiraIssue = {
     labels?: string[]
     issuetype?: { name?: string }
     status?: { name?: string }
+    /** Markdown or HTML (the server's default), or Atlassian Document Format. */
+    description?: unknown
     /** Custom fields by their label on the site: the server's mapping. */
     customFields?: Record<string, { id?: string; value?: unknown }>
     [field: string]: unknown
@@ -69,6 +79,7 @@ const pointsOf = (issue: JiraIssue, field: string | undefined): number | undefin
 const asQuest = (issue: JiraIssue, field: string | undefined): QuestCard => {
   const labels = issue.fields?.labels ?? []
   const type = issue.fields?.issuetype?.name
+  const tags = triageTagsOf(labels)
 
   return {
     ticket: issue.key,
@@ -77,7 +88,14 @@ const asQuest = (issue: JiraIssue, field: string | undefined): QuestCard => {
     difficulty: difficultyOf({ points: pointsOf(issue, field), size: sizeFromLabels(labels) }),
     recommendedStats: statsOf(type === undefined ? labels : [type, ...labels]),
     ...(issue.webUrl === undefined ? {} : { url: issue.webUrl }),
+    ...(tags.length === 0 ? {} : { tags }),
   }
+}
+
+const asDetails = (issue: JiraIssue, field: string | undefined): TicketDetails => {
+  const summary = plainTextOf(issue.fields?.description)
+
+  return { ...asQuest(issue, field), ...(summary === undefined ? {} : { summary }) }
 }
 
 /** What a call answered: its JSON, or why it failed and Jira's status code. */
@@ -92,6 +110,11 @@ const NEEDS_AUTH = /auth|sign[ -]?in|log[ -]?in|unauthori[sz]ed|\b401\b/i
 const unauthenticated = (server: string): QuestSourceProblem => ({
   kind: 'unauthenticated',
   message: `The Atlassian connection (${server}) is not signed in: authenticate it with /mcp.`,
+})
+
+const forbidden = (project: string): QuestSourceProblem => ({
+  kind: 'forbidden',
+  message: `Your Atlassian account can't see project ${project} (403): check questSource.project or ask for Browse permission.`,
 })
 
 /** The text blocks of a result, joined. */
@@ -117,6 +140,7 @@ const parse = (text: string): unknown => {
 const callJira = async (
   call: CallTool,
   server: string,
+  project: string,
   tool: string,
   args: Record<string, unknown>,
 ): Promise<Answer> => {
@@ -149,6 +173,9 @@ const callJira = async (
     if (statusCode === 401) {
       return { ok: false, problem: unauthenticated(server), statusCode }
     }
+    if (statusCode === 403) {
+      return { ok: false, problem: forbidden(project), statusCode }
+    }
     const message =
       typeof refusal.message === 'string' && refusal.message.length > 0
         ? refusal.message
@@ -156,7 +183,8 @@ const callJira = async (
 
     return {
       ok: false,
-      problem: { kind: 'unreachable', message },
+      // A query Jira refused (400): the project, the JQL or a field set wrong.
+      problem: { kind: statusCode === 400 ? 'misconfigured' : 'unreachable', message },
       ...(statusCode === undefined ? {} : { statusCode }),
     }
   }
@@ -240,7 +268,7 @@ export const jiraIssues = (call: CallTool, settings: JiraSettings): QuestSource 
       return { ok: true, value: knownSite }
     }
 
-    const answered = await callJira(call, server, 'getAccessibleAtlassianResources', {})
+    const answered = await callJira(call, server, settings.project, 'getAccessibleAtlassianResources', {})
     if (!answered.ok) {
       return { ok: false, problem: answered.problem }
     }
@@ -250,8 +278,8 @@ export const jiraIssues = (call: CallTool, settings: JiraSettings): QuestSource 
       return {
         ok: false,
         problem: {
-          kind: 'unreachable',
-          message: `The Atlassian connection (${server}) reaches no Jira site.`,
+          kind: 'misconfigured',
+          message: `The Atlassian connection (${server}) reaches no Jira site: set questSource.site to the site's URL, or connect an account that has Jira.`,
         },
       }
     }
@@ -270,7 +298,7 @@ export const jiraIssues = (call: CallTool, settings: JiraSettings): QuestSource 
       const quests: QuestCard[] = []
       let next: string | undefined
       do {
-        const answered = await callJira(call, server, 'searchJiraIssuesUsingJql', {
+        const answered = await callJira(call, server, settings.project, 'searchJiraIssuesUsingJql', {
           cloudId: site.value,
           jql,
           fields,
@@ -301,10 +329,10 @@ export const jiraIssues = (call: CallTool, settings: JiraSettings): QuestSource 
         return site
       }
 
-      const answered = await callJira(call, server, 'getJiraIssue', {
+      const answered = await callJira(call, server, settings.project, 'getJiraIssue', {
         cloudId: site.value,
         issueIdOrKey: key,
-        fields,
+        fields: [...fields, 'description'],
       })
       if (!answered.ok) {
         return answered.statusCode === 404
@@ -312,9 +340,11 @@ export const jiraIssues = (call: CallTool, settings: JiraSettings): QuestSource 
           : { ok: false, problem: answered.problem }
       }
 
-      const [issue] = pageOf(answered.value).issues
+      // The Atlassian MCP answers with a page of one (`issues.nodes`), as
+      // seen on a real site in October 2026; a bare issue is read too.
+      const issue = isIssue(answered.value) ? answered.value : pageOf(answered.value).issues[0]
 
-      return { ok: true, value: isIssue(issue) ? asQuest(issue, pointsField) : null }
+      return { ok: true, value: isIssue(issue) ? asDetails(issue, pointsField) : null }
     },
   }
 }

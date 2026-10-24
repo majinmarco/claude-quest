@@ -42,6 +42,20 @@ const describeEncounter = (encounter: Encounter): string => {
   return `Exploring ${name}`
 }
 
+/** The most of a Quest's title the HUD shows, in characters. */
+const TITLE_CHARS = 30
+
+/** The active Quest as the HUD names it: `Quest #4 Bulk discounts for big…`. */
+export const questLine = ({ ticket, title }: { ticket: string; title?: string }): string => {
+  if (title === undefined || title.trim() === '') {
+    return `Quest ${ticket}`
+  }
+
+  const shown = title.trim()
+
+  return `Quest ${ticket} ${shown.length <= TITLE_CHARS ? shown : `${shown.slice(0, TITLE_CHARS - 1).trimEnd()}…`}`
+}
+
 /** The MVP Stats, abbreviated, in one line: `INT 120 · WIS 15 · STR 40`. */
 export const statsLine = ({ stats }: Player): string =>
   `INT ${stats.intelligence} · WIS ${stats.wisdom} · STR ${stats.strength}`
@@ -105,7 +119,7 @@ export function drawHud(
         {(player.badges ?? []).length > 0 && <Text color="yellow">★{player.badges?.length}</Text>}
         {quest !== null && (
           <Text bold color="magenta">
-            Quest {quest.ticket}
+            {questLine(quest)}
           </Text>
         )}
         {isUnderWay(bossFight) && (
