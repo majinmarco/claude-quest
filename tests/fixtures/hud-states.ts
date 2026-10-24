@@ -95,3 +95,11 @@ export const HUD_BATTLE: GameState = {
   quest: { ticket: 'ABC-123', encounters: [], title: 'Crash on an empty Region file' },
   bossFight: { ticket: 'ABC-123', sha: 'def5678', cwd: null, status: 'summoned', hp: 2, maxHp: 2, questions: [], lastAnswer: null },
 }
+
+/** A Prophecy armed during a Quest, waiting for the Player's call. */
+export const HUD_PROPHECY: GameState = {
+  ...HUD_CALM,
+  player: { ...playerAt(3, { dexterity: 30, intelligence: 20 }), xp: 60, totalXp: 310 },
+  quest: { ticket: '#18', encounters: [], title: 'Prophecy: call the red test before it runs' },
+  prophecy: { file: 'tests/vault.test.ts', armedAt: 0 },
+}

@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { BOSS_ANSWER_XP, DEFAULT_RULES, HASTY_ANSWER_XP, MAX_QUEST_CHANGES, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MIN_CRAFT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
 import type { GameState, QuestionContent } from '../types'
+import { translateToolCall } from '../src/translate'
+import * as bash from './fixtures/bash-calls'
 
 describe('Game Engine: a new Player', () => {
   test('starts at level 1 with no XP, full HP, no Stats and an empty tally', () => {
@@ -21,7 +23,7 @@ describe('Game Engine: a new Player', () => {
         charisma: 0,
         constitution: 0,
       },
-      tally: { questsClosed: 0, bossesWon: 0, bossStreak: 0, sageRight: 0, modulesDiscovered: 0, regions: [] },
+      tally: { questsClosed: 0, bossesWon: 0, bossStreak: 0, sageRight: 0, modulesDiscovered: 0, regions: [], prophecyStreak: 0 },
     })
   })
 })
@@ -264,7 +266,7 @@ describe('Game Engine: Quest start', () => {
       ticket: '#4',
       encounters: [],
       difficulty: 'Unrated',
-      pools: { ambient: 0, battle: 0, sage: 0 },
+      pools: { ambient: 0, battle: 0, sage: 0, prophecy: 0 },
       sageWrong: 0,
     })
     expect(effects).toEqual([{ type: 'QUEST_STARTED', ticket: '#4' }])
@@ -1647,5 +1649,134 @@ describe('Game Engine: the Boss Fight', () => {
     const won = play(fighting, answer(1, 0), answer(2, 0), answer(3, 0)).state
 
     expect(play(won, { type: 'COMMIT', sha: '691eb59', cwd: null }).effects).toEqual([])
+  })
+})
+
+describe('Game Engine: Prophecy', () => {
+  const T = Date.UTC(2026, 9, 24, 10, 0)
+  const testEdited = (path = 'tests/vault.test.ts', at = T) => ({ type: 'TEST_FILE_EDITED', path, at }) as const
+  const call = (prophecy: 'red' | 'green' | 'rout') => ({ type: 'PROPHECY_MADE', call: prophecy }) as const
+  const questing = step(newGame(), { type: 'QUEST_START', ticket: '#18' }).state
+  const play = (state: GameState, ...events: Parameters<typeof step>[1][]) => {
+    let effects: ReturnType<typeof step>['effects'] = []
+    for (const event of events) {
+      ;({ state, effects } = step(state, event))
+    }
+
+    return { state, effects }
+  }
+
+  test('a test file edited during a Quest arms a Prophecy, unanswered', () => {
+    const { state, effects } = play(questing, testEdited())
+
+    expect(state.prophecy).toEqual({ file: 'tests/vault.test.ts', armedAt: T })
+    expect(effects).toEqual([{ type: 'PROPHECY_ARMED', file: 'tests/vault.test.ts' }])
+  })
+
+  test('a second test edit replaces a Prophecy not yet called', () => {
+    const { state, effects } = play(questing, testEdited(), testEdited('tests/ledger.test.ts', T + 1000))
+
+    expect(state.prophecy).toEqual({ file: 'tests/ledger.test.ts', armedAt: T + 1000 })
+    expect(effects).toEqual([{ type: 'PROPHECY_ARMED', file: 'tests/ledger.test.ts' }])
+  })
+
+  test('a Prophecy called stays until its Check, whatever test is edited meanwhile', () => {
+    const { state, effects } = play(questing, testEdited(), call('red'), testEdited('tests/ledger.test.ts', T + 1000))
+
+    expect(state.prophecy).toEqual({ file: 'tests/vault.test.ts', call: 'red', armedAt: T })
+    expect(effects).toEqual([])
+  })
+
+  test('a call is taken once, and only while a Prophecy is armed', () => {
+    expect(play(questing, call('green')).state.prophecy ?? null).toBeNull()
+    expect(play(questing, testEdited(), call('red'), call('rout')).state.prophecy?.call).toBe('red')
+  })
+
+  /** The game event a recorded Bash run plays. */
+  const ran = (fixture: { input: Parameters<typeof translateToolCall>[0]; result: Parameters<typeof translateToolCall>[1] }) => {
+    const event = translateToolCall(fixture.input, fixture.result, '/work/runners')
+    if (event === null) {
+      throw new Error('the fixture plays no event')
+    }
+
+    return event
+  }
+
+  const SETTLED = [
+    ['vitestPassing', 'green'],
+    ['vitestFailing1', 'red'],
+    ['jestSuiteBroken', 'red'],
+    ['vitestFailing3', 'rout'],
+    ['tscFailing1', 'red'],
+    ['eslintPassing', 'green'],
+  ] as const
+  for (const [fixture, outcome] of SETTLED) test(`the next Check settles it: ${fixture} is ${outcome}`, () => {
+    for (const prophecy of ['red', 'green', 'rout'] as const) {
+      const { state, effects } = play(questing, testEdited(), call(prophecy), ran(bash[fixture]))
+      const isRight = prophecy === outcome
+
+      expect(state.prophecy).toBeNull()
+      expect(effects).toContainEqual({ type: 'PROPHECY_SETTLED', call: prophecy, outcome, isRight, xp: isRight ? 10 : 0 })
+    }
+  })
+
+  test('a right call pays 10 Dexterity XP from the prophecy pool', () => {
+    const { state, effects } = play(questing, testEdited(), call('green'), ran(bash.vitestPassing))
+
+    expect(state.player.stats.dexterity).toBe(10)
+    expect(state.player.totalXp).toBe(10)
+    expect(state.quest?.pools?.prophecy).toBe(10)
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 10, stat: 'dexterity' })
+  })
+
+  test('a wrong call pays nothing and costs no HP', () => {
+    const hurt = { ...questing, player: { ...questing.player, hp: 50 } }
+    const { state, effects } = play(hurt, testEdited(), call('green'), ran(bash.vitestFailing3))
+
+    expect(state.player).toEqual({ ...hurt.player, tally: { ...hurt.player.tally, prophecyStreak: 0 } })
+    expect(effects.some(effect => effect.type === 'HP_LOST' || effect.type === 'XP_GAINED')).toBe(false)
+  })
+
+  test('a Prophecy never called goes with the next Check, paying nothing, telling nothing', () => {
+    const { state, effects } = play(questing, testEdited(), ran(bash.vitestPassing))
+
+    expect(state.prophecy).toBeNull()
+    expect(effects.some(effect => effect.type === 'PROPHECY_SETTLED')).toBe(false)
+  })
+
+  test('the Battle the Check plays is played as before, beside the Prophecy', () => {
+    const { state, effects } = play(questing, testEdited(), call('rout'), ran(bash.vitestFailing3))
+
+    expect(state.battles).toHaveLength(1)
+    expect(effects[0]).toMatchObject({ type: 'ENCOUNTER_STARTED' })
+  })
+
+  test('a new Quest clears an armed Prophecy, silently', () => {
+    const { state, effects } = play(questing, testEdited(), call('red'), { type: 'QUEST_START', ticket: '#19' })
+
+    expect(state.prophecy).toBeNull()
+    expect(effects.some(effect => effect.type.startsWith('PROPHECY'))).toBe(false)
+  })
+
+  test('the Quest already running, started again, keeps its Prophecy', () => {
+    const { state } = play(questing, testEdited(), { type: 'QUEST_START', ticket: '#18' })
+
+    expect(state.prophecy).toEqual({ file: 'tests/vault.test.ts', armedAt: T })
+  })
+
+  test('the Quest closing clears an armed Prophecy, silently', () => {
+    const summoned = play(questing, testEdited(), call('red'), { type: 'COMMIT', sha: 'abc1234', cwd: null }).state
+    const { state, effects } = play(summoned, { type: 'BOSS_FIGHT_UNAVAILABLE', ticket: '#18', reason: 'no diff' })
+
+    expect(state.quest).toBeNull()
+    expect(state.prophecy).toBeNull()
+    expect(effects.some(effect => effect.type.startsWith('PROPHECY'))).toBe(false)
+  })
+
+  test('outside a Quest a Prophecy is armed and paid from the session\'s pool', () => {
+    const { state } = play(newGame(), testEdited(), call('green'), ran(bash.vitestPassing))
+
+    expect(state.pools?.prophecy).toBe(10)
+    expect(state.player.stats.dexterity).toBe(10)
   })
 })

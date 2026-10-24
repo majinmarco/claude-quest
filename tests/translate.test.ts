@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { SessionUsage } from 'claude-code'
 
-import { translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import { isTestFile, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import * as commits from './fixtures/git-commits'
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
 import * as bash from './fixtures/bash-calls'
@@ -719,5 +719,55 @@ describe('Event translator: git commits', () => {
 
   test('a commit a hook denied is no commit', () => {
     expect(translateCommit(commits.commitAfterAdd.input, { deny: 'no commits' })).toBeNull()
+  })
+})
+
+describe('Event translator: which files are test files', () => {
+  test('a file named as a test is one, wherever it lies', () => {
+    for (const path of [
+      '/work/claude-quest/src/engine.test.ts',
+      '/work/claude-quest/src/engine.spec.tsx',
+      '/work/claude-quest/app/test_vault.py',
+      '/work/claude-quest/pkg/vault_test.go',
+      'src/ledger.test.js',
+    ]) {
+      expect(isTestFile(path, ROOT)).toBe(true)
+    }
+  })
+
+  test('a file under tests/, test/, __tests__/ or spec/ in the project is one', () => {
+    for (const path of [
+      '/work/claude-quest/tests/fixtures/bash-calls.ts',
+      '/work/claude-quest/test/helpers.rb',
+      '/work/claude-quest/src/__tests__/engine.js',
+      '/work/claude-quest/spec/vault_spec.rb',
+      'tests/economy.ts',
+    ]) {
+      expect(isTestFile(path, ROOT)).toBe(true)
+    }
+  })
+
+  test('any other file is not, a test-like folder above the project\'s root counted for nothing', () => {
+    for (const path of [
+      '/work/claude-quest/src/engine.ts',
+      '/work/claude-quest/src/testing.ts',
+      '/work/claude-quest/src/contest_entry.py',
+      '/work/claude-quest/docs/tests.md',
+      '/work/claude-quest/src/latest.go',
+      '/home/marco/test/notes.txt',
+    ]) {
+      expect(isTestFile(path, ROOT)).toBe(false)
+    }
+    expect(isTestFile('/home/marco/test/project/src/engine.ts', '/home/marco/test/project')).toBe(false)
+  })
+
+  test('Windows paths are read with their backslashes', () => {
+    expect(isTestFile('C:\\work\\vault\\tests\\a.ts', 'C:\\work\\vault')).toBe(true)
+    expect(isTestFile('C:\\work\\vault\\src\\a.ts', 'C:\\work\\vault')).toBe(false)
+  })
+
+  test('without a root, only a file named as a test is one', () => {
+    expect(isTestFile('/work/x/src/a.test.ts', null)).toBe(true)
+    expect(isTestFile('/work/x/tests/a.ts', null)).toBe(false)
   })
 })

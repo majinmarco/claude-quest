@@ -9,15 +9,15 @@ The one system-wide character belonging to the human developer, carried across e
 _Avoid_: User, character, hero, profile
 
 **Stat**:
-One of six attributes of the Player (Intelligence, Wisdom, Dexterity, Strength, Charisma, Constitution), each standing for a real engineering skill: the running total of XP its kind of work earned. Three are in play (Intelligence, Wisdom, Strength); Stats never change difficulty.
+One of six attributes of the Player (Intelligence, Wisdom, Dexterity, Strength, Charisma, Constitution), each standing for a real engineering skill: the running total of XP its kind of work earned. Four are in play (Intelligence, Wisdom, Dexterity, Strength); Stats never change difficulty.
 _Avoid_: Attribute, skill
 
 **Title**:
-What the Player is called from level 3, by their highest Stat in play: Scholar (Intelligence), Pathfinder (Wisdom), Warrior (Strength); `Veteran` in front from level 10. Shown on the HUD after the level.
+What the Player is called from level 3, by their highest Stat in play: Scholar (Intelligence), Pathfinder (Wisdom), Duelist (Dexterity), Warrior (Strength), a tie going in that order; `Veteran` in front from level 10. Shown on the HUD after the level.
 _Avoid_: Class, rank
 
 **XP pool**:
-One of three purses a Quest pays its capped XP from (per session outside a Quest): `ambient` (reads, Module discovery, Crafting; 60 per Quest), `battle` (Battles won; 60) and `sage` (the Sage's answers; 200). A full pool pays nothing more and says so once; the Boss Fight is uncapped.
+One of four purses a Quest pays its capped XP from (per session outside a Quest): `ambient` (reads, Module discovery, Crafting; 60 per Quest), `battle` (Battles won; 60), `sage` (the Sage's answers; 200) and `prophecy` (right Prophecies; 30). A full pool pays nothing more and says so once; the Boss Fight is uncapped.
 _Avoid_: Cap, budget (that's the Haiku budget)
 
 **Exhausted**:
@@ -141,7 +141,7 @@ The XP a Quest's Boss Fight won pays, by its ticket's difficulty alone (Trivial 
 _Avoid_: Bounty, Quest XP
 
 **Badge**:
-One of a small, fixed set of feats on the Player, each earned once and kept across projects (First Blood, Questbound, Boss Slayer, Flawless, Dragon Slayer, Cartographer, Sage's Apprentice, Unbroken, Wayfarer, Second Wind). Badges pay no XP; `/badges` lists them.
+One of a small, fixed set of feats on the Player, each earned once and kept across projects (First Blood, Questbound, Boss Slayer, Flawless, Dragon Slayer, Cartographer, Sage's Apprentice, Unbroken, Wayfarer, Second Wind, Oracle). Badges pay no XP; `/badges` lists them.
 _Avoid_: Achievement, trophy
 
 **Trophy**:
@@ -167,8 +167,12 @@ The Cartographer's Question after every third Module discovered in a Quest, abou
 _Avoid_: Architecture quiz, exploration question
 
 **Prophecy**:
-The Player's call, made after Claude edits a test file and before the next Check runs, of how that Check will end: Red (one failure), Green (passing) or Rout (two or more). A right call pays Dexterity XP from the prophecy XP pool; a wrong one costs nothing. Five right in a row earn the Oracle Badge; Dexterity as the highest Stat makes the Player a Duelist.
+The Player's call, made after Claude writes or edits a test file and before the next Check runs, of how that Check will end: Red (one failure, or failures it counts none of), Green (passing) or Rout (two or more). The next Check of any kind settles it, not only the one the test belongs to; another test edit before the call replaces it, and a new Quest or the Quest closing clears it. A right call pays 10 Dexterity XP from the prophecy XP pool; a wrong one costs nothing; one never called pays nothing. Five right in a row (one never called or never settled breaking nothing) earn the Oracle Badge; Dexterity as the highest Stat makes the Player a Duelist. Called with the HUD's Buttons (`1 Red`, `2 Green`, `3 Rout`) or `/prophecy`.
 _Avoid_: Bet, prediction, wager
+
+**Test file**:
+A file whose edit arms a Prophecy: named `*.test.*`, `*.spec.*`, `test_*.py` or `*_test.go`, or lying under a `tests/`, `test/`, `__tests__/` or `spec/` folder below the project's root.
+_Avoid_: Test suite (that is a Check), spec (outside a file name)
 
 **Content Generator**:
 What asks Haiku for a Question about a change and checks the reply against the contract; a reply that breaks it is skipped, never queued.
@@ -193,7 +197,7 @@ _Avoid_: Inbox, backlog
 ## The HUD
 
 **HUD**:
-The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, the session's vitals, and the Stats in play. Where the surface draws pixel art it is one strip of it: the Player's portrait (a plain adventurer until a Title, then a Scholar, Pathfinder or Warrior), the bars, and the Quest on a banner beside the current Encounter, calm but for a flash on damage and a fill on XP gained; in the terminal, and where the `hudStyle` setting says text, it is text, at most three rows of the band's width. When it is narrow the Quest's title shortens first, then the lesser parts give way.
+The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, a Prophecy armed (its three Buttons until called, then the call, dim), the session's vitals, and the Stats in play (`INT · WIS · DEX · STR`). Where the surface draws pixel art it is one strip of it: the Player's portrait (a plain adventurer until a Title, then a Scholar, Pathfinder or Warrior; a Duelist has none of its own yet), the bars, and the Quest on a banner beside the current Encounter, calm but for a flash on damage and a fill on XP gained; in the terminal, and where the `hudStyle` setting says text, it is text, at most three rows of the band's width. When it is narrow the Quest's title shortens first, then the lesser parts give way.
 _Avoid_: Status bar, header
 
 **Overview**:

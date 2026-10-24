@@ -101,6 +101,46 @@ export const moduleOfFolder = (relative: string): string | null => {
   return IGNORED_FOLDERS.has(segments[0] ?? '') ? null : segments.slice(0, MODULE_DEPTH).join('/')
 }
 
+/** A file's name as a test runner names its tests: `*.test.*`, `*.spec.*`, `test_*.py`, `*_test.go`. */
+const TEST_FILE_NAME = /^(?:.+\.(?:test|spec)\..+|test_.+\.py|.+_test\.go)$/
+
+/** The folders whose files are all tests. */
+const TEST_FOLDERS = new Set(['tests', 'test', '__tests__', 'spec'])
+
+/**
+ * Whether `path` is a test file, whose edit arms a Prophecy: named as a test
+ * (`*.test.*`, `*.spec.*`, `test_*.py`, `*_test.go`), or lying under a
+ * `tests/`, `test/`, `__tests__/` or `spec/` folder of the project. Only the
+ * folders below the root count, so a project kept in `~/test/` is not all
+ * tests; a relative path is taken from the root. Without a root, or outside
+ * the project, only the name counts.
+ */
+export const isTestFile = (path: string, root: string | null): boolean => {
+  const segments = slashed(path).split('/').filter(Boolean)
+  if (TEST_FILE_NAME.test(segments.at(-1) ?? '')) {
+    return true
+  }
+  if (root === null) {
+    return false
+  }
+
+  const base = resolve('/', slashed(root))
+  const absolute = resolve(base, slashed(path))
+  const prefix = base === '/' ? '/' : `${base}/`
+  if (!absolute.startsWith(prefix)) {
+    return false
+  }
+
+  return absolute.slice(prefix.length).split('/').slice(0, -1).some(folder => TEST_FOLDERS.has(folder))
+}
+
+/**
+ * The TEST_FILE_EDITED a game event plays beside it, at `at`: a FILE_EDIT of
+ * a test file (isTestFile) arms a Prophecy; any other event, none.
+ */
+export const testFileEditedOf = (event: GameEvent, root: string | null, at: number): GameEvent | null =>
+  event.type === 'FILE_EDIT' && isTestFile(event.path, root) ? { type: 'TEST_FILE_EDITED', path: event.path, at } : null
+
 // A Module is a folder of the project: a Read is in its file's folder; a
 // search, in the folder it searched. A Glob searches a folder always; a Grep
 // may search one file, taken as a file when its last segment has an extension.

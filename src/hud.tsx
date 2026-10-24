@@ -1,15 +1,17 @@
 // The HUD band above the prompt: level and title, XP bar, HP (or Exhausted),
 // the Badges earned, the active Quest, its Boss Fight under way, the
-// Questions waiting and the current Encounter, then the session's vitals
-// (Mana, the model and the spend) and the MVP Stats, dim: filled into at
-// most three rows of the band's width, the lesser parts giving way. Where
+// Questions waiting, the Prophecy and the current Encounter, then the
+// session's vitals (Mana, the model and the spend) and the Stats in play,
+// dim: filled into at most three rows of the band's width, the lesser parts
+// giving way. A Prophecy armed and not yet called adds a row of three
+// Buttons, Red, Green and Rout, on hotkeys 1, 2 and 3. Where
 // the surface draws SVG and the Player keeps the pixel style, the same parts
 // are drawn as one pixel strip (src/hud-art.ts) instead.
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
 import { BADGES, isExhausted, isUnderWay, manaLevel, titleOf, xpToClear } from './engine'
-import type { Encounter, GameState, ManaLevel, Player } from './engine'
+import type { Encounter, GameState, ManaLevel, Player, ProphecyCall } from './engine'
 import { COMPACTION_WARNING, hudStrip, PIXELS_PER_COLUMN, portraitOf, STILL, STRIP_HEIGHT, stripWidth } from './hud-art'
 import type { StripMotion, StripSegment } from './hud-art'
 import { MONSTERS } from './scene-art'
@@ -75,9 +77,21 @@ export const questLine = ({ ticket, title }: { ticket: string; title?: string },
   return shown === '' ? `Quest ${ticket}` : `Quest ${ticket} ${shown}`
 }
 
-/** The MVP Stats, abbreviated, in one line: `INT 120 · WIS 15 · STR 40`. */
+/** The Stats in play, abbreviated, in one line: `INT 120 · WIS 15 · DEX 10 · STR 40`. */
 export const statsLine = ({ stats }: Player): string =>
-  `INT ${stats.intelligence} · WIS ${stats.wisdom} · STR ${stats.strength}`
+  `INT ${stats.intelligence} · WIS ${stats.wisdom} · DEX ${stats.dexterity} · STR ${stats.strength}`
+
+/** The three calls of a Prophecy, in the order of their Buttons and hotkeys. */
+export const PROPHECY_CALLS: readonly ProphecyCall[] = ['red', 'green', 'rout']
+
+/** A call as the Player reads it: `Red`, `Green`, `Rout`. */
+export const callName = (call: ProphecyCall): string => call.charAt(0).toUpperCase() + call.slice(1)
+
+/** What the HUD's Buttons do: the Prophecy's three calls. */
+export type HudActions = { prophesy: (call: ProphecyCall) => void }
+
+/** Whether the game has a Prophecy armed and not yet called: its Buttons show. */
+const isAwaitingCall = ({ prophecy }: GameState): boolean => prophecy != null && prophecy.call === undefined
 
 /** The Player's level and title: `Lv 4 Scholar`, `Lv 2`. */
 export const levelLine = (player: Player): string => {
@@ -225,7 +239,7 @@ const questTitles = ({ title }: { title?: string }): string[] => {
 }
 
 /** The HUD's parts for `state`, in the order they are drawn. */
-const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: GameState): Part[] => {
+const partsOf = ({ player, encounter, vitals, quest, questions, bossFight, prophecy }: GameState): Part[] => {
   const toClear = xpToClear(player.level)
   const mana = manaLevel(vitals.mana)
   const badges = (player.badges ?? []).length
@@ -245,7 +259,7 @@ const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: Gam
         : { text: `HP ${player.hp}/${player.maxHp}`, color: isLowHp ? 'red' : 'green' },
       { kind: 'hp', hp: isExhausted(player) ? 0 : player.hp, maxHp: player.maxHp, isLow: isLowHp },
     ),
-    badges > 0 ? single(10, { text: `★${badges}`, color: 'yellow' }, { kind: 'badges', count: badges }) : null,
+    badges > 0 ? single(11, { text: `★${badges}`, color: 'yellow' }, { kind: 'badges', count: badges }) : null,
     quest === null
       ? null
       : {
@@ -277,15 +291,26 @@ const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: Gam
           { kind: 'questions', count: questions.length },
         )
       : null,
+    // Called, it is a dim line until its Check; not yet called, its Buttons
+    // say it in the text band (no text part), the strip draws it waiting.
+    prophecy == null
+      ? null
+      : prophecy.call === undefined
+        ? { rank: 6, versions: [], art: [{ kind: 'prophecy', call: null }] }
+        : single(
+            6,
+            { text: `Prophecy: ${callName(prophecy.call)}`, dimColor: true },
+            { kind: 'prophecy', call: prophecy.call },
+          ),
     encounter === null
       ? null
       : single(
-          6,
+          7,
           { text: describeEncounter(encounter), dimColor: true },
           { kind: 'encounter', sprite: encounterSprite(encounter), text: describeEncounter(encounter) },
         ),
     {
-      rank: 7,
+      rank: 8,
       versions: [
         [
           { text: bar((vitals.mana ?? 0) / 100), color: MANA_COLOR[mana] },
@@ -303,9 +328,9 @@ const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: Gam
             ...(vitals.spendUsd === null ? [] : [{ text: `$${vitals.spendUsd.toFixed(2)}`, dimColor: true }]),
           ]
 
-          return { rank: 8, versions: [pieces], art: [{ kind: 'vitals', text: pieces.map(piece => piece.text).join(' ') }] }
+          return { rank: 9, versions: [pieces], art: [{ kind: 'vitals', text: pieces.map(piece => piece.text).join(' ') }] }
         })(),
-    single(9, { text: statsLine(player), dimColor: true }, { kind: 'stats', text: statsLine(player) }),
+    single(10, { text: statsLine(player), dimColor: true }, { kind: 'stats', text: statsLine(player) }),
   ]
 
   return parts.filter(part => part !== null)
@@ -320,6 +345,7 @@ const STRIP_ORDER: StripSegment['kind'][] = [
   'quest',
   'boss',
   'questions',
+  'prophecy',
   'encounter',
   'mana',
   'vitals',
@@ -361,26 +387,50 @@ const motionOf = (before: LastDrawn | undefined, player: Player): StripMotion =>
 const lastDrawn = new Map<string, LastDrawn>()
 
 /**
+ * The columns the Prophecy's Buttons take beside the pixel strip, about:
+ * the strip is laid out in what is left.
+ */
+const PROPHECY_BUTTON_COLUMNS = 30
+
+/**
  * The HUD: its parts filled into at most three rows of the band's width. When
  * they do not all fit, the Quest's title shortens first, down to the ticket
  * alone; then the lesser parts give way: the Badge count, the Stats, the
- * model and spend, Mana, the Encounter, the Questions waiting, the boss.
+ * model and spend, Mana, the Encounter, the Prophecy called, the Questions
+ * waiting, the boss.
+ *
+ * A Prophecy armed and not yet called adds its three Buttons, `1 Red`,
+ * `2 Green`, `3 Rout` on hotkeys 1, 2 and 3 (a bare digit in an empty prompt
+ * presses them): a row of their own under the text, one row fewer for it.
  *
  * Where the surface draws SVG and `hudStyle` is pixel, the same parts are one
- * pixel strip 48 px tall instead, its alt the text's first row.
+ * pixel strip 48 px tall instead, its alt the text's first row, the
+ * Prophecy's Buttons beside it: an SVG holds no Button.
  */
-export function drawHud($: EngineInterface, e: RenderInput<'AbovePrompt'>, state: GameState, hudStyle: HudStyle = 'pixel') {
+export function drawHud(
+  $: EngineInterface,
+  e: RenderInput<'AbovePrompt'>,
+  state: GameState,
+  hudStyle: HudStyle = 'pixel',
+  actions?: HudActions,
+) {
   const elements = $.ui.resolve(e)
-  const { Box, Text } = elements
+  const { Box, Button, Text } = elements
   const columns = Number.isFinite(e.props.bodyColumns) && e.props.bodyColumns > 0 ? e.props.bodyColumns : DEFAULT_COLUMNS
   const maxRows = Number.isFinite(e.props.maxRows) ? Math.max(1, Math.min(MAX_ROWS, e.props.maxRows)) : MAX_ROWS
+  const isCalling = actions !== undefined && isAwaitingCall(state)
   const parts = partsOf(state)
-  const rows = layOut(parts, columns, maxRows)
+  const rows = layOut(parts, columns, isCalling ? Math.max(1, maxRows - 1) : maxRows)
+  const calls = isCalling
+    ? PROPHECY_CALLS.map((call, at) => (
+        <Button key={`prophecy:${call}`} label={`${at + 1} ${callName(call)}`} hotkey={String(at + 1)} onPress={() => actions.prophesy(call)} />
+      ))
+    : []
 
   // The terminal's table lists Svg too, as a fragment: it draws no SVG.
   if (hudStyle === 'pixel' && e.surface !== 'terminal' && 'Svg' in elements) {
     const { Svg } = elements
-    const room = columns * PIXELS_PER_COLUMN
+    const room = Math.max(1, columns - (isCalling ? PROPHECY_BUTTON_COLUMNS : 0)) * PIXELS_PER_COLUMN
     const { player } = state
     const motion = motionOf(lastDrawn.get(e.surface), player)
     lastDrawn.set(e.surface, { level: player.level, hp: player.hp, totalXp: player.totalXp, xpShare: player.xp / xpToClear(player.level) })
@@ -388,7 +438,7 @@ export function drawHud($: EngineInterface, e: RenderInput<'AbovePrompt'>, state
 
     // Centred in the band; the strip is only as wide as its segments.
     return (
-      <Box flexDirection="row" justifyContent="center" flexGrow={1}>
+      <Box flexDirection="row" justifyContent="center" alignItems="center" flexGrow={1} gap={1}>
         <Svg
           source={strip.svg}
           alt={(rows[0] ?? []).map(piece => piece.text).join(' '.repeat(GAP))}
@@ -396,6 +446,7 @@ export function drawHud($: EngineInterface, e: RenderInput<'AbovePrompt'>, state
           height={STRIP_HEIGHT}
           isInteractive
         />
+        {calls}
       </Box>
     )
   }
@@ -411,6 +462,14 @@ export function drawHud($: EngineInterface, e: RenderInput<'AbovePrompt'>, state
           ))}
         </Box>
       ))}
+      {isCalling ? (
+        <Box flexDirection="row" gap={GAP}>
+          <Text bold color="magenta">
+            Prophecy: call the next Check
+          </Text>
+          {calls}
+        </Box>
+      ) : null}
     </Box>
   )
 }

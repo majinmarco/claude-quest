@@ -4,7 +4,7 @@
 // (the portrait at 3x) on a band 48 CSS px tall. What the strip shows, and in
 // what order of importance, is the HUD's (src/hud.tsx); this draws it.
 
-import type { Player } from '../types'
+import type { Player, ProphecyCall } from '../types'
 import { titleOf } from './engine'
 import type { ManaLevel } from './engine'
 import { Canvas, Lettering, pixelWidth, SCROLL_COLORS } from './scroll-art'
@@ -89,6 +89,8 @@ export type StripSegment =
   | { kind: 'boss'; isApproaching: boolean; hp: number; maxHp: number }
   | { kind: 'questions'; count: number }
   | { kind: 'encounter'; sprite: SpriteName; text: string }
+  /** The Prophecy armed: the Player's call, or null while they have not made it. */
+  | { kind: 'prophecy'; call: ProphecyCall | null }
   | { kind: 'mana'; mana: number | null; level: ManaLevel }
   | { kind: 'vitals'; text: string }
   | { kind: 'stats'; text: string }
@@ -140,6 +142,8 @@ const labelOf = (segment: StripSegment): string => {
       return `${segment.ticket} ${segment.title}`.trim()
     case 'boss':
       return segment.isApproaching ? 'approaching' : ''
+    case 'prophecy':
+      return segment.call === null ? 'Prophecy: call it' : `Prophecy: ${segment.call.charAt(0).toUpperCase()}${segment.call.slice(1)}`
     default:
       return segment.text
   }
@@ -170,6 +174,7 @@ export const segmentWidth = (segment: StripSegment): number => {
       return 18 + (segment.isApproaching ? label : segment.maxHp * (HEART.length + 2))
     case 'questions':
     case 'encounter':
+    case 'prophecy':
       return 18 + label
     default:
       return label
@@ -293,6 +298,11 @@ const draw = (
       sprite(segment.sprite)
 
       return shadowed(lettering, label, x + 18, LINE_Y, COLORS.dim)
+    // Waiting for the Player's call, gold beside the Buttons; called, dim.
+    case 'prophecy':
+      sprite('dagger')
+
+      return shadowed(lettering, label, x + 18, LINE_Y, segment.call === null ? COLORS.gold : COLORS.dim)
     default:
       return shadowed(lettering, label, x, LINE_Y, COLORS.dim)
   }

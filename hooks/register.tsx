@@ -12,8 +12,9 @@ import {
 } from '../src/content-generator'
 import type { Model, ModelFailure, QuestionInput, TicketContext } from '../src/content-generator'
 import { isExhausted, isUnderWay, newGame, step, summonedChanges } from '../src/engine'
-import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
-import { badgesText, drawHud } from '../src/hud'
+import type { Effect, FileChange, GameEvent, GameState, HaikuPurpose, ProphecyCall, QuestionContent, Rules } from '../src/engine'
+import { badgesText, callName, drawHud, PROPHECY_CALLS } from '../src/hud'
+import type { HudActions } from '../src/hud'
 import {
   loadDiscovered,
   loadPlayer,
@@ -37,7 +38,7 @@ import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../sr
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
-import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import { moduleOfFolder, testFileEditedOf, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard, QuestCard, QuestSourceSetting, XpPool } from '../types'
 
@@ -644,8 +645,30 @@ const cappedText = (pool: XpPool, inQuest: boolean): string => {
       return `Battle XP is full for ${scope}. The Sage's Questions still pay: /sage`
     case 'sage':
       return `The Sage's XP is full for ${scope}. ${inQuest ? 'The Boss Fight still pays.' : 'Start a Quest for more: /quest-board'}`
+    case 'prophecy':
+      return `Prophecy XP is full for ${scope}. Right calls still count toward the Oracle.`
   }
 }
+
+/** What a settled Prophecy's toast says: `Prophecy fulfilled: Red (+10 DEX)`, `Prophecy failed: it was Green`. */
+const prophecyText = ({ call, outcome, isRight, xp }: Extract<Effect, { type: 'PROPHECY_SETTLED' }>): string =>
+  isRight
+    ? `Prophecy fulfilled: ${callName(call)}${xp > 0 ? ` (+${xp} DEX)` : ''}`
+    : `Prophecy failed: it was ${callName(outcome)}`
+
+/** What the HUD's Buttons do: a Prophecy's call. */
+const hudActions = ($: EngineInterface, rules: Rules): HudActions => ({
+  prophesy: call => {
+    void play($, { type: 'PROPHECY_MADE', call }, rules)
+  },
+})
+
+/** How to call a Prophecy from the prompt. */
+const PROPHECY_USAGE = 'Call it with /prophecy red, green or rout.'
+
+/** The call `/prophecy <args>` names, in any case; undefined for anything else. */
+const prophecyCallOf = (args: string): ProphecyCall | undefined =>
+  PROPHECY_CALLS.find(call => call === args.trim().toLowerCase())
 
 /** What the session is told, once, when Haiku turns out unavailable. */
 const HAIKU_UNAVAILABLE_TEXT = "Questions are off: Haiku isn't available on this account"
@@ -716,6 +739,9 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
     }
     if (effect.type === 'TROPHY_EARNED') {
       $.ui.toast(`Trophy won: ${effect.trophy.name}`)
+    }
+    if (effect.type === 'PROPHECY_SETTLED') {
+      $.ui.toast(prophecyText(effect))
     }
     if (effect.type === 'XP_CAPPED') {
       $.ui.toast(cappedText(effect.pool, saved?.quest != null))
@@ -805,6 +831,12 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
     await $.command
       .register({
+        name: 'prophecy',
+        description: 'Call the armed Prophecy: /prophecy red, green or rout',
+      })
+      .catch(() => undefined)
+    await $.command
+      .register({
         name: 'boss',
         description: 'Fight the Quest\'s Boss Fight; /boss A-D answers, /boss skip skips it',
       })
@@ -846,6 +878,11 @@ export const register: Register = (on, options) => {
 
     if (event !== null) {
       await play($, event, rules)
+      // A test file written or edited arms a Prophecy for the next Check.
+      const tested = testFileEditedOf(event, root, await $.clock.now())
+      if (tested !== null) {
+        await play($, tested, rules)
+      }
     }
 
     // A Bash call may run a check and commit too (`npm test && git commit`).
@@ -969,6 +1006,33 @@ export const register: Register = (on, options) => {
     }
   })
 
+  // /prophecy tells the Prophecy armed; /prophecy red, green or rout calls
+  // it, as the HUD's Buttons do, for a band that cannot take the focus.
+  on('command.run', { command: 'prophecy' }, async ($, e) => {
+    const args = e.args.trim()
+    const call = args === '' ? undefined : prophecyCallOf(args)
+    if (args !== '' && call === undefined) {
+      return { text: PROPHECY_USAGE }
+    }
+
+    const prophecy = (await read($, game))?.prophecy
+    if (prophecy == null) {
+      return { text: 'No Prophecy is armed: one is when Claude edits a test file.' }
+    }
+    if (prophecy.call !== undefined) {
+      return { text: `You called it already: ${callName(prophecy.call)}. The next Check will tell.` }
+    }
+    if (call === undefined) {
+      const file = prophecy.file.split(/[\\/]/).filter(Boolean).pop() ?? prophecy.file
+
+      return { text: `A Prophecy is armed (${file}): call the next Check with /prophecy red, green or rout.` }
+    }
+
+    await play($, { type: 'PROPHECY_MADE', call }, rules)
+
+    return { text: `You call it: ${callName(call)}. The next Check will tell.` }
+  })
+
   on('command.run', { command: 'badges' }, async $ => {
     const player = (await read($, game))?.player ?? (await loadPlayer($))
 
@@ -1069,6 +1133,6 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    return drawHud($, e, current, hudStyle)
+    return drawHud($, e, current, hudStyle, hudActions($, rules))
   })
 }

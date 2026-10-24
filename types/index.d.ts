@@ -54,6 +54,11 @@ export type Tally = {
   modulesDiscovered: number
   /** The Regions a Quest was closed in (won, lost or unfought). */
   regions: string[]
+  /**
+   * Right Prophecies in a row: a wrong one resets it, one left unsettled or
+   * unanswered leaves it. Absent on a Player kept by an older mod.
+   */
+  prophecyStreak?: number
 }
 
 /** The ids of the Badges there are: a small, fixed set. */
@@ -68,6 +73,7 @@ export type BadgeId =
   | 'unbroken'
   | 'wayfarer'
   | 'second-wind'
+  | 'oracle'
 
 /** A Badge on the Player: a feat of play, earned once, across every project. */
 export type Badge = {
@@ -91,11 +97,33 @@ export type Trophy = {
   earnedAt: number
 }
 
-/** The three XP pools: Claude's own activity, Battles, and the Sage's answers. */
-export type XpPool = 'ambient' | 'battle' | 'sage'
+/** The four XP pools: Claude's own activity, Battles, the Sage's answers, and Prophecies. */
+export type XpPool = 'ambient' | 'battle' | 'sage' | 'prophecy'
 
-/** The XP paid into each pool so far, against its cap. */
+/**
+ * The XP paid into each pool so far, against its cap. Counters kept by an
+ * older mod lack the pools added since (`prophecy`): read them as 0.
+ */
 export type PoolCounters = Record<XpPool, number>
+
+/**
+ * How the Player calls a Check will end: `red`, one failure (or failures it
+ * counts none of); `green`, passing; `rout`, two failures or more.
+ */
+export type ProphecyCall = 'red' | 'green' | 'rout'
+
+/**
+ * A Prophecy armed by Claude editing a test file: the Player's call, once
+ * made, of how the next Check will end. Settled by that Check.
+ */
+export type Prophecy = {
+  /** The test file whose edit armed it, as the tool named it. */
+  file: string
+  /** The Player's call; absent until they make it. */
+  call?: ProphecyCall
+  /** When it was armed, in ms since the epoch. */
+  armedAt: number
+}
 
 /**
  * A game moment the session's activity played. An Exploration is a read or a
@@ -401,6 +429,11 @@ export type GameState = {
    * found, not allowed): no more calls are made, Sage or Boss Fight.
    */
   haikuUnavailable?: boolean
+  /**
+   * The Prophecy armed and not yet settled: a test file was edited, and the
+   * next Check settles it. Null or absent when none is armed.
+   */
+  prophecy?: Prophecy | null
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */

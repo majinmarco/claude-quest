@@ -51,13 +51,13 @@ const { bossSceneSvg, portraitSvg, sceneSvg } = await import('../src/scene-art.t
 const { SAMPLE_CARDS, SAMPLE_SELECTED, SAMPLE_XP } = await import('../tests/fixtures/quest-cards.ts')
 const { hudStrip, PIXELS_PER_COLUMN } = await import('../src/hud-art.ts')
 const { stripOf } = await import('../src/hud.tsx')
-const { HUD_BATTLE, HUD_CALM, HUD_WORST, playerAt } = await import('../tests/fixtures/hud-states.ts')
+const { HUD_BATTLE, HUD_CALM, HUD_PROPHECY, HUD_WORST, playerAt } = await import('../tests/fixtures/hud-states.ts')
 
 // The HUD's strip, as the desktop draws it for a band so many columns wide.
 const strip = (state, columns, motion) => hudStrip(stripOf(state, columns), columns * PIXELS_PER_COLUMN, motion).svg
 
-/** The games the strip's snapshot is drawn for: with and without a Quest, a boss, Questions waiting and Exhausted. */
-const HUD_SAMPLES = { worst: HUD_WORST, calm: HUD_CALM, battle: HUD_BATTLE }
+/** The games the strip's snapshot is drawn for: with and without a Quest, a boss, Questions waiting and Exhausted, a Prophecy armed. */
+const HUD_SAMPLES = { worst: HUD_WORST, calm: HUD_CALM, battle: HUD_BATTLE, prophecy: HUD_PROPHECY }
 
 // The scroll art's snapshot: the sample board's header and cards, which
 // tests/scroll-art.test.ts compares the art with. Written again, after a
@@ -139,6 +139,8 @@ for (const columns of [40, 80, 120, 200]) {
 write('hud-calm-80.svg', strip(HUD_CALM, 80))
 write('hud-calm-200.svg', strip(HUD_CALM, 200))
 write('hud-battle-200.svg', strip(HUD_BATTLE, 200))
+write('hud-prophecy-200.svg', strip(HUD_PROPHECY, 200))
+write('hud-prophecy-called-200.svg', strip({ ...HUD_PROPHECY, prophecy: { ...HUD_PROPHECY.prophecy, call: 'red' } }, 200))
 for (const [name, stats] of [['adventurer', {}], ['scholar', { intelligence: 9 }], ['pathfinder', { wisdom: 9 }], ['warrior', { strength: 9 }]]) {
   write(`hud-portrait-${name}.svg`, strip({ ...HUD_CALM, player: { ...playerAt(name === 'adventurer' ? 2 : 3, stats) } }, 80))
 }

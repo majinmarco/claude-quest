@@ -496,7 +496,7 @@ describe('HUD: the Player\'s progress', () => {
       expect(await ui.find({ type: 'Text', text: /^HP / })).toBeUndefined()
       expect((await ui.find({ type: 'Text', text: /^★/ }))?.text).toBe('★2')
       const stats = await ui.find({ type: 'Text', text: /^INT / })
-      expect(stats?.text).toBe('INT 300 · WIS 40 · STR 60')
+      expect(stats?.text).toBe('INT 300 · WIS 40 · DEX 0 · STR 60')
       expect(stats?.props.dimColor).toBe(true)
       await ui.unmount()
     }
@@ -509,8 +509,8 @@ describe('HUD: the Player\'s progress', () => {
 
     expect((await runCommand($, 'badges')).text).toBe(
       [
-        'Lv 4 Scholar · 560 XP lifetime · INT 300 · WIS 40 · STR 60',
-        'Badges (2/10): Questbound, Boss Slayer',
+        'Lv 4 Scholar · 560 XP lifetime · INT 300 · WIS 40 · DEX 0 · STR 60',
+        'Badges (2/11): Questbound, Boss Slayer',
         'Trophies (1): Bane of vault#12',
       ].join('\n'),
     )
@@ -660,7 +660,7 @@ describe('HUD: laid out by the band\'s width', () => {
       expect(shown).toContain('Crafting: Order Ledger')
       expect(shown).toContain('Mana 62%')
       expect(shown).toContain('$3.47')
-      expect(shown).toContain('INT 120 · WIS 45 · STR 30')
+      expect(shown).toContain('INT 120 · WIS 45 · DEX 0 · STR 30')
       expect(shown).toContain('★3')
     }
   })
@@ -680,7 +680,7 @@ describe('HUD: laid out by the band\'s width', () => {
     expect(shown).toContain('Quest #6')
     expect(shown).toContain('Boss 2/2 HP · /boss')
     expect(shown).toContain('2 Questions waiting · /sage')
-    expect(shown).not.toContain('INT 120 · WIS 45 · STR 30')
+    expect(shown).not.toContain('INT 120 · WIS 45 · DEX 0 · STR 30')
   })
 
   test('a wide band shows every part, the Quest\'s title whole up to its cut', TEXT_HUD, async ($, on) => {
@@ -694,6 +694,6 @@ describe('HUD: laid out by the band\'s width', () => {
     expect(shown).toContain('Mana 62%')
     expect(shown).toContain('claude-opus-5-5')
     expect(shown).toContain('$3.47')
-    expect(shown).toContain('INT 120 · WIS 45 · STR 30')
+    expect(shown).toContain('INT 120 · WIS 45 · DEX 0 · STR 30')
   })
 })

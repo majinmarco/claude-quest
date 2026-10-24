@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Badge, BadgeId, Battle, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
+import type { Badge, BadgeId, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, StatName, Tally, Trophy, Vitals, XpPool } from '../types'
 
-export type { Badge, Battle, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
+export type { Badge, Battle, Prophecy, ProphecyCall, TicketVerified, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, PoolCounters, Tally, Trophy, Vitals, XpPool } from '../types'
 
 export type GameEvent =
   /**
@@ -130,6 +130,15 @@ export type GameEvent =
   | { type: 'BOSS_ANSWERED'; id: string; choice: number; at: number }
   /** The Player skipped the Boss Fight. */
   | { type: 'BOSS_FIGHT_SKIPPED' }
+  /**
+   * Claude wrote or edited a test file (`path`, as the tool named it; see
+   * isTestFile), at `at`: a Prophecy is armed for the next Check. Emitted
+   * beside the FILE_EDIT of a Write, Edit or NotebookEdit; any other path
+   * that changes a test file may emit it too.
+   */
+  | { type: 'TEST_FILE_EDITED'; path: string; at: number }
+  /** The Player called the armed Prophecy: how the next Check will end. */
+  | { type: 'PROPHECY_MADE'; call: ProphecyCall }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
@@ -200,6 +209,14 @@ export type Effect =
   | { type: 'TROPHY_EARNED'; trophy: Trophy }
   /** The active Quest closed, its Boss Fight ended as `outcome`. */
   | { type: 'QUEST_CLOSED'; ticket: string; outcome: QuestOutcome }
+  /** A Prophecy is armed, unanswered, on the edit of test file `file`. */
+  | { type: 'PROPHECY_ARMED'; file: string }
+  /**
+   * A Check settled the Prophecy the Player called: `call` theirs, `outcome`
+   * how the Check ended, `xp` what a right call paid (0 when wrong, or its
+   * pool full).
+   */
+  | { type: 'PROPHECY_SETTLED'; call: ProphecyCall; outcome: ProphecyCall; isRight: boolean; xp: number }
 
 /**
  * What a Haiku call is for: the Sage's Question after a code-changing
@@ -324,13 +341,20 @@ export const UNFOUGHT_SHARE = 1 / 4
 /** How many Questions a full Boss Fight asks: fewer scale its reward down. */
 export const BOSS_QUESTIONS = 3
 
+/**
+ * The Dexterity XP a right Prophecy pays, from the prophecy pool: half a Sage
+ * answer, as it is a call made before the fact, not a reading of the code.
+ * A wrong one pays nothing and costs nothing (docs/adr/0004-prophecy.md).
+ */
+export const PROPHECY_XP = 10
+
 /** What each XP pool holds per Quest. */
-export const POOL_CAPS: Record<XpPool, number> = { ambient: 60, battle: 60, sage: 200 }
+export const POOL_CAPS: Record<XpPool, number> = { ambient: 60, battle: 60, sage: 200, prophecy: 30 }
 
 /** What each XP pool holds per session, outside any Quest. */
-export const SESSION_POOL_CAPS: Record<XpPool, number> = { ambient: 20, battle: 30, sage: 100 }
+export const SESSION_POOL_CAPS: Record<XpPool, number> = { ambient: 20, battle: 30, sage: 100, prophecy: 15 }
 
-const emptyPools = (): PoolCounters => ({ ambient: 0, battle: 0, sage: 0 })
+const emptyPools = (): PoolCounters => ({ ambient: 0, battle: 0, sage: 0, prophecy: 0 })
 
 /**
  * How many edits made during a Battle the Sage asks about once it is won:
@@ -431,6 +455,7 @@ export const emptyTally = (): Tally => ({
   sageRight: 0,
   modulesDiscovered: 0,
   regions: [],
+  prophecyStreak: 0,
 })
 
 export const newPlayer = (): Player => ({
@@ -482,9 +507,9 @@ export const step = (
     case 'QUEST_DETAILS':
       return { state: withDetails(state, event), effects: [] }
     case 'TEST_FAIL':
-      return checkFailed(state, event)
+      return settleProphecy(checkFailed(state, event), event.failures === null || event.failures <= 1 ? 'red' : 'rout')
     case 'TEST_PASS':
-      return checkPassed(state, event.check)
+      return settleProphecy(checkPassed(state, event.check), 'green')
     case 'FILE_EDIT':
       return craft(withFix(withQuestChange(state, event), event), event)
     case 'QUESTION_READY':
@@ -513,6 +538,10 @@ export const step = (
       return answerBoss(state, event)
     case 'BOSS_FIGHT_SKIPPED':
       return isUnderWay(state.bossFight) ? closeQuest(state, 'skipped') : { state, effects: [] }
+    case 'TEST_FILE_EDITED':
+      return armProphecy(state, event.path, event.at)
+    case 'PROPHECY_MADE':
+      return makeProphecy(state, event.call)
   }
 }
 
@@ -747,7 +776,8 @@ const pay = (
 
   if (pool !== null) {
     const { quest } = state
-    const counters = (quest !== null ? quest.pools : state.pools) ?? emptyPools()
+    // Counters kept by an older mod lack the pools added since.
+    const counters = { ...emptyPools(), ...(quest !== null ? quest.pools : state.pools) }
     const cap = (quest !== null ? POOL_CAPS : SESSION_POOL_CAPS)[pool]
     const before = counters[pool]
     paid = Math.min(paid, Math.max(0, cap - before))
@@ -797,6 +827,7 @@ export const BADGES: Record<BadgeId, string> = {
   unbroken: 'Unbroken',
   wayfarer: 'Wayfarer',
   'second-wind': 'Second Wind',
+  oracle: 'Oracle',
 }
 
 /** What just happened, for the Badges a single moment earns. */
@@ -811,7 +842,7 @@ export type BadgeContext = {
 export const DRAGON_HP = 20
 
 /** How many of a lifetime count earn its Badge. */
-export const BADGE_COUNTS = { modules: 25, sageRight: 25, bossStreak: 5, regions: 3 } as const
+export const BADGE_COUNTS = { modules: 25, sageRight: 25, bossStreak: 5, regions: 3, prophecyStreak: 5 } as const
 
 /**
  * The Badges the Player earns now and does not hold yet, by their lifetime
@@ -831,6 +862,7 @@ export const earnedBadges = (player: Player, context: BadgeContext = {}): BadgeI
     unbroken: tally.bossStreak >= BADGE_COUNTS.bossStreak,
     wayfarer: tally.regions.length >= BADGE_COUNTS.regions,
     'second-wind': context.bossWon?.exhausted === true,
+    oracle: (tally.prophecyStreak ?? 0) >= BADGE_COUNTS.prophecyStreak,
   }
 
   return (Object.keys(BADGES) as BadgeId[]).filter(id => earned[id] && !held.has(id))
@@ -855,10 +887,11 @@ const award = (
   }
 }
 
-/** The MVP's Stats and the title each names, in the order a tie goes. */
+/** The Stats in play and the title each names, in the order a tie goes. */
 const TITLES: [StatName, string][] = [
   ['intelligence', 'Scholar'],
   ['wisdom', 'Pathfinder'],
+  ['dexterity', 'Duelist'],
   ['strength', 'Warrior'],
 ]
 
@@ -869,9 +902,9 @@ export const TITLE_LEVEL = 3
 export const VETERAN_LEVEL = 10
 
 /**
- * The Player's title: from level 3, named by their highest MVP Stat (Scholar,
- * Pathfinder, Warrior), Veteran from level 10; null before, or with no Stat
- * earned yet.
+ * The Player's title: from level 3, named by their highest Stat in play
+ * (Scholar, Pathfinder, Duelist, Warrior), Veteran from level 10; null
+ * before, or with no Stat earned yet.
  */
 export const titleOf = (player: Player): string | null => {
   if (player.level < TITLE_LEVEL) {
@@ -918,7 +951,7 @@ const measure = (
 // Quest already running, started again, carries on with its Encounters. A new
 // Quest heals QUEST_HEAL HP; the Quest just closed, started again, does not.
 // The Battles under way are cleared, silently: they belong to the work before
-// it, and a win now would pay the new Quest for it.
+// it, and a win now would pay the new Quest for it. So is a Prophecy armed.
 const startQuest = (
   state: GameState,
   ticket: string,
@@ -935,7 +968,7 @@ const startQuest = (
 
   // The Boss Fight belongs to the Quest it ends: a new Quest has none yet.
   return {
-    state: { ...state, player: rested.player, quest, bossFight: null, battles: [] },
+    state: { ...state, player: rested.player, quest, bossFight: null, battles: [], prophecy: null },
     effects: [...abandoned, { type: 'QUEST_STARTED', ticket }, ...rested.effects],
   }
 }
@@ -1106,6 +1139,73 @@ const checkPassed = (
       { type: 'MONSTER_HIT', check, hits: open.hp, hp: 0 },
       { type: 'BATTLE_WON', check, foe: open.foe },
       ...(isEarned ? [{ type: 'CODE_CHANGED', changes: fix } as const] : []),
+      ...paid.effects,
+      ...awarded.effects,
+    ],
+  }
+}
+
+// A Prophecy: when Claude writes or edits a test file, the Player may call
+// how the next Check will end before it runs. Re-arming replaces a Prophecy
+// not yet called (its file and time); one called stays until its Check.
+const armProphecy = (
+  state: GameState,
+  file: string,
+  armedAt: number,
+): { state: GameState; effects: Effect[] } => {
+  if (state.prophecy?.call !== undefined) {
+    return { state, effects: [] }
+  }
+
+  return {
+    state: { ...state, prophecy: { file, armedAt } },
+    effects: [{ type: 'PROPHECY_ARMED', file }],
+  }
+}
+
+// The Player's call: taken only while a Prophecy is armed and not yet called.
+const makeProphecy = (state: GameState, call: ProphecyCall): { state: GameState; effects: Effect[] } => {
+  const { prophecy } = state
+  if (prophecy == null || prophecy.call !== undefined) {
+    return { state, effects: [] }
+  }
+
+  return { state: { ...state, prophecy: { ...prophecy, call } }, effects: [] }
+}
+
+// The next Check run, of any kind, settles the Prophecy armed: `outcome` is
+// how it ended (green passing; red one failure, or failures it counts none
+// of; rout two or more). Not the Check the test file belongs to: the mod
+// cannot tell which that is (docs/adr/0004-prophecy.md). A right call pays
+// PROPHECY_XP of Dexterity from the prophecy pool and adds to the streak
+// the Oracle counts, paid or not; a wrong one pays nothing, costs nothing
+// and resets the streak. One never called goes, leaving the streak.
+const settleProphecy = (
+  played: { state: GameState; effects: Effect[] },
+  outcome: ProphecyCall,
+): { state: GameState; effects: Effect[] } => {
+  const { prophecy } = played.state
+  if (prophecy == null) {
+    return played
+  }
+
+  const cleared: GameState = { ...played.state, prophecy: null }
+  const { call } = prophecy
+  if (call === undefined) {
+    return { state: cleared, effects: played.effects }
+  }
+
+  const isRight = call === outcome
+  const paid = isRight ? pay(cleared, 'prophecy', 'dexterity', PROPHECY_XP) : { state: cleared, effects: [], paid: 0 }
+  const { player } = paid.state
+  const streak = isRight ? (player.tally.prophecyStreak ?? 0) + 1 : 0
+  const awarded = award({ ...paid.state, player: { ...player, tally: { ...player.tally, prophecyStreak: streak } } }, {})
+
+  return {
+    state: awarded.state,
+    effects: [
+      ...played.effects,
+      { type: 'PROPHECY_SETTLED', call, outcome, isRight, xp: paid.paid },
       ...paid.effects,
       ...awarded.effects,
     ],
@@ -1456,6 +1556,7 @@ const isConsoled = (player: Player, region: string | null, ticket: string): bool
 // Fight stays, ended, until the next Quest starts; the Encounter under way is
 // put away, so the Scene shows how the Quest ended until the next Encounter.
 // The Battles under way are cleared, paying nothing: the Quest's work is done.
+// A Prophecy armed is cleared too, silently.
 const closeQuest = (
   state: GameState,
   outcome: QuestOutcome,
@@ -1525,7 +1626,7 @@ const closeQuest = (
   }
 }
 
-/** The game once its Quest closed: no Quest, Encounter or Battle; the Boss Fight ended. */
+/** The game once its Quest closed: no Quest, Encounter, Battle or Prophecy; the Boss Fight ended. */
 const closedState = (
   state: GameState,
   fight: BossFight | null,
@@ -1538,6 +1639,7 @@ const closedState = (
   quest: null,
   encounter: null,
   battles: [],
+  prophecy: null,
   bossFight:
     fight === null
       ? null
