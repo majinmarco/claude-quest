@@ -13,6 +13,7 @@ import type { RegionEntry } from './region-registry'
 /** What the Region map draws: the session's Region, live, or another from its Snapshot. */
 export type RegionMapTarget = { kind: 'live' } | { kind: 'snapshot'; entry: RegionEntry }
 
+/** The Region map's pane. */
 const REGION_MAP = { id: 'region-map', title: 'Region map' } as const
 
 /** What the stub pane says, set as it opens. */

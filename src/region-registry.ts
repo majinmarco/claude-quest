@@ -286,7 +286,7 @@ export async function readRegions($: EngineInterface): Promise<Record<string, Re
 }
 
 /** The registry's changes, one after another, so none undoes another. */
-let regionChanges: Promise<unknown> = Promise.resolve()
+let registryChanges: Promise<unknown> = Promise.resolve()
 
 /**
  * Changes the registry, seeding it first when it was never kept (from the
@@ -298,7 +298,7 @@ function changeRegions(
   $: EngineInterface,
   change: (regions: Record<string, RegionEntry>, now: string) => Record<string, RegionEntry>,
 ): Promise<Record<string, RegionEntry>> {
-  const changed = regionChanges.then(async () => {
+  const changed = registryChanges.then(async () => {
     const now = new Date(await $.clock.now()).toISOString()
     const kept = await $.store.get(REGIONS_KEY)
     let regions = regionsOf(kept)
@@ -314,7 +314,7 @@ function changeRegions(
 
     return next
   })
-  regionChanges = changed.catch(() => undefined)
+  registryChanges = changed.catch(() => undefined)
 
   return changed
 }

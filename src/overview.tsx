@@ -18,6 +18,7 @@ import type { OverviewState } from '../types'
 
 export type { OverviewState } from '../types'
 
+/** The Overview's pane, as `/overview` opens it. */
 export const OVERVIEW = { id: 'overview', title: 'Overview' } as const
 
 /** The pane as it starts: no Region read yet, the first page. */
@@ -42,6 +43,11 @@ const WORLD_MAX_WIDTH = 528
 /** What the World says before any Region joined it. */
 export const NO_ISLANDS = 'No Islands yet: a project joins the World the first time you play in it.'
 
+/**
+ * Draws the Overview for `player`: the sheet (beside the portrait where the
+ * surface draws SVG), the World (art, or the terminal's grid), and the page
+ * of Island Buttons `state` holds, page and hotkeys 1 to 9 by `actions`.
+ */
 export function drawOverview(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
