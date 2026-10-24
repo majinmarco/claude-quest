@@ -11,20 +11,9 @@ import {
   vitestPassing,
 } from './fixtures/bash-calls'
 import { editOneLine } from './fixtures/file-changes'
+import { GAME } from './fixtures/game-screen'
 
-const SCENE = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'scene',
-  props: {
-    title: 'Scene',
-    isFocused: false,
-    bodyColumns: 60,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 20 },
-    view: {},
-  },
-} as const
+const SCENE = GAME
 
 const HUD = {
   plugin: 'quest-mod',

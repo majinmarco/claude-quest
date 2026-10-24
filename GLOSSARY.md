@@ -39,7 +39,7 @@ One project's area of the World, shaped by that project's spec and named after i
 _Avoid_: Level, zone, project map
 
 **Region map**:
-The pane (`/map`) that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second view of the same pane. From it a Quest is started the way the Quest Board starts one. It never opens itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
+The Game Screen's Map View (`/map`) that draws the Region the Player is in: its Dungeons to enter, the Wilds, and the Module view as a second look at the same map. From it a Quest is started the way the Quest Board starts one. It is never chosen by itself. Another Region's map, opened from the World, is drawn from its Snapshot and starts nothing.
 _Avoid_: Minimap, level select
 
 **Overworld**:
@@ -97,11 +97,11 @@ Where Quests come from: a Jira project or a repo's GitHub Issues, as the Region 
 _Avoid_: Tracker, backlog, provider
 
 **Quest Log**:
-The pane (`/quest` for the Quest under way, `/quest #N` or `/quest ABC-123` for any ticket) showing all the game knows of one Quest: its Scroll unrolled at full width with the ticket's link, its ticket's whole description (a GitHub issue's as Markdown, a Jira one's as plain text; cut at 8000 characters), the Quest Giver's Briefing once there is one, and, for the Quest under way, its progress (when it started and was taken up again, Encounters, Questions right and wrong, the Boss, XP earned by XP pool against each cap); for a Quest not under way, Take Quest while its ticket is open and its runs in the Region file. A ticket is fetched once per session, shared with the Ticket lookup. It never opens itself: `/quest`, the Quest Board's Read more and the Quest Log Button heading the Sage's and the boss's panes open it.
+The Game Screen's Log View (`/quest` for the Quest under way, `/quest #N` or `/quest ABC-123` for any ticket) showing all the game knows of one Quest: its Scroll unrolled at full width with the ticket's link, its ticket's whole description (a GitHub issue's as Markdown, a Jira one's as plain text; cut at 8000 characters), the Quest Giver's Briefing once there is one, and, for the Quest under way, its progress (when it started and was taken up again, Encounters, Questions right and wrong, the Boss, XP earned by XP pool against each cap); for a Quest not under way, Take Quest while its ticket is open and its runs in the Region file. A ticket is fetched once per session, shared with the Ticket lookup. It shows the active Quest's ticket until `/quest`, the Quest Board's Read more or the Quest Log Button heading the Dialogue box picks another.
 _Avoid_: Ticket view, details pane
 
 **Quest Board**:
-The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, each a Scroll, six to a page, under a red ribbon and a header of the Player's trophies and Badges. Take Quest on a card fills the prompt with the session's implement command in one click, never over a draft the Player is writing; Unroll beside it opens the Scroll, and Read more its Quest Log. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
+The view listing the available Quests of the current Region, from which the Player starts one: a card per ticket, each a Scroll, six to a page, under a red ribbon and a header of the Player's trophies and Badges. Take Quest on a card fills the prompt with the session's implement command in one click, never over a draft the Player is writing; Unroll beside it opens the Scroll, and Read more its Quest Log; hotkeys `T` and `U` take and unroll the selected Scroll (the one unrolled, else the page's first). It is the Game Screen's Quests View. It says `200+` when its listing reached the cap, and how to rate Quests when none is.
 _Avoid_: Ticket list, backlog view
 
 **Scroll**:
@@ -149,8 +149,12 @@ A test run, lint or type-check, read from a Bash command by its runner (vitest, 
 _Avoid_: Test suite, job (outside the event translator)
 
 **Scene**:
-The pane that plays the current Encounter: animated pixel art where the surface draws it, one line of text in the terminal. It opens itself at most once per session, when a surface that draws its art is there, unless the `autoOpenScene` setting is off; `/scene` opens it any time. The Quest Board never opens itself.
+The current Encounter, played on the Game Screen's Stage: animated pixel art where the surface draws it, one line of text in the terminal. `/scene` opens the Game Screen any time.
 _Avoid_: Encounter view, animation pane
+
+**Sound cue**:
+The short clip a game event plays (a horn for a Quest started, a growl for a monster spawned, a fanfare for a Boss Fight won), one per event, from the mod's own CC0 sounds, at the `soundVolume` setting (0 is off). Decoration only: a Sound cue never pays, gates or waits for anything, and one that cannot play is skipped. The same cue never plays over itself, a Battle's hits coalesce to one a second, and at most six play in ten seconds, the lowest priority dropped first (the boss, the fanfare, a level-up, a defeat and a Badge never are). Headless, none plays.
+_Avoid_: Sound effect, SFX, jingle (one kind of clip)
 
 **Boss Fight**:
 The code-review challenge that ends a Quest, built from the Quest's actual diff: the first commit Claude makes during a Quest summons it (a commit chained before a command that failed too, read from git's summary line), up to three review Questions about that commit's diff (the Quest's own changes when git cannot show it, unless the commit was read from a failed command). Every Question is asked. The boss has two thirds of them in HP, rounded up (2 HP for 3 Questions): a right answer earns Intelligence XP, uncapped, and hits the boss while it stands; once it has fallen, the Questions left are finishing blows, paid the same. A wrong one costs HP; at 0 HP the Player fights on, Exhausted. When the Questions run out the boss fallen is a win (2 of 3): the Quest reward and a Trophy, and a full heal; the boss standing is a loss; the Player may skip it. A Quest that could have no Boss Fight pays a quarter of its reward. However it ends, the Quest closes, its outcome in the Region file (won, lost, skipped, or unfought when no Boss Fight could be made).
@@ -175,7 +179,7 @@ A persona (Sage, Cartographer, Merchant, Rival, Scribe, Quest Giver) that speaks
 _Avoid_: Character, bot
 
 **Question**:
-A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle), with the Quest's ticket title and summary as context. A Question is shown before it is answered: the Sage's pane drawing it, or `/sage`, starts its time, and `/sage A` on a Question never shown shows it instead of answering. A right answer earns XP to its Stat tag, Wisdom for `wisdom` and Intelligence otherwise (a quarter of it when hasty, half when Exhausted, from the sage XP pool), a wrong one costs HP; both show the explanation. A Question about a change already answered, or waiting, that session is not asked again.
+A comprehension challenge tied to specific lines of code the Player can see: four options, one right, a one-sentence explanation and a Stat tag. The Sage asks one after each code-changing Encounter, about its change (a Crafting's file, or the edits that won a Battle), with the Quest's ticket title and summary as context. A Question is shown before it is answered: the Dialogue box drawing it, or `/sage`, starts its time, and `/sage A` on a Question never shown shows it instead of answering. A right answer earns XP to its Stat tag, Wisdom for `wisdom` and Intelligence otherwise (a quarter of it when hasty, half when Exhausted, from the sage XP pool), a wrong one costs HP; both show the explanation. A Question about a change already answered, or waiting, that session is not asked again.
 _Avoid_: Quiz, prompt
 
 **Quest Giver**:
@@ -232,8 +236,30 @@ _Avoid_: Inbox, backlog
 The band above the prompt showing the Player's level and Title, HP (or Exhausted), XP, Badge count, the active Quest, a Prophecy armed (its three Buttons until called, then the call, dim), the session's vitals, and the Stats in play (`INT · WIS · DEX · STR`). Where the surface draws pixel art it is one strip of it: the Player's portrait (a plain adventurer until a Title, then a Scholar, Pathfinder or Warrior; a Duelist has none of its own yet), the bars, and the Quest on a banner beside the current Encounter, calm but for a flash on damage and a fill on XP gained; in the terminal, and where the `hudStyle` setting says text, it is text, at most three rows of the band's width. When it is narrow the Quest's title shortens first, then the lesser parts give way.
 _Avoid_: Status bar, header
 
+## The Game Screen
+
+**Game Screen**:
+The game's one pane (`/game`, title `Claude Quest`), laid out like a JRPG screen in four bands: the Stage, the Dialogue box, the Tab row and the Panel. Every game command opens it on its View (`/quest-board`, `/map`, `/quest`, `/overview`, `/badges`) or as it was (`/game`, `/scene`, `/sage`, `/boss`); it opens itself once per session on a surface that draws its art (`autoOpenScene`), and never takes the focus. The panes it replaced (Scene, Quest Board, The Sage, The Boss, Region map, Quest Log, Overview) are closed if an older load left them open.
+_Avoid_: Main pane, dashboard, window
+
+**Stage**:
+The Game Screen's top band, always on: the Scene's art, the boss scene during a Boss Fight. In a pane too short for it and the Dialogue box's three rows and the Panel's eight it shrinks to one strip of sprites; in the terminal it is the Scene's one line.
+_Avoid_: Scene pane, viewport
+
+**Dialogue box**:
+The band under the Stage where whoever speaks is heard: the Sage's (or the Quest Giver's, or the Cartographer's) Question and its answers, the boss and its fight, and the narrator's line when no one speaks (on the desktop the Scene's line; in the terminal, where the Stage is that line, who may speak next). During a Quest it is headed by the Quest, its Quest Log a press away. It never blocks the session nor takes the focus.
+_Avoid_: Sage pane, popup, modal
+
+**View**:
+One of the four things the Panel shows, chosen on the Tab row (Buttons `1 Quests`, `2 Map`, `3 Log`, `4 Sheet`, hotkeys 1 to 4): the Quest Board, the Region map, the Quest Log (the active Quest's until another ticket is picked) and the Overview. Each keeps its place in the Game Screen's record (the Board's page and unrolled Scroll, the map's site and Floor, the log's ticket, the World's page), across a switch and a reload. The Tab row's right end shows the Player's `★N` Badges and `Lv N`.
+_Avoid_: Tab (a Claude Code pane tab is another thing), page, screen
+
+**Panel**:
+The Game Screen's bottom band: the chosen View, drawn whole and scrolled inside the pane's window.
+_Avoid_: Body, content area
+
 **Overview**:
-The pane (`/overview`) with the Player's character sheet, their portrait, level, Title, XP to the next level, all six Stats (those not in play dimmed), every Badge (those not earned dimmed), Trophies by Region and the tally, and the World below it, a numbered Button per Island (nine a page). `/badges` prints the sheet as text; in the terminal the World is a grid of characters.
+The Game Screen's Sheet View (`/overview`) with the Player's character sheet, their portrait, level, Title, XP to the next level, all six Stats (those not in play dimmed), every Badge (those not earned dimmed), Trophies by Region and the tally, and the World below it, a numbered Button per Island (nine a page). `/badges` prints the sheet as text; in the terminal the World is a grid of characters.
 _Avoid_: Character sheet (the vision's word for its first half), profile, stats page
 
 **Mana**:

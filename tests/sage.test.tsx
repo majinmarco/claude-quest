@@ -4,20 +4,9 @@ import type { On } from 'claude-code'
 
 import { vitestFailing1, vitestPassing } from './fixtures/bash-calls'
 import { editOneLine, writeNewFile } from './fixtures/file-changes'
+import { GAME, inBand } from './fixtures/game-screen'
 
-const SAGE = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'sage',
-  props: {
-    title: 'The Sage',
-    isFocused: true,
-    bodyColumns: 80,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 30 },
-    view: {},
-  },
-} as const
+const SAGE = GAME
 
 const HUD = {
   plugin: 'quest-mod',
@@ -201,12 +190,12 @@ describe('The Sage', () => {
     await sage($)
     const ui = await $.ui.mount({ ...SAGE, surface: 'desktop' })
 
-    expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('The Sage')
+    expect((await inBand(ui, 'game-dialogue', 'Svg'))[0]?.props.alt).toBe('The Sage')
     expect((await ui.find({ type: 'Text', text: /formatEmail/ }))?.text).toBe(
       'What does formatEmail return for " Ada@Example.COM "?',
     )
     expect((await ui.find({ type: 'Code' }))?.text).toBe('  return profile.email.trim().toLowerCase();')
-    expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual([
+    expect((await inBand(ui, 'game-dialogue', 'Button')).map(button => button.text)).toEqual([
       'A. ada@example.com',
       'B. Ada@Example.COM',
       'C. ada@Example.com',
@@ -269,7 +258,7 @@ describe('The Sage', () => {
         '  B. Ada@Example.COM',
         '  C. ada@Example.com',
         '  D. ADA@EXAMPLE.COM',
-        'Answer with /sage A, B, C or D, or the buttons in the Sage\'s pane.',
+        'Answer with /sage A, B, C or D, or the buttons on the Game Screen.',
       ].join('\n'),
     )
 
@@ -314,7 +303,7 @@ describe('The Sage', () => {
     expect(answered.text).toBe('Right! +20 XP (Intelligence)\nIt trims the email, then lowercases it.')
   })
 
-  test('the Sage\'s pane drawing a Question starts its time: an answer there is timed', async ($, on) => {
+  test('the dialogue box drawing a Question starts its time: an answer there is timed', async ($, on) => {
     const { recorded, clock } = engine(on)
     const games: { lastAnswer?: { answerMs: number | null } | null }[] = []
     on('state.set', (_, e, next) => {
@@ -345,10 +334,10 @@ describe('The Sage', () => {
     expect(player()).toMatchObject({ hp: 100 })
   })
 
-  test('a Question arriving while the Sage\'s pane is in view is timed from then', async ($, on) => {
+  test('a Question arriving while the Game Screen is in view is timed from then', async ($, on) => {
     const { recorded, clock } = engine(on)
     on('ui.panes', () => ({
-      value: [{ id: 'sage', title: 'The Sage', isShown: true, isFocused: false, isPlaced: true }],
+      value: [{ id: 'game', title: 'Claude Quest', isShown: true, isFocused: false, isPlaced: true }],
     }))
     const games: { questions?: { shownAt: number | null }[]; lastAnswer?: { answerMs: number | null } | null }[] = []
     on('state.set', (_, e, next) => {

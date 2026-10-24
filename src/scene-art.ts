@@ -448,6 +448,60 @@ export const bossSceneSvg = (fight: BossFight, width: number): string => {
   )
 }
 
+/** What a strip stage plays: an Encounter (none yet: null), the Boss Fight, or a companion setting out. */
+export type StripScene =
+  | { kind: 'encounter'; encounter: Encounter | null }
+  | { kind: 'boss'; fight: BossFight }
+  | { kind: 'departure' }
+
+/** A sprite placed on the strip, its top left at `x`, bobbing every `period` seconds when given, faded to `opacity`. */
+const onStrip = (name: SpriteName, x: number, { period, opacity }: { period?: number; opacity?: number } = {}): string => {
+  const bob =
+    period === undefined
+      ? ''
+      : `<animateTransform attributeName="transform" type="translate" values="0 0;0 -1" calcMode="discrete" dur="${period}s" repeatCount="indefinite"/>`
+
+  return `<g${opacity === undefined ? '' : ` opacity="${opacity}"`}><g>${drawSprite(name, x, 0)}${bob}</g></g>`
+}
+
+/**
+ * The stage shrunk to one strip, for a pane too short for the Scene: its
+ * actors alone, a row of 16 px sprites with no room around them, as an SVG
+ * document `width` CSS pixels wide. The hero bobs; the Encounter's other
+ * party stands beside it: the monster (faded once beaten), the blacksmith at
+ * the anvil with the item, a first visit's chest, the boss (faded once the
+ * fight is over), a companion setting out.
+ */
+export const stripSvg = (scene: StripScene, width: number): string => {
+  const height = Math.round((width * SPRITE_SIZE) / WIDTH)
+  const theHero = onStrip('hero', HERO_X, { period: 0.5 })
+  let actors: string
+  if (scene.kind === 'departure') {
+    actors = onStrip('hero', SPRITE_SIZE, { period: 0.5 }) + onStrip('pathfinder', 4 * SPRITE_SIZE, { period: 0.5, opacity: 0.7 })
+  } else if (scene.kind === 'boss') {
+    const isOver = scene.fight.status !== 'fighting' && scene.fight.status !== 'summoned'
+    actors = theHero + onStrip('boss', MONSTER_X, isOver ? { opacity: 0.3 } : { period: 0.8 })
+  } else {
+    const { encounter } = scene
+    actors =
+      encounter === null
+        ? onStrip('hero', SPRITE_SIZE, { period: 0.5 })
+        : encounter.kind === 'Battle'
+          ? theHero + onStrip(MONSTERS[encounter.foe].sprite, MONSTER_X, encounter.outcome === 'won' ? { opacity: 0.3 } : { period: 0.7 })
+          : encounter.kind === 'Crafting'
+            ? onStrip('blacksmith', SMITH_X, { period: 0.6 }) + onStrip('anvil', ANVIL_X) + onStrip(itemSpriteOf(encounter.item), ITEM_X)
+            : encounter.isFirstVisit
+              ? onStrip('hero', BESIDE_CHEST, { period: 0.5 }) + onStrip('chestOpen', 6 * SPRITE_SIZE)
+              : onStrip('hero', 3 * SPRITE_SIZE, { period: 0.5 })
+  }
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${SPRITE_SIZE}" width="${width}" height="${height}" shape-rendering="crispEdges">` +
+    actors +
+    '</svg>'
+  )
+}
+
 /**
  * An NPC's portrait for the dialogue box: their sprite on a dark frame, as an
  * SVG document `width` CSS pixels square; `defeated`, the sprite dimmed.

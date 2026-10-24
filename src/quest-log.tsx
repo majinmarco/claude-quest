@@ -1,12 +1,12 @@
-// The Quest Log pane (`/quest`, `/quest <ticket>`): all the game knows of one
+// The Quest Log, the Game Screen's Log view (`/quest`, `/quest <ticket>`): all the game knows of one
 // Quest, top to bottom. Its Scroll unrolled at full width (pixel art where the
 // surface draws SVG, the text scroll in the terminal) with the ticket's link;
 // the ticket's whole description (Markdown on every surface), cut at 8000
 // characters; the Quest Giver's briefing, once it has one; for the Quest under
 // way its progress (from the game alone, src/engine.ts questProgressOf), and
-// for one that is not, Take Quest and its Region file history. It never
-// opens itself: /quest, the Quest Board's Read more, and the Quest Log
-// Buttons of the Sage and Boss panes open it.
+// for one that is not, Take Quest and its Region file history. It shows the
+// active Quest's ticket until /quest, the Quest Board's Read more, or the
+// Quest Log Button over the Sage's and the boss's dialogue box picks one.
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
@@ -17,9 +17,6 @@ import { statsOf } from './quest-source'
 import { questLogScrollSvg, STAT_ABBREVIATION, tagsOf } from './scroll-art'
 import { ticketOf } from './translate'
 import type { Quest, QuestCard, QuestRecord, TicketFetch } from '../types'
-
-/** The Quest Log's pane. */
-export const QUEST_LOG = { id: 'quest-log', title: 'Quest Log' } as const
 
 /** The most of a description the log shows, in characters. */
 export const DESCRIPTION_CUT = 8000
@@ -219,7 +216,7 @@ const describeCard = (card: QuestCard, dungeon: string | undefined): string =>
     ...(dungeon === undefined ? [] : [`Dungeon: ${dungeon}`]),
   ].join(' · ')
 
-/** The terminal's Scroll is as wide as the pane, up to this many cells. */
+/** The terminal's Scroll is as wide as the panel, up to this many cells. */
 const LOG_FRAME_MAX = 100
 
 export function drawQuestLog($: EngineInterface, e: RenderInput<'Pane'>, model: QuestLogModel, actions: QuestLogActions) {
@@ -341,7 +338,7 @@ export function drawQuestLog($: EngineInterface, e: RenderInput<'Pane'>, model: 
   )
 }
 
-/** The log before it was first opened for a ticket. */
+/** The log with no ticket to show: none picked, no Quest active. */
 export function drawEmptyQuestLog($: EngineInterface, e: RenderInput<'Pane'>) {
   const { Text } = $.ui.resolve(e)
 
@@ -361,7 +358,7 @@ export const scrollExcerptOf = (fetch: TicketFetch | undefined): string | undefi
   return fetch.state === 'got' && fetch.details?.description !== undefined ? excerptOf(fetch.details.description) : undefined
 }
 
-/** A Quest as the Sage's and Boss's panes head themselves with it. */
+/** A Quest as the Sage's and the boss's dialogue boxes head themselves with it. */
 export type QuestHeader = { ticket: string; title?: string; openLog: () => void }
 
 /** The one-line `Quest #N Title` header, with a Quest Log Button. */
