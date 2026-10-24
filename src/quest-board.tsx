@@ -1,10 +1,11 @@
-// The Quest Board pane: the current Region's open Quests as cards, with
+// The Quest Board, the Game Screen's Quests view: the current Region's open Quests as cards, with
 // filters by status (and tag, and Dungeon) and difficulty, under a header of
 // the Player's trophies and Badges, six cards a page. Each card is a scroll: pixel art
 // where the surface draws SVG (src/scroll-art.ts), a scroll framed in text in
 // the terminal; rolled, or unrolled to show the whole card. Under each, Take
 // Quest (the caller's: it fills the prompt with an implement command for the
-// ticket) and Unroll or Roll up.
+// ticket) and Unroll or Roll up; the selected Scroll's (the one unrolled, else
+// the page's first) on hotkeys T and U.
 
 import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 
@@ -15,7 +16,7 @@ import { LISTING_CAP } from './quest-source'
 import { boardHeaderSvg, cardDetails, cutText, PIPS, SCROLL_COLORS, SCROLL_WIDTH, scrollCardSvg, STAT_ABBREVIATION, tagsOf, wrapText } from './scroll-art'
 import type { Measure } from './scroll-art'
 import { isImplementCommand } from './translate'
-import type { Difficulty, QuestBoard, QuestCard, QuestSourceProblem, QuestSourceSetting } from '../types'
+import type { Difficulty, GameScreen, QuestBoard, QuestCard, QuestSourceProblem, QuestSourceSetting } from '../types'
 
 export type QuestBoardActions = {
   /** The Player picked this Quest. */
@@ -245,10 +246,15 @@ export function drawTextScroll(
   return textScrollElement($.ui.resolve(e), textScroll(quest, true, width, options))
 }
 
+/**
+ * The Quest Board, for the Game Screen's panel: `board` as last listed and
+ * filtered, at `place` (the page shown, the Scroll unrolled).
+ */
 export function drawQuestBoard(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
   board: QuestBoard,
+  place: GameScreen['board'],
   actions: QuestBoardActions,
   player: Player | null = null,
   /**
@@ -347,17 +353,22 @@ export function drawQuestBoard(
   // A page past the last (the listing shrank) shows the last; a ticket no
   // longer listed is no card to unroll.
   const pages = Math.max(Math.ceil(shown.length / PAGE_SIZE), 1)
-  const page = Math.min(Math.max(board.page ?? 0, 0), pages - 1)
-  const selected = quests.some(quest => quest.ticket === board.selected) ? board.selected : null
+  const page = Math.min(Math.max(place.page, 0), pages - 1)
+  const selected = quests.some(quest => quest.ticket === place.selected) ? place.selected : null
+  const onPage = shown.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+  // The Scroll the hotkeys T and U act on: the one unrolled, when it is on
+  // this page; else the page's first.
+  const hotkeyed = onPage.find(quest => quest.ticket === selected)?.ticket ?? onPage[0]?.ticket
+  const hotkeyOf = (quest: QuestCard, hotkey: string): { hotkey?: string } => (quest.ticket === hotkeyed ? { hotkey } : {})
 
   const cardOf = (quest: QuestCard) => {
     const unrolled = quest.ticket === selected
     const buttons = (
       <Box flexDirection="row" gap={1}>
-        <Button key={`quest:${quest.ticket}`} variant="primary" onPress={() => actions.pick(quest)}>
+        <Button key={`quest:${quest.ticket}`} variant="primary" {...hotkeyOf(quest, 't')} onPress={() => actions.pick(quest)}>
           {`Take Quest ${quest.ticket}`}
         </Button>
-        <Button key={`scroll:${quest.ticket}`} onPress={() => actions.select(unrolled ? null : quest.ticket)}>
+        <Button key={`scroll:${quest.ticket}`} {...hotkeyOf(quest, 'u')} onPress={() => actions.select(unrolled ? null : quest.ticket)}>
           {unrolled ? 'Roll up' : 'Unroll'}
         </Button>
         {unrolled && (
@@ -421,7 +432,7 @@ export function drawQuestBoard(
       <Text dimColor>{`${shown.length} of ${total} Quests`}</Text>
       {isUnrated && <Text dimColor>{ratingHint(listing.source)}</Text>}
       {shown.length === 0 && <Text dimColor>No Quests match these filters.</Text>}
-      {shown.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map(cardOf)}
+      {onPage.map(cardOf)}
       {pages > 1 && (
         <Box flexDirection="row" gap={1}>
           {page > 0 && (

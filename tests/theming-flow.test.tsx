@@ -10,6 +10,7 @@ import type { FsEntry, On, ProcessRunResult } from 'claude-code'
 
 import type { RegionEntry } from '../src/region-registry'
 import { writeNewFile } from './fixtures/file-changes'
+import { inPanel } from './fixtures/game-screen'
 import { HERE, THREE_REGIONS } from './fixtures/world-regions'
 
 const pane = (requestId: string, title: string) =>
@@ -27,8 +28,8 @@ const pane = (requestId: string, title: string) =>
     },
   }) as const
 
-const MAP = pane('region-map', 'Region map')
-const OVERVIEW = pane('overview', 'Overview')
+const MAP = pane('game', 'Claude Quest')
+const OVERVIEW = MAP
 
 const ROOT = '/work/forge'
 const START = { cwd: ROOT, surface: 'desktop', isInteractive: true } as const
@@ -140,14 +141,12 @@ const engine = (
 const run = ($: Engine, command: string) =>
   $.command.run({ command, args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
 
-type Drawn = {
-  findAll: (query: { type: string }) => Promise<{ key: string | undefined; text: string; props: Record<string, unknown> }[]>
-}
+type Drawn = Parameters<typeof inPanel>[0]
 
-const texts = async (ui: Drawn) => (await ui.findAll({ type: 'Text' })).map(found => found.text)
-const svgs = async (ui: Drawn) => (await ui.findAll({ type: 'Svg' })).map(found => found.props)
+const texts = async (ui: Drawn) => (await inPanel(ui, 'Text')).map(found => found.text)
+const svgs = async (ui: Drawn) => (await inPanel(ui, 'Svg')).map(found => found.props)
 const buttonTexts = async (ui: Drawn, prefix: string) =>
-  (await ui.findAll({ type: 'Button' })).filter(found => found.key?.startsWith(prefix)).map(found => found.text)
+  (await inPanel(ui, 'Button')).filter(found => found.key?.startsWith(prefix)).map(found => found.text)
 
 /** Opens the map, draws it once on the desktop, and lets what the drawing started finish. */
 const drawMap = async ($: Engine, clock: { settle: () => Promise<void> }, press: string[] = []) => {

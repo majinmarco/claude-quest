@@ -616,8 +616,10 @@ export type QuestSourceProblem = {
 }
 
 /**
- * What the Quest Board shows: its Quests as last listed, its filters, the
- * card unrolled and the page shown.
+ * What the Quest Board shows: its Quests as last listed and its filters.
+ * Its place (the card unrolled, the page shown) is the Game Screen's
+ * (`GameScreen.board`); a board kept by an older mod may still hold them,
+ * which nothing reads.
  */
 export type QuestBoard = {
   listing:
@@ -631,16 +633,6 @@ export type QuestBoard = {
     | { state: 'unavailable'; problem: QuestSourceProblem }
   /** null shows every status, or every difficulty. */
   filters: { status: string | null; difficulty: Difficulty | null }
-  /**
-   * The ticket whose card is unrolled; null when every card is rolled, as is
-   * a ticket no longer listed. Absent in a board kept by an older mod.
-   */
-  selected?: string | null
-  /**
-   * The page shown, from 0; a filter changed goes back to 0, and a page past
-   * the last shows the last. Absent in a board kept by an older mod.
-   */
-  page?: number
 }
 
 /**
@@ -706,8 +698,11 @@ export type RegionEntry = {
   theme?: RegionTheme
 }
 
-/** The Overview pane's state: the registry as last read, the session's root, the page of Islands shown. */
-export type OverviewState = { page: number; regions: Record<string, RegionEntry>; root: string | null }
+/**
+ * The Overview's state: the registry as last read and the session's root.
+ * The page of Islands shown is the Game Screen's (`GameScreen.sheet`).
+ */
+export type OverviewState = { regions: Record<string, RegionEntry>; root: string | null }
 /** A companion out with the party: one subagent sent out during a Quest, by its loop's agent id. */
 export type Companion = {
   agentId: string
@@ -732,20 +727,13 @@ export type RegionMapListing =
   | { state: 'unavailable'; problem: QuestSourceProblem }
 
 /**
- * The Region map pane: which Region it draws (the current project, or
- * another from its Snapshot), the view and the place in it, and what it read
- * of the current project. See src/region-map.tsx.
+ * The Region map: which Region it draws (the current project, or another
+ * from its Snapshot), and what it read of the current project. The place in
+ * it is the Game Screen's (`GameScreen.map`). See src/region-map.tsx.
  */
 export type RegionMapState = {
   target: { kind: 'live' } | { kind: 'snapshot'; entry: RegionEntry }
-  view: 'overworld' | 'dungeon' | 'modules'
-  /** The site entered last: a Dungeon's key, or '' for the Wilds; null before any. */
-  site: string | null
-  /** The Floor shown, from 0. */
-  floor: number
-  /** The Room selected, by its place on the Floor (from 0); null when none. */
-  selected: number | null
-  /** The current project as read when the pane opened: its root, id (folder name), remote, history and Modules on disk. */
+  /** The current project as read when the map opened: its root, id (folder name), remote, history and Modules on disk. */
   project: { root: string; id: string; remote: string | null; history: QuestRecord[]; folders: string[] } | null
   /** Its open tickets, read each time the pane opens. */
   open: RegionMapListing
@@ -753,12 +741,41 @@ export type RegionMapState = {
   closed: Record<string, RegionMapListing>
 }
 
+/** The Game Screen's views, as its tab row lists them: the Quest Board, the Region map, the Quest Log, the Overview. */
+export type GameView = 'quests' | 'map' | 'log' | 'sheet'
+
+/**
+ * The Game Screen (src/game-screen.tsx): the view its panel shows, and each
+ * view's place in it, kept across a view switch and a reload.
+ */
+export type GameScreen = {
+  view: GameView
+  /** The Quest Board's: the page shown, from 0 (a filter changed goes back to 0, a page past the last shows the last), and the ticket whose Scroll is unrolled (null: every Scroll rolled, as is a ticket no longer listed). */
+  board: { page: number; selected: string | null }
+  map: {
+    /** The overworld, a site's Floors, or the Module view. */
+    view: 'overworld' | 'dungeon' | 'modules'
+    /** The site entered last: a Dungeon's key, or '' for the Wilds; null before any. */
+    site: string | null
+    /** The Floor shown, from 0. */
+    floor: number
+    /** The Room selected, by its place on the Floor (from 0); null when none. */
+    selected: number | null
+  }
+  /** The Quest Log's: the ticket shown; null shows the active Quest's. */
+  log: { ticket: string | null }
+  /** The Overview's: the page of Islands shown, from 0. */
+  sheet: { page: number }
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'quest-mod': {
       game: GameState | null
       board: QuestBoard
-      /** The Quest Log pane: the ticket shown, its Region file history. */
+      /** The Game Screen: the view shown and each view's place. */
+      gameScreen: GameScreen
+      /** The Quest Log: the ticket last loaded, its Region file history. */
       questLog: QuestLog
       /** Each ticket's details fetched this session, by ticket (`#21`, `ABC-123`): see TicketFetch. */
       ticketDetails: StateFamily<TicketFetch>
@@ -766,7 +783,7 @@ declare module 'claude-code' {
       briefing: StateFamily<QuestBriefing>
       /** Questions made, by their change's hash: see src/question-cache.ts. */
       questionCache: { key: string; question: QuestionContent }[]
-      /** Whether the Scene opened itself this session: once at most. */
+      /** Whether the Game Screen opened itself this session (the `autoOpenScene` rule): once at most. */
       sceneOpened: boolean
       /**
        * The Quest Giver's Briefing of each ticket, its two lines as they
@@ -774,11 +791,11 @@ declare module 'claude-code' {
        * id: '#19' }` (see src/briefing.ts). Kept for the session.
        */
       briefing: StateFamily<{ text: string }>
-      /** The Overview: the registry as last read, the session's root, the page of Islands. */
+      /** The Overview: the registry as last read, the session's root. */
       overview: OverviewState
       /** The companions out with the party: see src/party.ts. */
       party: Party
-      /** The Region map pane: see src/region-map.tsx. */
+      /** The Region map: see src/region-map.tsx. */
       regionMap: RegionMapState
       /** The Regions and Dungeons a theme was asked for this session, by key: see src/theming.ts. */
       themeAttempts: string[]

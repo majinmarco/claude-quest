@@ -89,7 +89,7 @@ export const questionText = (question: Question, waiting: number): string =>
     ...(isAboutTicket(question) ? [`${ABOUT_TICKET}.`] : [`${question.source.path}:`]),
     ...question.source.lines.map(line => `    ${line}`),
     ...question.options.map((option, at) => `  ${LETTERS[at]}. ${option}`),
-    'Answer with /sage A, B, C or D, or the buttons in the Sage\'s pane.',
+    'Answer with /sage A, B, C or D, or the buttons on the Game Screen.',
   ].join('\n')
 
 /** An answer as text: the verdict, then the explanation. */

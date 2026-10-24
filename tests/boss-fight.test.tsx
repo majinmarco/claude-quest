@@ -7,6 +7,7 @@ import { newPlayer } from '../src/engine'
 import type { BossFight, Question } from '../types'
 import { writeNewFile } from './fixtures/file-changes'
 import { commitAfterAdd, commitInFolder, commitNothingToCommit, commitPlain, commitThenFailingTests, GIT_SHOW_DEPOSIT } from './fixtures/git-commits'
+import { bandTexts, inBand } from './fixtures/game-screen'
 
 const ROOT = '/work/vault'
 const REGION = `${ROOT}/.claude/claude-quest.json`
@@ -27,8 +28,9 @@ const pane = (requestId: string, title: string) =>
     },
   }) as const
 
-const BOSS = pane('boss', 'The Boss')
-const SCENE = pane('scene', 'Scene')
+// The boss speaks in the Game Screen's dialogue box; the Scene plays on its stage.
+const BOSS = pane('game', 'Claude Quest')
+const SCENE = BOSS
 
 const HUD = {
   plugin: 'quest-mod',
@@ -557,7 +559,7 @@ describe('The Boss Fight', () => {
     expect((await run($, 'boss')).text).toMatch(/^No Boss Fight under way/)
   })
 
-  test('on the desktop the boss\'s pane shows its portrait, the lines, the options and a skip button', async ($, on) => {
+  test('on the desktop the boss\'s dialogue box shows its portrait, the lines, the options and a skip button', async ($, on) => {
     const { call, player, region } = engine(on)
     await $.session.start({ ...START, surface: 'desktop' })
     await startQuest($)
@@ -565,10 +567,10 @@ describe('The Boss Fight', () => {
 
     const ui = await $.ui.mount({ ...BOSS, surface: 'desktop' })
 
-    expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('The boss of Quest #12')
+    expect((await inBand(ui, 'game-dialogue', 'Svg'))[0]?.props.alt).toBe('The boss of Quest #12')
     expect((await ui.find({ type: 'Code' }))?.text).toBe('  if (vault.locked) {\n    throw new Error("The vault is locked")')
     // Headed by its Quest, the Quest Log a press away.
-    expect((await ui.findAll({ type: 'Button' })).map(button => button.text)).toEqual([
+    expect((await inBand(ui, 'game-dialogue', 'Button')).map(button => button.text)).toEqual([
       'Quest Log',
       'A. It throws',
       'B. It adds the gold anyway',
@@ -586,7 +588,7 @@ describe('The Boss Fight', () => {
     await ui.unmount()
   })
 
-  test('in the terminal the boss\'s pane is the same box, without the portrait', async ($, on) => {
+  test('in the terminal the boss\'s dialogue box is the same, without the portrait', async ($, on) => {
     const { call } = engine(on)
     await $.session.start(START)
     await startQuest($)
@@ -599,13 +601,13 @@ describe('The Boss Fight', () => {
     await ui.unmount()
   })
 
-  test('once the boss falls, its pane says so without the HP, the portrait dimmed', async ($, on) => {
+  test('once the boss falls, its dialogue box says so without the HP, the portrait dimmed', async ($, on) => {
     const { call } = engine(on)
     await $.session.start({ ...START, surface: 'desktop' })
     await startQuest($)
     await call($, commitAfterAdd)
     const fighting = await $.ui.mount({ ...BOSS, surface: 'desktop' })
-    const before = String((await fighting.find({ type: 'Svg' }))?.props.source)
+    const before = String((await inBand(fighting, 'game-dialogue', 'Svg'))[0]?.props.source)
     await fighting.unmount()
 
     for (let answer = 0; answer < 3; answer++) {
@@ -613,19 +615,19 @@ describe('The Boss Fight', () => {
     }
 
     const ui = await $.ui.mount({ ...BOSS, surface: 'desktop' })
-    const texts = (await ui.findAll({ type: 'Text' })).map(text => text.text)
+    const texts = await bandTexts(ui, 'game-dialogue')
     // The Quest's header, then the boss's.
     expect(texts[0]).toBe('Quest #12')
     expect(texts[1]).toBe('The boss of Quest #12 has fallen')
     expect(texts.some(text => /\d\/\d HP|Questions$/.test(text))).toBe(false)
-    const portrait = await ui.find({ type: 'Svg' })
+    const portrait = (await inBand(ui, 'game-dialogue', 'Svg'))[0]
     expect(portrait?.props.alt).toBe('The boss of Quest #12 has fallen')
     expect(String(portrait?.props.source)).toContain('opacity="0.35"')
     expect(before).not.toContain('opacity')
     await ui.unmount()
   })
 
-  test('a skipped Boss Fight\'s pane says the boss was skipped, without the HP', async ($, on) => {
+  test('a skipped Boss Fight\'s dialogue box says the boss was skipped, without the HP', async ($, on) => {
     const { call } = engine(on)
     await $.session.start(START)
     await startQuest($)

@@ -8,6 +8,7 @@ import { codeLines, fakeRepo } from './fixtures/fake-git'
 import type { FakeRepo } from './fixtures/fake-git'
 import { catFile, heredocWrite } from './fixtures/bash-calls'
 import { editTwelveLines } from './fixtures/file-changes'
+import { GAME } from './fixtures/game-screen'
 
 // Wait-time engagement (#22) through the mod's own hooks: a Bash heredoc or
 // script plays Crafting from the diff, Bash reads explore, and subagents go
@@ -18,12 +19,7 @@ const ROOT = '/work/forge'
 
 const START = { cwd: ROOT, surface: 'terminal', isInteractive: true } as const
 
-const SCENE = {
-  plugin: 'quest-mod',
-  component: 'Pane',
-  requestId: 'scene',
-  props: { title: 'Scene', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
-} as const
+const SCENE = GAME
 
 const HUD = {
   plugin: 'quest-mod',

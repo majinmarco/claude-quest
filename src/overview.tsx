@@ -1,4 +1,4 @@
-// The Overview pane (`/overview`): the Player's character sheet (src/sheet.ts)
+// The Overview, the Game Screen's Sheet view (`/overview`, `/badges`): the Player's character sheet (src/sheet.ts)
 // above the World (src/world-art.ts). Where the surface draws SVG the sheet
 // stands beside the Player's portrait (the HUD's, by Title, at 4x) and the
 // World is pixel art; in the terminal the sheet is text and the World a
@@ -14,15 +14,12 @@ import { portraitSvg } from './scene-art'
 import { sheetRows } from './sheet'
 import { GRID_MARKS, islandName, islandNote, islandsOf, worldAlt, worldGrid, worldSvg } from './world-art'
 import type { Island } from './world-art'
-import type { OverviewState } from '../types'
+import type { GameScreen, OverviewState } from '../types'
 
 export type { OverviewState } from '../types'
 
-/** The Overview's pane, as `/overview` opens it. */
-export const OVERVIEW = { id: 'overview', title: 'Overview' } as const
-
-/** The pane as it starts: no Region read yet, the first page. */
-export const emptyOverview = (): OverviewState => ({ page: 0, regions: {}, root: null })
+/** The Overview as it starts: no Region read yet. */
+export const emptyOverview = (): OverviewState => ({ regions: {}, root: null })
 
 export type OverviewActions = {
   /** Open this Island's Region map. */
@@ -46,13 +43,15 @@ export const NO_ISLANDS = 'No Islands yet: a project joins the World the first t
 /**
  * Draws the Overview for `player`: the sheet (beside the portrait where the
  * surface draws SVG), the World (art, or the terminal's grid), and the page
- * of Island Buttons `state` holds, page and hotkeys 1 to 9 by `actions`.
+ * of Island Buttons at `place` (the Game Screen's), page and hotkeys 1 to 9
+ * by `actions`.
  */
 export function drawOverview(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
   player: Player,
   state: OverviewState,
+  place: GameScreen['sheet'],
   actions: OverviewActions,
 ) {
   const elements = $.ui.resolve(e)
@@ -90,7 +89,7 @@ export function drawOverview(
 
   const islands = islandsOf(state.regions, state.root)
   const pages = Math.max(Math.ceil(islands.length / ISLANDS_PER_PAGE), 1)
-  const page = Math.min(Math.max(state.page, 0), pages - 1)
+  const page = Math.min(Math.max(place.page, 0), pages - 1)
   const shown = islands.slice(page * ISLANDS_PER_PAGE, (page + 1) * ISLANDS_PER_PAGE)
   const art = Svg === undefined ? null : worldSvg(islands)
 
