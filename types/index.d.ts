@@ -550,6 +550,34 @@ export type QuestBoard = {
   page?: number
 }
 
+/** What the World remembers of a Region: its Dungeons by name with their counts, the Wilds, the Modules. */
+export type RegionSnapshot = {
+  /** When it was taken, ISO 8601. */
+  takenAt: string
+  dungeons: { key: string; name: string; total: number; cleared: number }[]
+  wilds: { total: number; cleared: number }
+  modules: { discovered: number; total: number }
+}
+
+/**
+ * A Region in the registry (`$.store` key `regions`, by root): its id (the
+ * folder name), its root, its remote (null when none was read), when it was
+ * first and last played (ISO 8601), and its Snapshot once its map was drawn.
+ * A Region seeded from an older Player's tally alone has no root (`''`)
+ * until it is played again.
+ */
+export type RegionEntry = {
+  id: string
+  root: string
+  remote: string | null
+  firstPlayedAt: string
+  lastPlayedAt: string
+  snapshot?: RegionSnapshot
+}
+
+/** The Overview pane's state: the registry as last read, the session's root, the page of Islands shown. */
+export type OverviewState = { page: number; regions: Record<string, RegionEntry>; root: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     'quest-mod': {
@@ -559,6 +587,8 @@ declare module 'claude-code' {
       questionCache: { key: string; question: QuestionContent }[]
       /** Whether the Scene opened itself this session: once at most. */
       sceneOpened: boolean
+      /** The Overview: the registry as last read, the session's root, the page of Islands. */
+      overview: OverviewState
     }
   }
 }

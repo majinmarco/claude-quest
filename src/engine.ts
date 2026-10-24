@@ -855,6 +855,15 @@ const award = (
   }
 }
 
+/**
+ * The Stats in play: earned by play and shown at full strength. The others
+ * stay at 0, drawn dimmed as not yet in play (the Overview's sheet).
+ */
+export const STATS_IN_PLAY: readonly StatName[] = ['intelligence', 'wisdom', 'strength']
+
+/** Whether `stat` is in play. */
+export const isInPlay = (stat: StatName): boolean => STATS_IN_PLAY.includes(stat)
+
 /** The MVP's Stats and the title each names, in the order a tie goes. */
 const TITLES: [StatName, string][] = [
   ['intelligence', 'Scholar'],

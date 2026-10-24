@@ -502,16 +502,36 @@ describe('HUD: the Player\'s progress', () => {
     }
   })
 
-  test('/badges lists the Badges, trophies, title and Stats as text', async ($, on) => {
+  test('/badges prints the character sheet as text: XP to next, six Stats, every Badge, Trophies by Region, the tally', async ($, on) => {
     keptStore(on, { player: SCHOLAR })
     on('session.start', (_, e) => ({ cwd: e.cwd }))
     await $.session.start(START)
 
     expect((await runCommand($, 'badges')).text).toBe(
       [
-        'Lv 4 Scholar · 560 XP lifetime · INT 300 · WIS 40 · STR 60',
-        'Badges (2/10): Questbound, Boss Slayer',
-        'Trophies (1): Bane of vault#12',
+        'Lv 4 Scholar · 560 XP lifetime',
+        'XP 10/550 to Lv 5 ▱▱▱▱▱▱▱▱▱▱',
+        'Stats',
+        '  INT Intelligence 300',
+        '  WIS Wisdom 40',
+        '  DEX Dexterity 0 · not yet in play',
+        '  STR Strength 60',
+        '  CHA Charisma 0 · not yet in play',
+        '  CON Constitution 0 · not yet in play',
+        'Badges (2/10)',
+        '  ☆ First Blood',
+        '  ★ Questbound',
+        '  ★ Boss Slayer',
+        '  ☆ Flawless',
+        '  ☆ Dragon Slayer',
+        '  ☆ Cartographer',
+        "  ☆ Sage's Apprentice",
+        '  ☆ Unbroken',
+        '  ☆ Wayfarer',
+        '  ☆ Second Wind',
+        'Trophies (1)',
+        '  vault: #12',
+        'Quests closed 2 · Bosses won 1 · Boss streak 1 · Modules discovered 9',
       ].join('\n'),
     )
   })

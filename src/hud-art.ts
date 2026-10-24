@@ -79,6 +79,9 @@ export const portraitOf = (player: Player): Portrait => {
   return title === null ? 'adventurer' : (PORTRAITS[title.replace(/^Veteran /, '')] ?? 'adventurer')
 }
 
+/** The sprite the Player's portrait is drawn with, as the HUD draws it. */
+export const portraitSpriteOf = (player: Player): SpriteName => PORTRAIT_SPRITES[portraitOf(player)]
+
 /** A segment of the strip: what it shows, as the HUD's parts say. */
 export type StripSegment =
   | { kind: 'level'; portrait: Portrait; text: string }

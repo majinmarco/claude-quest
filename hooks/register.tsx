@@ -27,12 +27,17 @@ import {
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
+import { drawOverview, emptyOverview, OVERVIEW } from '../src/overview'
+import type { OverviewActions, OverviewState } from '../src/overview'
 import { drawQuestBoard, implementCommandOf, isImplementDraft, noFilters, PREFERRED_IMPLEMENT } from '../src/quest-board'
 import type { QuestBoardActions } from '../src/quest-board'
 import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
 import { resolveQuestSource } from '../src/quest-source-setting'
 import type { ResolvedQuestSource } from '../src/quest-source-setting'
+import { drawRegionMapStub, openRegionMap } from '../src/region-map'
+import { clearedOf, readRegions, recordRegionQuestClosed, touchRegion } from '../src/region-registry'
+import type { RegionEntry } from '../src/region-registry'
 import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
@@ -68,6 +73,12 @@ const questionCache = atom(
 
 /** Whether the Scene has opened itself this session: it does so once at most. */
 const sceneOpened = atom({ plugin: 'quest-mod', key: 'sceneOpened' } as const, false)
+
+/**
+ * The Overview: the registry of Regions as last read (at session start, a
+ * Quest's close and /overview), the session's root, the page of Islands.
+ */
+const overview = atom({ plugin: 'quest-mod', key: 'overview' } as const, emptyOverview() satisfies OverviewState)
 
 const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 
@@ -416,6 +427,26 @@ const bossActions = ($: EngineInterface, rules: Rules): BossActions => ({
   },
 })
 
+/** What the Overview's buttons do: an Island opens its Region's map, live for the session's own. */
+const overviewActions = ($: EngineInterface): OverviewActions => ({
+  open: island => {
+    void openRegionMap($, island.isHere ? { kind: 'live' } : { kind: 'snapshot', entry: island.entry }).catch(() => undefined)
+  },
+  page: page => {
+    void update($, overview, (current): OverviewState => ({ ...current, page }))
+  },
+})
+
+/**
+ * Puts the registry in the Overview's state, with the session's root: as
+ * given, or read from the store.
+ */
+async function showRegions($: EngineInterface, regions?: Record<string, RegionEntry>): Promise<void> {
+  const root = await $.session.root().catch(() => null)
+  const kept = regions ?? (await readRegions($).catch(() => ({})))
+  await update($, overview, (current): OverviewState => ({ ...current, regions: kept, root }))
+}
+
 /**
  * Opens the Scene, unasked, when one of `surfaces` draws its art, at most once
  * per session, and only with the `autoOpenScene` setting on. In the terminal
@@ -730,6 +761,17 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
         $.ui.toast(`${bossOutcomeText(fight)} /quest-board for your next Quest`)
       }
       await recordQuestClosed($, effect.ticket, effect.outcome)
+      // The registry's Region is touched; a ticket cleared here for the first
+      // time (its trophy just won) lights its Dungeon in the Snapshot, when
+      // the board's card says which.
+      const root = await $.session.root().catch(() => null)
+      if (root !== null) {
+        const isCleared = effect.outcome === 'won' && effects.some(each => each.type === 'TROPHY_EARNED')
+        const cleared = isCleared ? clearedOf(await listedCard($, effect.ticket)) : null
+        await recordRegionQuestClosed($, root, cleared)
+          .then(regions => showRegions($, regions))
+          .catch(() => undefined)
+      }
     }
   }
 }
@@ -772,6 +814,14 @@ export const register: Register = (on, options) => {
     if (root !== null) {
       await pruneStaleQuests($).catch(() => undefined)
     }
+    // The project joins the World, or is touched there (the registry seeded
+    // once from an older Player's Regions); the World plays on without it.
+    if (root !== null) {
+      const repo = await $.session.repo().catch(() => null)
+      await touchRegion($, root, repo?.remote ?? null)
+        .then(regions => showRegions($, regions))
+        .catch(() => undefined)
+    }
     await update($, game, current => {
       const resumed = withTicketCalls({ ...newGame(player), ...current })
 
@@ -801,7 +851,10 @@ export const register: Register = (on, options) => {
       })
       .catch(() => undefined)
     await $.command
-      .register({ name: 'badges', description: 'Your Badges, trophies, title and Stats' })
+      .register({ name: 'badges', description: 'Your character sheet as text: level, Stats, Badges, Trophies' })
+      .catch(() => undefined)
+    await $.command
+      .register({ name: 'overview', description: 'Open the Overview: your character sheet and the World of Islands' })
       .catch(() => undefined)
     await $.command
       .register({
@@ -975,6 +1028,17 @@ export const register: Register = (on, options) => {
     return { text: badgesText(player) }
   })
 
+  on('command.run', { command: 'overview' }, async $ => {
+    await showRegions($)
+    const opened = await $.ui.open(OVERVIEW)
+
+    return {
+      text: opened.isPlaced
+        ? 'Overview opened.'
+        : 'Overview opened: it shows once the window is wide enough.',
+    }
+  })
+
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
     await openSceneForArt($, [e.surface], autoOpenScene)
@@ -1061,6 +1125,19 @@ export const register: Register = (on, options) => {
 
     return drawBoss($, e, current?.bossFight ?? null, bossActions($, rules), current !== null && isExhausted(current.player))
   })
+
+  on('ui.render', { component: 'Pane', requestId: OVERVIEW.id }, async ($, e) =>
+    drawOverview(
+      $,
+      e,
+      (await read($, game))?.player ?? (await loadPlayer($)),
+      await read($, overview),
+      overviewActions($),
+    ),
+  )
+
+  // Stub hook: issue #15 replaces it with the Region map's own at merge.
+  on('ui.render', { component: 'Pane', requestId: 'region-map' }, async ($, e) => drawRegionMapStub($, e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, game)
