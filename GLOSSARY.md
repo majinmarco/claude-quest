@@ -31,11 +31,11 @@ The single map holding all of the Player's Regions, each an Island, as the Overv
 _Avoid_: Game, universe
 
 **Island**:
-A Region as the World draws it: one of three sizes by how many Quests its Snapshot holds (1 to 10, 11 to 40, more), lit by the share of them cleared, the Region the Player is in marked ("you are here"); a Region with no Snapshot yet is a small grey Island, not mapped yet. Two Regions of one folder name are told apart by their remote's owner/repo. Choosing an Island opens that Region's map.
+A Region as the World draws it: one of three sizes by how many Quests its Snapshot holds (1 to 10, 11 to 40, more), lit by the share of them cleared, the Region the Player is in marked ("you are here"); a Region with no Snapshot yet is a small grey Island, not mapped yet. Two Regions of one folder name are told apart by their remote's owner/repo. A themed Region's Island is coloured by its Biome and named by its Theme, its folder's name beside it. Choosing an Island opens that Region's map.
 _Avoid_: Tile, node
 
 **Region**:
-One project's area of the World, shaped by that project's spec and named after its project's folder. Its map shows its Dungeons on open land, the Wilds among them, and Fog past the last of them.
+One project's area of the World, shaped by that project's spec and named after its project's folder (or by its Theme, the folder's name beside it). Its map shows its Dungeons on open land of its Biome, the Wilds among them, and Fog past the last of them.
 _Avoid_: Level, zone, project map
 
 **Region map**:
@@ -47,7 +47,7 @@ The Region map's first view: the Region's open land with a gate per Dungeon, a c
 _Avoid_: World (that's every Region), level select
 
 **Dungeon**:
-One epic within a Region (a Jira ticket's parent, never a subtask's; a GitHub milestone), drawn as Floors of Rooms; cleared when all its Quests are done, and then it flies a banner.
+One epic within a Region (a Jira ticket's parent, never a subtask's; a GitHub milestone), drawn as Floors of Rooms in the walls and floors of its kind (`crypt`, `fortress`, `aqueduct`, `mine`, `library`, `tower`; `crypt` until its Theme chooses); cleared when all its Quests are done, and then it flies a banner.
 _Avoid_: Epic (outside the Jira adapter), area
 
 **Wilds**:
@@ -67,8 +67,16 @@ The Region map's view of the project itself: a tile per Module, lit and named wh
 _Avoid_: Codebase map, file tree
 
 **Snapshot**:
-What the World remembers of a Region the Player is not in: its Dungeons by name with how many Quests each holds and how many are cleared, and when that was last true. Taken whenever the Region's map is drawn or a session starts in its project.
+What the World remembers of a Region the Player is not in: its Dungeons by name with how many Quests each holds and how many are cleared (and each one's Theme, kept when the Snapshot is taken again), and when that was last true. Taken whenever the Region's map is drawn or a session starts in its project.
 _Avoid_: Cache, sync
+
+**Biome**:
+The land a Region is drawn on, as its Theme chose it: `meadow` (the land of every Region without a Theme), `forest`, `coast`, `desert`, `snow` or `swamp`, each a palette of the Region map's land and camps and of its Island.
+_Avoid_: Terrain, tileset, climate
+
+**Theme**:
+A Region's name and Biome, or a Dungeon's name and kind, made by one Haiku call the first time it is drawn (a Region's map or Island, a Dungeon's Floors) and kept for ever in the registry: never needed to draw anything, counted against no Haiku budget, skipped when Haiku is unavailable and asked again next session when its reply is unusable. A themed name is always shown with the real one beside it.
+_Avoid_: Skin, flavour, style
 
 **Module**:
 A part of a Region's project, as the Player explores it: the first two segments of the folder a read file is in, or of the folder searched, relative to the project's root (`src/engine`, `packages/api`; `.` for a file at the root). Nothing under a root-level `node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, `.venv` or `coverage` is a Module. The first visit to a Module earns Wisdom XP (from the ambient XP pool) and counts toward the Cartographer Badge, once per Player per project: the Player keeps the Modules discovered in each project (a Region file kept by an older mod seeds them once).
@@ -207,7 +215,7 @@ A right answer given quicker than a non-trivial Question can be read: under 5 se
 _Avoid_: Fast answer, guess
 
 **Haiku budget**:
-How many Haiku calls the game may make, per ticket for the session: 10 for the Sage (the Quest Giver's Briefing and the Cartographer's Scoutings among them) and 3 for the Boss Fight, each counted apart, kept when the Quest closes or another replaces it (starting a ticket again does not refill it) and fresh in a new session; between Quests, 5 for the Sage per session (Scoutings among them). Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing; a call failing for a passing reason (rate limited, overloaded) is given back. When Haiku is not available on the account, Questions are off for the session, told once. The limits are settings, in `/config`; 0 disables Questions.
+How many Haiku calls the game may make for Questions, per ticket for the session (a Theme counts against none of it): 10 for the Sage (the Quest Giver's Briefing and the Cartographer's Scoutings among them) and 3 for the Boss Fight, each counted apart, kept when the Quest closes or another replaces it (starting a ticket again does not refill it) and fresh in a new session; between Quests, 5 for the Sage per session (Scoutings among them). Over budget a Question is skipped, never failed. A Question reused from the cache, for an identical diff, costs nothing; a call failing for a passing reason (rate limited, overloaded) is given back. When Haiku is not available on the account, Questions are off for the session, told once. The limits are settings, in `/config`; 0 disables Questions.
 _Avoid_: Quota, rate limit
 
 **Question cache**:
