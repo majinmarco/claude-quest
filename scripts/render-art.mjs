@@ -11,6 +11,9 @@
 // SVG, the pane as HTML, the terminal's text), and the Region map's three
 // views (overworld, a Dungeon's Floors, the Wilds, the Module view) for a
 // sample Region, as SVG and as the terminal's character grid (`map-*.txt`).
+// Last, the Game Screen itself (`game-<view>-desktop.html`,
+// `game-<view>-terminal.txt`), drawn by src/game-screen.tsx and the views'
+// own draw functions through a stand-in for the engine's elements.
 // Node runs the TypeScript sources itself (type stripping, Node 23.6+); the
 // hooks below let their extensionless imports (`./sprites`) resolve, and
 // compile a .tsx source's JSX (src/hud.tsx) with the project's TypeScript.
@@ -33,6 +36,14 @@ registerHooks({
     return { format: 'module', source: outputText, shortCircuit: true }
   },
   resolve: (specifier, context, next) => {
+    // The engine's module, for the Game Screen's previews: its state helpers
+    // are never called while drawing, so stubs stand in.
+    if (specifier === 'claude-code') {
+      return {
+        url: `data:text/javascript,${encodeURIComponent('export const atom = (key, initial) => ({ ...key, initial }); export const read = async () => undefined; export const update = async () => undefined; export const memberOf = key => key;')}`,
+        shortCircuit: true,
+      }
+    }
     try {
       return next(specifier, context)
     } catch (error) {
@@ -358,3 +369,145 @@ for (const kind of DUNGEON_KINDS) {
   write(`themed-floor-${kind}.svg`, floorSvg({ site: searchSite, floor: 0, selected: 1, kind }))
 }
 write('themed-wilds-forest.svg', floorSvg({ site: region.sites[0], floor: 0, selected: null, biome: 'forest' }))
+
+// The Game Screen (#24): each view, as the desktop draws it (HTML, each Svg
+// an <img>) and as the terminal does (text), from the same functions the pane
+// draws with. The engine's elements are stood in for by plain objects.
+globalThis.h = (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) })
+const ELEMENTS = { Box: 'Box', Text: 'Text', Button: 'Button', Svg: 'Svg', Code: 'Code', Markdown: 'Markdown', Link: 'Link' }
+const stand$ = { ui: { resolve: () => ELEMENTS } }
+const paneInput = (surface, bodyRows, bodyColumns = 60) => ({
+  surface,
+  component: 'Pane',
+  props: { title: 'Claude Quest', isFocused: false, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows }, view: {} },
+})
+const shown = child => child !== null && child !== undefined && child !== false && child !== true
+
+/** A drawn tree as HTML: Boxes as flex boxes, Buttons as buttons, each Svg an <img>. */
+const toHtml = node => {
+  if (!shown(node)) return ''
+  if (typeof node === 'string' || typeof node === 'number') return esc(String(node))
+  const { type, props, children } = node
+  const inner = children.map(toHtml).join('')
+  switch (type) {
+    case 'Box':
+      return `<div style="display:flex;flex-direction:${props.flexDirection ?? 'row'};gap:${(props.gap ?? 0) * 8}px;${props.flexGrow ? 'flex-grow:1;' : ''}align-items:flex-start">${inner}</div>`
+    case 'Text':
+      return `<span style="white-space:pre-wrap;${props.bold ? 'font-weight:bold;' : ''}${props.dimColor ? 'opacity:.55;' : ''}${props.color ? `color:${props.color === 'yellow' ? '#fee761' : props.color === 'magenta' ? '#e08ce0' : props.color === 'red' ? '#f07070' : props.color === 'green' ? '#7fd17f' : props.color};` : ''}">${inner}</span>`
+    case 'Button':
+      return `<button class="${props.variant === 'primary' ? 'primary' : ''}"${props.dimColor ? ' style="opacity:.6"' : ''}>${esc(props.label ?? '')}${inner}${props.hotkey ? ` <small>[${esc(props.hotkey)}]</small>` : ''}</button>`
+    case 'Svg':
+      return `<img src="data:image/svg+xml;base64,${Buffer.from(props.source).toString('base64')}"${props.width ? ` width="${props.width}"` : ''} title="${esc(props.alt ?? '')}">`
+    case 'Code':
+      return `<pre>${esc(props.source ?? '')}</pre>`
+    case 'Markdown':
+      return `<pre>${esc(props.text ?? '')}</pre>`
+    case 'Link':
+      return `<a href="${esc(props.href ?? '')}">${esc(props.href ?? '')}</a>`
+    default:
+      return inner
+  }
+}
+
+/** A drawn tree as the terminal's text: a column's children one under another, a row's side by side (their first lines). */
+const toLines = node => {
+  if (!shown(node)) return []
+  if (typeof node === 'string' || typeof node === 'number') return [String(node)]
+  const { type, props, children } = node
+  const flat = () => children.filter(shown).map(child => (typeof child === 'string' ? child : toLines(child).join(' '))).join('')
+  switch (type) {
+    case 'Box':
+      if ((props.flexDirection ?? 'row') === 'column') {
+        const parts = children.filter(shown).map(toLines)
+        return parts.flatMap((lines, at) => (at > 0 && props.gap ? ['', ...lines] : lines))
+      }
+      return [children.filter(shown).map(child => toLines(child).join(' ')).filter(text => text !== '').join(' '.repeat(Math.max(props.gap ?? 0, 1)))]
+    case 'Text':
+      return flat().split('\n')
+    case 'Button':
+      return [`[ ${props.label ?? flat()} ]`]
+    case 'Code':
+      return String(props.source ?? '').split('\n').map(line => `    ${line}`)
+    case 'Markdown':
+      return String(props.text ?? '').split('\n')
+    case 'Link':
+      return [String(props.href ?? '')]
+    default:
+      return []
+  }
+}
+
+const { drawGameScreen, stageLayoutOf } = await import('../src/game-screen.tsx')
+const { drawStage, sceneLineOf } = await import('../src/scene.tsx')
+const { drawQuestBoard } = await import('../src/quest-board.tsx')
+const { drawRegionMap } = await import('../src/region-map.tsx')
+const { drawQuestLog, drawQuestHeader } = await import('../src/quest-log.tsx')
+const { drawOverview } = await import('../src/overview.tsx')
+const { drawSage, NO_QUESTION } = await import('../src/sage.tsx')
+
+const noop = () => undefined
+const PREVIEW_PLAYER = SHEET_PLAYER
+const ENCOUNTER = { kind: 'Battle', foe: 'test', check: 'vitest run', outcome: 'hit', hp: 2, maxHp: 4, hits: 2, isCounted: true, at: T }
+const SCENE_STATE = { encounter: ENCOUNTER, fight: null, briefing: null, beat: null }
+const QUEST = { ticket: '#21', title: LOG_CARD.title }
+const QUESTION = {
+  id: 'sage-1',
+  prompt: 'What does formatEmail return for " Ada@Example.COM "?',
+  options: ['ada@example.com', 'Ada@Example.COM', 'ada@Example.com', 'ADA@EXAMPLE.COM'],
+  answer: 0,
+  explanation: 'It trims the email, then lowercases it.',
+  stat: 'intelligence',
+  source: { path: 'src/user-profile-card.tsx', lines: ['  return profile.email.trim().toLowerCase();'] },
+  askedAt: T,
+  shownAt: T,
+}
+
+const panelOf = (view, e) => {
+  switch (view) {
+    case 'quests':
+      return drawQuestBoard(stand$, e, { listing: { state: 'listed', quests: SAMPLE_CARDS }, filters: { status: null, difficulty: null } }, { page: 0, selected: SAMPLE_SELECTED }, { pick: noop, filterStatus: noop, filterDifficulty: noop, refresh: noop, select: noop, page: noop, readMore: noop }, PREVIEW_PLAYER, excerptOf(LOG_DESCRIPTION))
+    case 'map':
+      return drawRegionMap(stand$, e, { regionId: SAMPLE_REGION_ID, regionName: SAMPLE_REGION_ID, region: liveRegion(SAMPLE_REGION), problem: null, asOf: null, note: null, place: { view: 'overworld', site: null, floor: 0, selected: null } }, { show: noop, enter: noop, floor: noop, select: noop, take: noop, refresh: noop })
+    case 'log':
+      return drawQuestLog(stand$, e, { ticket: '#21', fetch: { state: 'got', details: { ...LOG_CARD, description: LOG_DESCRIPTION, descriptionFormat: 'markdown' } }, listed: LOG_CARD, quest: null, progress: null, history: LOG_HISTORY, briefing: LOG_BRIEFING }, { take: noop, refresh: noop })
+    case 'sheet':
+      return drawOverview(stand$, e, PREVIEW_PLAYER, { regions: FOUR_REGIONS, root: HERE }, { page: 0 }, { open: noop, page: noop })
+  }
+}
+
+/** The whole screen on `view`: `speaking`, the Sage's Question in the dialogue box, else the narrator. */
+const screenOf = (view, surface, bodyRows, speaking = false) => {
+  const e = paneInput(surface, bodyRows)
+  const drawsArt = surface !== 'terminal'
+  const header = drawQuestHeader(stand$, e, { ...QUEST, openLog: noop })
+  const { line } = sceneLineOf(SCENE_STATE)
+  const dialogue = speaking
+    ? drawSage(stand$, e, { questions: [QUESTION], lastAnswer: null }, { answer: noop, dismiss: noop }, header)
+    : h('Box', { flexDirection: 'column', gap: 1 }, header, h('Text', { dimColor: !drawsArt }, drawsArt ? line : NO_QUESTION))
+
+  return drawGameScreen(stand$, e, {
+    stage: drawStage(stand$, e, stageLayoutOf(drawsArt, bodyRows, 60), SCENE_STATE),
+    dialogue,
+    panel: panelOf(view, e),
+    view,
+    level: `Lv ${PREVIEW_PLAYER.level}`,
+    badges: PREVIEW_PLAYER.badges.length,
+    choose: noop,
+  })
+}
+
+const GAME_STYLE = `body{background:#2b2b33;color:#ddd;font:13px system-ui;margin:16px;width:520px}img{display:block;image-rendering:pixelated}
+button{font:12px system-ui;padding:3px 10px;border-radius:5px;border:1px solid #666;background:#3a3a44;color:#eee}button.primary{background:#3a7bd5;border-color:#3a7bd5}
+pre{white-space:pre-wrap;margin:0}.frame{border:1px solid #555;border-radius:6px;padding:10px}`
+const gameHtml = (title, tree) =>
+  `<!doctype html><meta charset="utf-8"><title>${esc(title)}</title><style>${GAME_STYLE}</style><p>${esc(title)}</p><div class="frame">${toHtml(tree)}</div>\n`
+
+for (const view of ['quests', 'map', 'log', 'sheet']) {
+  writeFileSync(`${out}/game-${view}-desktop.html`, gameHtml(`Game Screen · ${view} · full stage (40 rows)`, screenOf(view, 'desktop', 40)))
+  writeFileSync(`${out}/game-${view}-terminal.txt`, `${toLines(screenOf(view, 'terminal', 40)).join('\n')}\n`)
+  console.log(`game-${view}-desktop.html, game-${view}-terminal.txt`)
+}
+writeFileSync(`${out}/game-strip-desktop.html`, gameHtml('Game Screen · quests · strip stage (20 rows)', screenOf('quests', 'desktop', 20)))
+writeFileSync(`${out}/game-sage-desktop.html`, gameHtml('Game Screen · log · the Sage speaking', screenOf('log', 'desktop', 40, true)))
+writeFileSync(`${out}/game-sage-terminal.txt`, `${toLines(screenOf('log', 'terminal', 40, true)).join('\n')}\n`)
+console.log('game-strip-desktop.html, game-sage-desktop.html, game-sage-terminal.txt')
