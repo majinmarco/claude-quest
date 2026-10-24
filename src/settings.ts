@@ -1,5 +1,6 @@
 // The Player's settings: the Haiku budget, the hasty-answer rule, whether
-// the Scene opens itself and how the HUD is drawn, as the rows of Claude
+// the Scene opens itself, how the HUD is drawn and how loud the Sound cues
+// are, as the rows of Claude
 // Code's own settings menu (/config). They are the plugin's `userConfig` fields
 // (.claude-plugin/plugin.json), stored by Claude Code in settings.json under
 // pluginConfigs["quest-mod"].options and handed to `register(on, options)`; a
@@ -9,6 +10,7 @@ import type { PluginOptions } from 'claude-code'
 
 import { DEFAULT_RULES } from './engine'
 import type { Rules } from './engine'
+import { DEFAULT_SOUND_VOLUME } from './sounds'
 
 /** A setting as a number of at least 0, or undefined when it is none, so its default stands. */
 const amountOf = (value: unknown): number | undefined =>
@@ -51,3 +53,13 @@ export type HudStyle = 'pixel' | 'text'
 
 /** The `hudStyle` setting: the pixel strip unless the Player chose text. */
 export const hudStyleOf = (options: PluginOptions): HudStyle => (options.hudStyle === 'text' ? 'text' : 'pixel')
+
+/**
+ * The `soundVolume` setting, 0 to 100 (0: no sound, the vision's "sound
+ * off"): the default unless the Player set a number, held to the range.
+ */
+export const soundVolumeOf = (options: PluginOptions): number => {
+  const volume = options.soundVolume
+
+  return typeof volume === 'number' && Number.isFinite(volume) ? Math.min(100, Math.max(0, volume)) : DEFAULT_SOUND_VOLUME
+}

@@ -55,6 +55,14 @@
       "description": "pixel: on the desktop and in VS Code the HUD is a pixel-art strip. text: the text band, as in the terminal. The terminal always shows the text band.",
       "options": ["pixel", "text"],
       "default": "pixel"
+    },
+    "soundVolume": {
+      "type": "number",
+      "title": "Sound volume",
+      "description": "How loud the Sound cues play, 0 to 100; 0 turns sound off. Sounds play on macOS (and wherever Claude Code has an audio player); a Linux or Windows terminal plays none. Sound never changes XP or the game.",
+      "default": 60,
+      "min": 0,
+      "max": 100
     }
   }
 }
