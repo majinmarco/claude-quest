@@ -12,7 +12,7 @@ import type { Player } from './engine'
 import { portraitSpriteOf } from './hud-art'
 import { portraitSvg } from './scene-art'
 import { sheetRows } from './sheet'
-import { GRID_MARKS, islandNote, islandsOf, worldAlt, worldGrid, worldSvg } from './world-art'
+import { GRID_MARKS, islandName, islandNote, islandsOf, worldAlt, worldGrid, worldSvg } from './world-art'
 import type { Island } from './world-art'
 import type { OverviewState } from '../types'
 
@@ -124,7 +124,7 @@ export function drawOverview(
               {...(island.isHere ? { variant: 'primary' as const } : {})}
               onPress={() => actions.open(island)}
             >
-              {`${island.number} ${island.name} · ${islandNote(island)}`}
+              {`${island.number} ${islandName(island)} · ${islandNote(island)}`}
             </Button>
           ))}
         </Box>

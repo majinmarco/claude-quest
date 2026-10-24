@@ -8,11 +8,13 @@
 //
 // The art is drawn tile by tile through drawTile alone: swapping in Kenney
 // Tiny Town's tiles (water, sand, grass) is a change to that one function.
-// A Region's theme (issue #17: a name and a palette from Haiku) would plug in
-// at islandsOf (the name) and drawTile (the palette).
+// A Region's theme (issue #17: a name and a biome from Haiku) comes in at
+// islandsOf (the name, its folder's name kept beside it) and drawTile (the
+// biome's palette).
 
-import { regionIdOf, remoteNameOf, rootKeyOf } from './region-registry'
-import type { RegionEntry } from './region-registry'
+import { regionIdOf, remoteNameOf, rootKeyOf, themeOf } from './region-registry'
+import type { Biome, RegionEntry } from './region-registry'
+import { GLYPH_HEIGHT } from './pixel-font'
 import { Canvas, cutText, Lettering } from './scroll-art'
 
 /** An Island's size, by its Region's Quests: 1 to 10, 11 to 40, more. */
@@ -27,6 +29,10 @@ export type Island = {
   entry: RegionEntry
   /** Its Region's id, told apart from another of the same id by its remote (or its parent folder). */
   name: string
+  /** The name its theme gives it, shown with `name` beside it; null without a theme. */
+  themedName: string | null
+  /** The land its theme chose; `meadow` without one. */
+  biome: Biome
   /** Its slot on the spiral, (0, 0) the first Island's. */
   slot: { x: number; y: number }
   size: IslandSize
@@ -109,12 +115,15 @@ export const islandsOf = (regions: Record<string, RegionEntry>, root: string | n
     const cleared = snapshot === undefined ? 0 : snapshot.dungeons.reduce((sum, dungeon) => sum + dungeon.cleared, snapshot.wilds.cleared)
     const id = entry.id === '' ? regionIdOf(key) : entry.id
     const apart = (ids.get(entry.id) ?? 0) > 1 ? (byRemote[at] ?? byFolder[at] ?? `#${at + 1}`) : null
+    const theme = themeOf(entry)
 
     return {
       number: at + 1,
       key,
       entry,
       name: apart === null ? id : `${id} (${apart})`,
+      themedName: theme?.name ?? null,
+      biome: theme?.biome ?? 'meadow',
       slot: spiralSlot(at),
       size: snapshot === undefined ? 'small' : sizeOf(total),
       total,
@@ -139,6 +148,10 @@ export const litCells = (island: Pick<Island, 'total' | 'cleared'>, cells: numbe
 
   return Math.max(1, Math.min(cells - 1, Math.round((island.cleared / island.total) * cells)))
 }
+
+/** An Island's name for its Button and the art's alt: its themed name with its own beside it, or its own alone. */
+export const islandName = (island: Pick<Island, 'name' | 'themedName'>): string =>
+  island.themedName === null ? island.name : `${island.themedName} (${island.name})`
 
 /** What an Island says of itself, for its Button and the art's alt. */
 export const islandNote = (island: Island): string =>
@@ -170,6 +183,19 @@ const RADIUS: Record<IslandSize, number> = { small: 3, medium: 5, large: 7 }
 /** The kinds of tile the World is drawn with. */
 export type TileKind = 'wave' | 'shore' | 'land' | 'lit' | 'litShore' | 'fog' | 'fogShore'
 
+/** The tiles of an Island's land each biome draws in its own palette; the rest are the World's. */
+type LandKind = 'land' | 'lit' | 'shore' | 'litShore'
+
+/** Each biome's land: open and lit, inland and on the coast. A meadow's are the World's own colours. */
+const BIOME_COLORS: Record<Biome, Record<LandKind, string>> = {
+  meadow: { land: '#3e8948', lit: '#63c74d', shore: '#e4a672', litShore: '#fee761' },
+  forest: { land: '#265c42', lit: '#3e8948', shore: '#b07a4a', litShore: '#fee761' },
+  coast: { land: '#d4b484', lit: '#f4e4c4', shore: '#8fd3e0', litShore: '#ffffff' },
+  desert: { land: '#c88a5a', lit: '#eab585', shore: '#bd6c4a', litShore: '#feae34' },
+  snow: { land: '#94a8c4', lit: '#ffffff', shore: '#c0cbdc', litShore: '#e8f4ff' },
+  swamp: { land: '#3f5a35', lit: '#6c8a4f', shore: '#6a5038', litShore: '#a0a060' },
+}
+
 /** The World's colours, from the sprites' palette. */
 const COLORS: Record<TileKind | 'water' | 'flag' | 'pole' | 'text' | 'dim' | 'here', string> = {
   water: '#124e89',
@@ -192,9 +218,10 @@ const COLORS: Record<TileKind | 'water' | 'flag' | 'pole' | 'text' | 'dim' | 'he
  * the World's look is chosen. Today a flat colour on a canvas of tiles (drawn
  * at TILE pixels each); Kenney Tiny Town's 16 px tiles would be drawn here
  * instead (canvas.sprite at x and y times 16, the canvas then scaled by
- * TILE / 16), and a Region's theme would choose the palette.
+ * TILE / 16). An Island's land takes its biome's palette (its Region's theme).
  */
-export const drawTile = (canvas: Canvas, kind: TileKind, x: number, y: number): void => canvas.set(x, y, COLORS[kind])
+export const drawTile = (canvas: Canvas, kind: TileKind, x: number, y: number, biome: Biome = 'meadow'): void =>
+  canvas.set(x, y, kind === 'land' || kind === 'lit' || kind === 'shore' || kind === 'litShore' ? BIOME_COLORS[biome][kind] : COLORS[kind])
 
 /** A number from 0 to 2^32 for `text`, the same on every machine (FNV-1a). */
 const hashOf = (text: string): number => {
@@ -260,7 +287,7 @@ const islandArt = (island: Island, lettering: Lettering): string => {
       : at < lit
         ? isCoast ? 'litShore' : 'lit'
         : isCoast ? 'shore' : 'land'
-    drawTile(tiles, kind, left + CENTRE.x + tile.x, top + CENTRE.y + tile.y)
+    drawTile(tiles, kind, left + CENTRE.x + tile.x, top + CENTRE.y + tile.y, island.biome)
   })
 
   // Pixels from here on: the slot's top left, and the centre tile's middle.
@@ -276,12 +303,15 @@ const islandArt = (island: Island, lettering: Lettering): string => {
     marks.rect(middle.x + 1, peak - 8, 2, 2, COLORS.flag)
   }
 
-  const label = cutText(`${island.number} ${island.name}`, SLOT - 4)
+  const label = cutText(`${island.number} ${island.themedName ?? island.name}`, SLOT - 4)
+  // A themed Island's own name, under its themed one, dim: the project stays findable.
+  const own = island.themedName === null ? '' : cutText(island.name, SLOT - 4)
   const footer = island.isHere ? 'you are here' : island.isMapped ? '' : 'not mapped yet'
 
   return (
     `<g id="island-${island.number}"><g transform="scale(${TILE})">${tiles.svg()}</g>${marks.svg()}` +
     lettering.text(label, x + 2, y + 2, COLORS.text) +
+    (own === '' ? '' : lettering.text(own, x + 2, y + 4 + GLYPH_HEIGHT, COLORS.dim)) +
     (island.isMapped ? '' : lettering.text('?', middle.x - 2, middle.y - 4, COLORS.text)) +
     (footer === '' ? '' : lettering.text(footer, x + 2, y + SLOT - 9, island.isHere ? COLORS.here : COLORS.dim)) +
     '</g>'
@@ -328,7 +358,7 @@ export const worldSvg = (islands: readonly Island[]): { svg: string; width: numb
 
 /** The World in a sentence, for the art's alt. */
 export const worldAlt = (islands: readonly Island[]): string =>
-  `World: ${islands.map(island => `${island.number} ${island.name} (${island.size}, ${islandNote(island)})`).join('; ')}`
+  `World: ${islands.map(island => `${island.number} ${islandName(island)} (${island.size}, ${islandNote(island)})`).join('; ')}`
 
 // The terminal's grid.
 

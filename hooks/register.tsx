@@ -55,8 +55,8 @@ import type { QuestHeader, QuestLogActions } from '../src/quest-log'
 import { cachedQuestion, cacheKeyOf, remember } from '../src/question-cache'
 import type { QuestionCache } from '../src/question-cache'
 import { regionQuestSource } from '../src/quest-source-setting'
-import { openRegionMap, REGION_MAP, renderRegionMap } from '../src/region-map'
-import { clearedOf, readRegions, recordRegionQuestClosed, touchRegion } from '../src/region-registry'
+import { openRegionMap, redrawRegionMap, REGION_MAP, renderRegionMap } from '../src/region-map'
+import { clearedOf, readRegions, recordRegionQuestClosed, themeOf, touchRegion } from '../src/region-registry'
 import type { RegionEntry } from '../src/region-registry'
 import { answerText, choiceOf, drawSage, NO_QUESTION, NPC_NAMES, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
@@ -73,6 +73,8 @@ import {
 } from '../src/scouting'
 import type { ScoutingInput } from '../src/scouting'
 import { takeQuest } from '../src/take-quest'
+import { themeRegion } from '../src/theming'
+import type { ThemingDeps } from '../src/theming'
 import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
 import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
@@ -695,6 +697,20 @@ async function showRegions($: EngineInterface, regions?: Record<string, RegionEn
   const kept = regions ?? (await readRegions($).catch(() => ({})))
   await update($, overview, (current): OverviewState => ({ ...current, regions: kept, root }))
 }
+
+/**
+ * What Haiku theming needs of the session (src/theming.ts): Haiku, whether
+ * it was found unavailable this session, and the panes to draw again once a
+ * theme is kept, the Overview and the Region map.
+ */
+const themingOf = ($: EngineInterface): ThemingDeps => ({
+  model: haikuModel($),
+  isHaikuUnavailable: async () => (await read($, game))?.haikuUnavailable === true,
+  onThemed: async regions => {
+    await showRegions($, regions)
+    await redrawRegionMap($)
+  },
+})
 
 /**
  * Opens the Scene, unasked, when one of `surfaces` draws its art, at most once
@@ -1756,7 +1772,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: REGION_MAP.id }, async ($, e) => {
     const current = await read($, game)
 
-    return renderRegionMap($, e, current?.visitedModules ?? [], current === null ? [] : chartedModulesOf(current))
+    return renderRegionMap($, e, current?.visitedModules ?? [], current === null ? [] : chartedModulesOf(current), themingOf($))
   })
 
   // The Scene draws what the game already holds: it never runs in a tool
@@ -1812,15 +1828,24 @@ export const register: Register = (on, options) => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: OVERVIEW.id }, async ($, e) =>
-    drawOverview(
-      $,
-      e,
-      (await read($, game))?.player ?? (await loadPlayer($)),
-      await read($, overview),
-      overviewActions($),
-    ),
-  )
+  // Drawing the World asks, just after (a drawing may not write), for the
+  // theme of each Island with none yet: once each at most (src/theming.ts).
+  on('ui.render', { component: 'Pane', requestId: OVERVIEW.id }, async ($, e) => {
+    const state = await read($, overview)
+    const unthemed = Object.entries(state.regions)
+      .filter(([, entry]) => themeOf(entry) === undefined)
+      .map(([key]) => key)
+    if (unthemed.length > 0) {
+      const theming = themingOf($)
+      $.clock.after(0, () => {
+        for (const key of unthemed) {
+          void themeRegion($, theming, key)
+        }
+      })
+    }
+
+    return drawOverview($, e, (await read($, game))?.player ?? (await loadPlayer($)), state, overviewActions($))
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, game)

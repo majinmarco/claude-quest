@@ -56,14 +56,14 @@ const { hudStrip, PIXELS_PER_COLUMN } = await import('../src/hud-art.ts')
 const { stripOf } = await import('../src/hud.tsx')
 const { HUD_BATTLE, HUD_CALM, HUD_PROPHECY, HUD_WORST, playerAt } = await import('../tests/fixtures/hud-states.ts')
 const { islandNote, islandsOf, worldGrid, worldSvg } = await import('../src/world-art.ts')
-const { HERE, TWO_REGIONS, THREE_REGIONS, FOUR_REGIONS } = await import('../tests/fixtures/world-regions.ts')
+const { HERE, TWO_REGIONS, THREE_REGIONS, FOUR_REGIONS, THEMED_REGIONS } = await import('../tests/fixtures/world-regions.ts')
 const { mapSamples } = await import('../tests/fixtures/region-map.ts')
 const { floorGrid, floorSvg, moduleCells, modulesGrid, modulesSvg, overworldGrid, overworldSvg } = await import('../src/map-art.ts')
 const { floorCount, liveRegion } = await import('../src/region-model.ts')
-const { SAMPLE_REGION, SAMPLE_REGION_ID } = await import('../tests/fixtures/region-map.ts')
+const { SAMPLE_REGION, SAMPLE_REGION_ID, SAMPLE_THEME, themedSites } = await import('../tests/fixtures/region-map.ts')
 
-/** The World's samples the snapshot is drawn for: two Regions, then a third joining. */
-const WORLD_SAMPLES = { two: TWO_REGIONS, three: THREE_REGIONS }
+/** The World's samples the snapshot is drawn for: two Regions, then a third joining, and the two themed. */
+const WORLD_SAMPLES = { two: TWO_REGIONS, three: THREE_REGIONS, themed: THEMED_REGIONS }
 
 // The HUD's strip, as the desktop draws it for a band so many columns wide.
 const strip = (state, columns, motion) => hudStrip(stripOf(state, columns), columns * PIXELS_PER_COLUMN, motion).svg
@@ -291,7 +291,7 @@ const SHEET_PLAYER = {
     { name: 'Bane of vault#3', region: 'vault', ticket: '#3', earnedAt: 3 },
   ],
 }
-for (const [name, regions] of Object.entries({ two: TWO_REGIONS, three: THREE_REGIONS, four: FOUR_REGIONS })) {
+for (const [name, regions] of Object.entries({ two: TWO_REGIONS, three: THREE_REGIONS, four: FOUR_REGIONS, themed: THEMED_REGIONS })) {
   write(`world-${name}.svg`, worldSvg(islandsOf(regions, HERE)).svg)
 }
 const islands = islandsOf(FOUR_REGIONS, HERE)
@@ -343,3 +343,18 @@ for (const site of region.sites) {
 const modules = moduleCells(region.modules ?? [])
 write('map-modules.svg', modulesSvg(modules, region.moduleCounts))
 write('map-modules.txt', gridText(modulesGrid(modules, 60)))
+
+// The sample Region themed (issue #17): its overworld in each biome (its
+// Dungeons in their kinds), Search v2's first Floor in each kind, and the
+// Wilds in a forest.
+const { BIOMES, DUNGEON_KINDS } = await import('../src/region-registry.ts')
+const themedOverworld = themedSites(overworld)
+for (const biome of BIOMES) {
+  write(`themed-overworld-${biome}.svg`, overworldSvg(SAMPLE_REGION_ID, SAMPLE_THEME.name, themedOverworld, biome, SAMPLE_REGION_ID))
+  write(`themed-overworld-${biome}.txt`, gridText(overworldGrid(SAMPLE_REGION_ID, themedOverworld, biome)))
+}
+const searchSite = region.sites.find(site => site.key === '3')
+for (const kind of DUNGEON_KINDS) {
+  write(`themed-floor-${kind}.svg`, floorSvg({ site: searchSite, floor: 0, selected: 1, kind }))
+}
+write('themed-wilds-forest.svg', floorSvg({ site: region.sites[0], floor: 0, selected: null, biome: 'forest' }))

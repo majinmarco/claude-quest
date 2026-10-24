@@ -7,20 +7,24 @@
 // Another Region, opened from the World (the Overview, issue #16), is drawn
 // from its Snapshot: dated, with Take Quest hidden and no Quest Source read.
 // The pane never opens by itself. Drawing the overworld of the current
-// Region keeps its Snapshot in the registry.
+// Region keeps its Snapshot in the registry. A Region or Dungeon themed by
+// Haiku (src/theming.ts) is drawn in its biome or kind and shown by its
+// themed name, its own beside it; drawing one with no theme yet asks for one.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, RenderInput } from 'claude-code'
 
 import { floorGrid, floorSvg, hotkeyOf, MAP_COLORS, moduleCells, countedModules, modulesGrid, MODULES_SHOWN, modulesSvg, overworldGrid, overworldSvg } from './map-art'
-import type { GridRow, ModuleCell } from './map-art'
+import type { Biome, DungeonKind, GridRow, ModuleCell } from './map-art'
 import { readRegionFile } from './persistence'
 import { regionQuestSource } from './quest-source-setting'
 import { clearedOf, floorCount, floorRooms, liveRegion, ROOMS_PER_FLOOR, snapshotOf, snapshotRegion, WILDS_KEY } from './region-model'
 import type { RegionModel, Site } from './region-model'
-import { writeSnapshot } from './region-registry'
+import { dungeonThemeOf, readRegions, registryKeyOf, rootKeyOf, themeOf, writeSnapshot } from './region-registry'
 import type { RegionEntry } from './region-registry'
 import { takeQuest } from './take-quest'
+import { MAX_THEMED_TITLES, themeDungeon, themeRegion } from './theming'
+import type { ThemingDeps } from './theming'
 import { moduleOfFolder } from './translate'
 import type { QuestCard, QuestRecord, QuestSourceProblem, RegionMapListing, RegionMapState } from '../types'
 
@@ -149,6 +153,11 @@ export async function openRegionMap($: EngineInterface, target: RegionMapTarget)
   }
 }
 
+/** Draws the pane again: a theme kept meanwhile (src/theming.ts) shows. */
+export async function redrawRegionMap($: EngineInterface): Promise<void> {
+  await update($, regionMap, (current): RegionMapState => ({ ...current }))
+}
+
 /** What the map buttons do. */
 export type RegionMapActions = {
   /** Show the overworld, or the Module view. */
@@ -193,6 +202,12 @@ export type RegionMapView = {
   /** The Region id, which seeds the layout, and the name lettered on it (the id, until a theme names it). */
   regionId: string
   regionName: string
+  /** Beside a themed name, the Region's own (its folder's); null when it has no theme. */
+  ownName?: string | null
+  /** The land its theme chose; `meadow` without one. */
+  biome?: Biome
+  /** The themes of its Dungeons, by key: the name each is shown by and its kind. */
+  dungeonThemes?: Readonly<Record<string, { name: string; kind: DungeonKind }>>
   /** The Region; null while it is read, or when `problem` says why it cannot be. */
   region: RegionModel | null
   problem: QuestSourceProblem | null
@@ -208,8 +223,16 @@ export type RegionMapView = {
 /** A Button with its hotkey, when it has one. */
 const hotkeyProps = (hotkey: string | undefined): { hotkey?: string } => (hotkey === undefined ? {} : { hotkey })
 
+/** A site's name as shown: its themed name with its own beside it, or its own alone. */
+const siteNameOf = (site: Site, view: Pick<RegionMapView, 'dungeonThemes'>): string => {
+  const themed = view.dungeonThemes?.[site.key]
+
+  return site.kind === 'dungeon' && themed !== undefined ? `${themed.name} (${site.name})` : site.name
+}
+
 /** A site in words: its name, Rooms cleared of all. */
-const siteLabel = (site: Site): string => `${site.name} ${clearedOf(site)}/${site.rooms.length}`
+const siteLabel = (site: Site, view: Pick<RegionMapView, 'dungeonThemes'>): string =>
+  `${siteNameOf(site, view)} ${clearedOf(site)}/${site.rooms.length}`
 
 /**
  * The Region map, drawn for a pane or a panel `width` cells wide: a header,
@@ -249,11 +272,21 @@ export function drawRegionMap($: EngineInterface, e: RenderInput<'Pane'>, view: 
       )
     })
 
+  const ownName = view.ownName ?? null
   const header = (
     <Box flexDirection="column">
-      <Text bold color={MAP_COLORS.lit}>
-        {view.asOf === null ? view.regionName : `${view.regionName} · as of ${view.asOf}`}
-      </Text>
+      {ownName === null ? (
+        <Text bold color={MAP_COLORS.lit}>
+          {view.asOf === null ? view.regionName : `${view.regionName} · as of ${view.asOf}`}
+        </Text>
+      ) : (
+        <Box flexDirection="row" gap={1}>
+          <Text bold color={MAP_COLORS.lit}>
+            {view.regionName}
+          </Text>
+          <Text dimColor>{view.asOf === null ? ownName : `${ownName} · as of ${view.asOf}`}</Text>
+        </Box>
+      )}
       {view.note !== null && <Text dimColor>{view.note}</Text>}
     </Box>
   )
@@ -314,17 +347,21 @@ export function drawRegionMap($: EngineInterface, e: RenderInput<'Pane'>, view: 
 
   const entered = place.view === 'dungeon' ? region.sites.find(site => site.key === place.site) : undefined
   if (entered === undefined) {
-    const sites = region.sites.map(site => ({ site, isSelected: site.key === place.site }))
-    const alt = `${view.regionName}: ${region.sites.map((site, at) => `${at + 1} ${siteLabel(site)}`).join(', ')}`
+    const sites = region.sites.map(site => {
+      const kind = view.dungeonThemes?.[site.key]?.kind
+
+      return { site, isSelected: site.key === place.site, ...(site.kind === 'dungeon' && kind !== undefined ? { kind } : {}) }
+    })
+    const alt = `${view.regionName}: ${region.sites.map((site, at) => `${at + 1} ${siteLabel(site, view)}`).join(', ')}`
 
     return (
       <Box flexDirection="column" gap={1}>
         {header}
         {tabs}
         {Svg === undefined ? (
-          <Box flexDirection="column">{lines(overworldGrid(view.regionId, sites), 'land')}</Box>
+          <Box flexDirection="column">{lines(overworldGrid(view.regionId, sites, view.biome), 'land')}</Box>
         ) : (
-          <Svg source={overworldSvg(view.regionId, view.regionName, sites)} alt={alt} />
+          <Svg source={overworldSvg(view.regionId, view.regionName, sites, view.biome, ownName ?? undefined)} alt={alt} />
         )}
         <Box flexDirection="row" flexWrap="wrap" gap={1}>
           {region.sites.map((site, at) => (
@@ -333,7 +370,7 @@ export function drawRegionMap($: EngineInterface, e: RenderInput<'Pane'>, view: 
               {...hotkeyProps(hotkeyOf(at))}
               onPress={() => actions.enter(site.key)}
             >
-              {`${at + 1} ${siteLabel(site)}`}
+              {`${at + 1} ${siteLabel(site, view)}`}
             </Button>
           ))}
         </Box>
@@ -346,8 +383,16 @@ export function drawRegionMap($: EngineInterface, e: RenderInput<'Pane'>, view: 
   const rooms = floorRooms(entered, floor)
   const selected = place.selected !== null && place.selected < rooms.length ? place.selected : null
   const room = selected === null ? undefined : rooms[selected]
-  const floorView = { site: entered, floor, selected }
-  const alt = `${entered.name}, Floor ${floor + 1} of ${floors}: ${rooms
+  const themed = entered.kind === 'dungeon' ? view.dungeonThemes?.[entered.key] : undefined
+  // A themed Dungeon is lettered by its themed name, its own shown under the art.
+  const floorView = {
+    site: themed === undefined ? entered : { ...entered, name: themed.name },
+    floor,
+    selected,
+    ...(themed === undefined ? {} : { kind: themed.kind }),
+    ...(view.biome === undefined ? {} : { biome: view.biome }),
+  }
+  const alt = `${siteNameOf(entered, view)}, Floor ${floor + 1} of ${floors}: ${rooms
     .map((one, at) => `${floor * ROOMS_PER_FLOOR + at + 1} ${one.quest?.ticket ?? 'Room'} ${one.isCleared ? 'cleared' : 'open'}`)
     .join(', ')}`
 
@@ -360,6 +405,7 @@ export function drawRegionMap($: EngineInterface, e: RenderInput<'Pane'>, view: 
       ) : (
         <Svg source={floorSvg(floorView)} alt={alt} />
       )}
+      {themed !== undefined && <Text dimColor>{entered.name}</Text>}
       {isLive && rooms.length > 0 && (
         <Box flexDirection="row" flexWrap="wrap" gap={1}>
           {rooms.map((one, at) => (
@@ -409,19 +455,43 @@ export function drawRegionMap($: EngineInterface, e: RenderInput<'Pane'>, view: 
 const dayOf = (timestamp: string): string => timestamp.slice(0, 10)
 
 /**
+ * The names and looks a Region's registry entry gives it: its themed name
+ * (its own, `id`, beside it) and biome, and its Dungeons' themes; its own
+ * name alone without a theme.
+ */
+const themedLooks = (
+  id: string,
+  entry: RegionEntry | undefined,
+): Pick<RegionMapView, 'regionName' | 'ownName' | 'biome' | 'dungeonThemes'> => {
+  const theme = entry === undefined ? undefined : themeOf(entry)
+  const dungeonThemes: Record<string, { name: string; kind: DungeonKind }> = {}
+  for (const dungeon of entry?.snapshot?.dungeons ?? []) {
+    const kept = dungeonThemeOf(dungeon)
+    if (kept !== undefined) {
+      dungeonThemes[dungeon.key] = { name: kept.name, kind: kept.kind }
+    }
+  }
+
+  return theme === undefined
+    ? { regionName: id, ownName: null, dungeonThemes }
+    : { regionName: theme.name, ownName: id, biome: theme.biome, dungeonThemes }
+}
+
+/**
  * The view for the pane state: the current project from what it read (and
  * the Modules discovered, as the game holds them), or another Region from
- * its Snapshot.
+ * its Snapshot. `kept` is the Region's registry entry as kept now, for its
+ * themes (another Region's, its Snapshot too, when the registry has it).
  */
-export const regionMapView = (state: RegionMapState, discovered: readonly string[]): RegionMapView => {
+export const regionMapView = (state: RegionMapState, discovered: readonly string[], kept?: RegionEntry): RegionMapView => {
   const place = { view: state.view, site: state.site, floor: state.floor, selected: state.selected }
   if (state.target.kind === 'snapshot') {
-    const { entry } = state.target
+    const entry = kept ?? state.target.entry
     const snapshot = entry.snapshot
 
     return {
       regionId: entry.id,
-      regionName: entry.id,
+      ...themedLooks(entry.id, entry),
       region: snapshot === undefined ? null : snapshotRegion(snapshot),
       problem:
         snapshot === undefined
@@ -436,7 +506,7 @@ export const regionMapView = (state: RegionMapState, discovered: readonly string
   const { project, open } = state
   const closed = project === null ? undefined : state.closed[project.root]
   const regionId = project?.id ?? 'Region'
-  const base = { regionId, regionName: regionId, asOf: null, place }
+  const base = { regionId, ...themedLooks(regionId, project === null ? undefined : kept), asOf: null, place }
   if (open.state === 'unavailable') {
     return { ...base, region: null, problem: open.problem, note: null }
   }
@@ -467,17 +537,26 @@ export const regionMapView = (state: RegionMapState, discovered: readonly string
  * Draws the Region map pane from its state; drawing the overworld of the
  * current Region, once its closed tickets are read, keeps its Snapshot in
  * the registry (just after the drawing, which may not write; an overworld
- * drawn again unchanged writes nothing).
+ * drawn again unchanged writes nothing). With `theming`, drawing an
+ * overworld whose Region has no theme yet asks for one, and drawing a
+ * Dungeon of the current Region with none asks for its (src/theming.ts).
  */
 export async function renderRegionMap(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
   discovered: readonly string[],
   charted: readonly string[] = [],
+  theming?: ThemingDeps,
 ) {
   const state = await read($, regionMap)
-  const view = { ...regionMapView(state, discovered), charted }
   const { project } = state
+  const key =
+    state.target.kind === 'snapshot' ? registryKeyOf(state.target.entry) : project === null ? null : rootKeyOf(project.root)
+  const kept = key === null ? undefined : (await readRegions($).catch((): Record<string, RegionEntry> => ({})))[key]
+  const view = { ...regionMapView(state, discovered, kept), charted }
+  if (theming !== undefined && key !== null && kept !== undefined && view.region !== null) {
+    askThemes($, theming, key, kept, view, state.target.kind === 'live')
+  }
   const closed = project === null ? undefined : state.closed[project.root]
   if (
     state.target.kind === 'live' &&
@@ -501,4 +580,33 @@ export async function renderRegionMap(
   }
 
   return drawRegionMap($, e, view, actionsOf($))
+}
+
+/**
+ * Asks for the themes the drawing shows without one, just after it (a
+ * drawing may not write): the Region's, on its overworld; a Dungeon's of the
+ * current Region, on its Floors, from up to MAX_THEMED_TITLES of its
+ * tickets' titles. Each is asked once at most (src/theming.ts).
+ */
+function askThemes($: EngineInterface, theming: ThemingDeps, key: string, kept: RegionEntry, view: RegionMapView, isLive: boolean): void {
+  const { region, place } = view
+  if (region === null) {
+    return
+  }
+  if (place.view === 'overworld' && themeOf(kept) === undefined) {
+    $.clock.after(0, () => {
+      void themeRegion($, theming, key)
+    })
+  }
+  const entered = place.view === 'dungeon' ? region.sites.find(site => site.key === place.site) : undefined
+  if (!isLive || entered?.kind !== 'dungeon' || view.dungeonThemes?.[entered.key] !== undefined) {
+    return
+  }
+  const titles = entered.rooms
+    .map(room => room.quest?.title)
+    .filter((title): title is string => title !== undefined && title.trim() !== '')
+    .slice(0, MAX_THEMED_TITLES)
+  $.clock.after(0, () => {
+    void themeDungeon($, theming, key, { key: entered.key, name: entered.name, titles })
+  })
 }

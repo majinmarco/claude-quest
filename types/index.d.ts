@@ -662,11 +662,28 @@ export type QuestLog = { ticket: string | null; history: QuestRecord[] }
 
 /** The Quest Giver's briefing of a ticket, as its Briefing writes it for the Quest Log. */
 export type QuestBriefing = { text: string }
+
+/** The land a Region is drawn on, as its theme chose it (`meadow` without one). */
+export type Biome = 'meadow' | 'forest' | 'coast' | 'desert' | 'snow' | 'swamp'
+
+/** How a Dungeon's walls, floors and banner are drawn, as its theme chose it (`crypt` without one). */
+export type DungeonKind = 'crypt' | 'fortress' | 'aqueduct' | 'mine' | 'library' | 'tower'
+
+/**
+ * A Region's theme, from one Haiku call (issue #17): the name it is shown
+ * by (its folder's name beside it) and its biome; when it was made, ISO 8601.
+ */
+export type RegionTheme = { name: string; biome: Biome; themedAt: string }
+
+/** A Dungeon's theme, from one Haiku call: the name it is shown by (its epic's beside it) and its kind. */
+export type DungeonTheme = { name: string; kind: DungeonKind; themedAt: string }
+
 /** What the World remembers of a Region: its Dungeons by name with their counts, the Wilds, the Modules. */
 export type RegionSnapshot = {
   /** When it was taken, ISO 8601. */
   takenAt: string
-  dungeons: { key: string; name: string; total: number; cleared: number }[]
+  /** Its Dungeons, each with its theme once one was made (kept when the Snapshot is taken again). */
+  dungeons: { key: string; name: string; total: number; cleared: number; theme?: DungeonTheme }[]
   wilds: { total: number; cleared: number }
   modules: { discovered: number; total: number }
 }
@@ -685,6 +702,8 @@ export type RegionEntry = {
   firstPlayedAt: string
   lastPlayedAt: string
   snapshot?: RegionSnapshot
+  /** Its theme once Haiku made one: made at most once, kept for ever. */
+  theme?: RegionTheme
 }
 
 /** The Overview pane's state: the registry as last read, the session's root, the page of Islands shown. */
@@ -761,6 +780,8 @@ declare module 'claude-code' {
       party: Party
       /** The Region map pane: see src/region-map.tsx. */
       regionMap: RegionMapState
+      /** The Regions and Dungeons a theme was asked for this session, by key: see src/theming.ts. */
+      themeAttempts: string[]
     }
   }
 }
