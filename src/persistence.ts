@@ -226,7 +226,8 @@ export async function recordModulesDiscovered(
  * sibling of its discovered ones, so a mod reading `discovered:<root>` as a
  * list of Modules reads it as before.
  */
-export const chartedKey = (root: string): string => discoveredKey(root).replace(/^discovered:/, 'charted:')
+export const chartedKey = (root: string): string =>
+  `charted:${root.replace(/\\/g, '/').replace(/(.)\/+$/, '$1')}`
 
 /** The Modules the Player has charted in the project at `root`; none until the first. */
 export async function loadCharted($: EngineInterface, root: string): Promise<string[]> {

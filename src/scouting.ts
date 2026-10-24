@@ -60,14 +60,20 @@ Answer with one JSON object and nothing else:
 const tidy = (line: string): string => line.trim().replace(/\s+/g, ' ').slice(0, MAX_OUTLINE_LINE_CHARS)
 
 /** Lines that import or require: JS/TS, Python, Go, Rust, PHP, C, Java. */
-const IMPORT = /^(?:import\b|from\s+\S+\s+import\b|(?:const|let|var)\s.*\brequire\s*\(|require\s*\(|use\s+[\w:\\{]|#include\b|export\s+(?:\*|\{[^}]*\}|type\s+\{[^}]*\})\s+from\b)/
+const IMPORT = /^(?:import\b|from\s+\S+\s+import\b|(?:const|let|var)\s.*\brequire\s*\(|require\s*\(|use\s+[\w:\\{]|#include\b|export\s+(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\}|type\s+\{[^}]*\})\s+from\b)/
 
 /** An export naming one thing: `export const engine = ...` is `export const engine`. */
 const NAMED_EXPORT =
   /^export\s+(default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(const|let|var|function\*?|class|type|interface|enum|namespace)\s+([A-Za-z_$][\w$]*)/
 
-/** Top-level definitions other languages export by being there: Python's public ones, Go's capitalised. */
-const TOP_LEVEL = /^(?:(?:async\s+)?def\s+([A-Za-z]\w*)|class\s+([A-Za-z]\w*)|func\s+([A-Z]\w*)|type\s+([A-Z]\w*)\s)/
+/**
+ * Top-level definitions other languages export by being there: Python's
+ * public ones (`def run(`, `class Runner:`), Go's capitalised (`func Run(`,
+ * `type Runner struct`). TypeScript's unexported `class X {` or `type X =`
+ * are none.
+ */
+const TOP_LEVEL =
+  /^(?:(?:async\s+)?def\s+[A-Za-z]\w*\s*\(|class\s+[A-Za-z]\w*\s*[:(]|func\s+[A-Z]\w*\s*[([]|type\s+[A-Z]\w*\s+(?!=)\S)/
 
 /**
  * A file's outline: its import or require lines (one spread over several
@@ -81,8 +87,8 @@ export const outlineOf = (text: string): string[] => {
   for (let at = 0; at < lines.length; at += 1) {
     const line = lines[at] ?? ''
     if (IMPORT.test(line)) {
-      // `import {` or Go's `import (`, closed some lines below.
-      const opens = /^import\s*\($/.test(line.trim()) ? ')' : /\{[^}]*$/.test(line) ? '}' : null
+      // `import {`, Go's `import (` or Python's `from x import (`, closed some lines below.
+      const opens = /\([^)]*$/.test(line) ? ')' : /\{[^}]*$/.test(line) ? '}' : null
       let joined = line
       while (
         opens !== null &&
@@ -117,7 +123,7 @@ export const outlineOf = (text: string): string[] => {
     }
     const defined = TOP_LEVEL.exec(line)
     if (defined !== null) {
-      outline.push(tidy(line.replace(/[:{(].*$/, '')))
+      outline.push(tidy(line.replace(/[:{([].*$/, '').replace(/\s+(?:struct|interface)\b.*$/, '')))
     }
   }
 
@@ -254,17 +260,18 @@ export const generateScouting = async (input: ScoutingInput, model: Model): Prom
 
 /**
  * The Question cache's key for a Scouting: `scouting:` and a SHA-256 of its
- * Modules and its outlines' lines. The same Modules read the same way are
- * the same key, so they cost no call, and once answered the answered-keys
- * guard keeps them from being asked again.
+ * Modules, the files read in them and its outlines' lines. The same Modules
+ * read the same way are the same key, so they cost no call, and once
+ * answered the answered-keys guard keeps them from being asked again. The
+ * files count, so a cached Question always points at a file of its input.
  */
-export const scoutingKeyOf = async ({ modules, outlines }: ScoutingInput): Promise<string> =>
-  `scouting:${await sha256Of(JSON.stringify([modules, outlines.map(({ path, lines }) => [path, lines])]))}`
+export const scoutingKeyOf = async ({ modules, files, outlines }: ScoutingInput): Promise<string> =>
+  `scouting:${await sha256Of(JSON.stringify([modules, files, outlines.map(({ path, lines }) => [path, lines])]))}`
 
 /**
  * The Modules charted (a Scouting about them answered right) among those
- * discovered, in the order discovered: what the Module view marks with a
- * star.
+ * discovered, in the order discovered: for the Module view to mark with a
+ * star (#15), as `/badges` lists them.
  */
 export const chartedModulesOf = (game: Pick<GameState, 'visitedModules' | 'chartedModules'>): string[] => {
   const charted = new Set(game.chartedModules ?? [])

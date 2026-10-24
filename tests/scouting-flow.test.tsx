@@ -144,8 +144,11 @@ const engine = (on: On, scouting: unknown = SCOUTING) => {
     const id = `toolu_read_${calls}`
     answers.set(id, { result: { type: 'text' }, text: '1\tok', isReadOnly: true })
     await $.tool.call({ tool: 'Read', file_path: path, tool_use_id: id } as never)
-    await clock.settle()
-    await clock.advance(HAIKU_MS)
+    // A Scouting reads files before it calls Haiku: each step settled in turn.
+    for (let step = 0; step < 4; step += 1) {
+      await clock.settle()
+      await clock.advance(HAIKU_MS)
+    }
   }
 
   return {

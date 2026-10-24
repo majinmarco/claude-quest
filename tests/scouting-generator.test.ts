@@ -46,11 +46,18 @@ export async function loadPlayer(): Promise<void> {
 export default step
 export { secret as revealed }
 export * from './sprites'
+export * as art from './scene-art'
+class Hidden {}
+type Local = string
 `
 
 /** A Python module: its imports and public definitions. */
 const CLI_PY = `import os
 from pathlib import Path
+from typing import (
+    Any,
+    Optional,
+)
 
 def main(argv):
     hidden = 'never sent'
@@ -61,6 +68,25 @@ def _private():
 
 class Runner:
     pass
+`
+
+/** A Go file: its import block and capitalised definitions. */
+const SERVER_GO = `package server
+
+import (
+\t"fmt"
+\t"net/http"
+)
+
+func Serve(addr string) error {
+\treturn nil
+}
+
+func helper() {}
+
+type Server struct {
+\tAddr string
+}
 `
 
 /** What a Scouting of three Modules is shown. */
@@ -108,8 +134,16 @@ describe("Scouting: what the Cartographer is shown", () => {
       'export default',
       'export { secret as revealed }',
       "export * from './sprites'",
+      "export * as art from './scene-art'",
     ])
-    expect(outlineOf(CLI_PY)).toEqual(['import os', 'from pathlib import Path', 'def main', 'class Runner'])
+    expect(outlineOf(CLI_PY)).toEqual([
+      'import os',
+      'from pathlib import Path',
+      'from typing import ( Any, Optional, )',
+      'def main',
+      'class Runner',
+    ])
+    expect(outlineOf(SERVER_GO)).toEqual(['import ( "fmt" "net/http" )', 'func Serve', 'type Server'])
   })
 
   test('outlines are of three files at most and 60 lines in all', () => {
@@ -217,6 +251,7 @@ describe("Scouting: the Cartographer's contract", () => {
     expect(await scoutingKeyOf({ ...INPUT })).toBe(key)
     expect(await scoutingKeyOf({ ...INPUT, modules: ['src', 'hooks', 'docs'] })).not.toBe(key)
     expect(await scoutingKeyOf({ ...INPUT, outlines: [] })).not.toBe(key)
+    expect(await scoutingKeyOf({ ...INPUT, files: INPUT.files.slice(1) })).not.toBe(key)
   })
 })
 
