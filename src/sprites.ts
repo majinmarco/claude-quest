@@ -451,6 +451,28 @@ export const SPRITES = {
       '.aaabbgggbbaaaa.',
     ],
   },
+  /** Tile 110 of the sheet. */
+  boss: {
+    palette: ["#3f2631","#e84537","#ff706d","#763b36","#f7c282","#bd6c4a"],
+    rows: [
+      '..aaaaaaaaaaaa..',
+      '.aaaaaaaaaaaaaa.',
+      'aaabaabccbaabaaa',
+      'aabacbbccbbcabaa',
+      'aaaaabbccbbaaaaa',
+      'aaababbbbbbabaaa',
+      'aabacddddddcabaa',
+      'aaaadeeeeeedaaaa',
+      'aaabfeaeeaefbaaa',
+      'aabaaaeffeaaabaa',
+      'aaccbaaaaaabccaa',
+      'aaccbbaaaabbccaa',
+      'aabbaaaaaaaabbaa',
+      'aaabbbaaaabbbaaa',
+      '.aaaaaaaaaaaaaa.',
+      '..aaaaa..aaaaa..',
+    ],
+  },
 } as const satisfies Record<string, Sprite>
 
 export type SpriteName = keyof typeof SPRITES

@@ -17,6 +17,18 @@ export type Player = {
   hp: number
   maxHp: number
   stats: Stats
+  /** The badges won, oldest first; absent on a Player kept by an older mod. */
+  badges?: Badge[]
+}
+
+/** A badge on the Player: a Boss Fight won, named after its Quest. */
+export type Badge = {
+  /** `Bane of #12's Boss`. */
+  name: string
+  /** The Quest whose Boss Fight was won. */
+  ticket: string
+  /** When it was won, in ms since the epoch. */
+  earnedAt: number
 }
 
 /**
@@ -113,6 +125,41 @@ export type Quest = {
    * and in a Quest kept by an older mod.
    */
   haikuCalls?: { sage: number; boss: number }
+  /**
+   * The changes made during the Quest, the latest few (a FileChange per
+   * file-changing tool call): the Boss Fight's diff when git cannot give the
+   * commit's. Absent until the first, and in a Quest kept by an older mod.
+   */
+  changes?: FileChange[]
+}
+
+/**
+ * How a Quest closed: its Boss Fight `won` (every Question right), `lost`
+ * (answered, the boss left standing), `skipped` by the Player, or `unfought`
+ * when no Boss Fight could be made (Haiku failed or over budget, no diff).
+ */
+export type QuestOutcome = 'won' | 'lost' | 'skipped' | 'unfought'
+
+/**
+ * The Boss Fight: the code review that ends a Quest, three Questions about
+ * the diff its first commit made. It is `summoned` while its Questions are
+ * being made, `fighting` once they wait, then how it ended; it stays after
+ * its Quest closes, for the Scene, until the next Quest starts.
+ */
+export type BossFight = {
+  ticket: string
+  /** The commit whose diff it reviews, as git printed it. */
+  sha: string
+  /** The folder the commit ran in, as its command moved there; null for the session's. */
+  cwd: string | null
+  status: 'summoned' | 'fighting' | QuestOutcome
+  /** The boss's HP: one per Question; each right answer is a hit. */
+  hp: number
+  maxHp: number
+  /** The Questions not yet answered, in the order they are asked. */
+  questions: Question[]
+  /** The last answer, its verdict and explanation shown; null before the first. */
+  lastAnswer: QuestionAnswer | null
 }
 
 /** A file's change, as unified-diff hunks (`@@ -1,3 +1,3 @@` and the lines under it). */
@@ -141,9 +188,10 @@ export type QuestionContent = {
 
 /** A comprehension Question an NPC put to the Player, in the Question Queue. */
 export type Question = QuestionContent & {
-  /** Unique in the session: `sage-1`, `sage-2`, ... */
+  /** Unique in the session: `sage-1`, `sage-2`, ... for the Sage, `boss-1` ... for the boss. */
   id: string
-  npc: 'Sage'
+  /** Who asks it: the Sage (the Question Queue) or the boss (the Boss Fight). */
+  npc: 'Sage' | 'Boss'
   /** When it joined the Question Queue, in ms since the epoch. */
   queuedAt: number
   /**
@@ -208,6 +256,12 @@ export type GameState = {
    * its allowance between Quests.
    */
   sageCallsOutsideQuest: number
+  /**
+   * The Boss Fight of the active Quest, or of the Quest it just closed; null
+   * before the active Quest's first commit. Absent in a game kept by an
+   * older mod.
+   */
+  bossFight?: BossFight | null
 }
 
 /** One Quest in a Region's history, as the Region file keeps it. */
@@ -215,8 +269,13 @@ export type QuestRecord = {
   ticket: string
   /** When the Quest started, as an ISO 8601 timestamp. */
   startedAt: string
-  /** `abandoned` once another Quest replaced it before it closed. */
-  status: 'active' | 'abandoned'
+  /**
+   * `abandoned` once another Quest replaced it before it closed; how its
+   * Boss Fight closed it (QuestOutcome) once it did.
+   */
+  status: 'active' | 'abandoned' | QuestOutcome
+  /** When the Quest closed, as an ISO 8601 timestamp; absent while active or abandoned. */
+  endedAt?: string
 }
 
 /** The Region file: one project's `.claude/claude-quest.json`. */

@@ -5,7 +5,7 @@
 
 import type { EngineInterface } from 'claude-code'
 
-import type { QuestRecord, Region } from '../types'
+import type { QuestOutcome, QuestRecord, Region } from '../types'
 import { newPlayer } from './engine'
 import type { Player } from './engine'
 
@@ -166,6 +166,28 @@ export function recordQuestAbandoned(
 
     return quests.map((quest, index) =>
       index === latest ? { ...quest, status: 'abandoned' } : quest,
+    )
+  })
+}
+
+/**
+ * Marks the Quest's latest active run closed in the Region's history: how its
+ * Boss Fight ended it, and when.
+ */
+export async function recordQuestClosed(
+  $: EngineInterface,
+  ticket: string,
+  outcome: QuestOutcome,
+): Promise<void> {
+  const endedAt = new Date(await $.clock.now()).toISOString()
+
+  await changeQuests($, quests => {
+    const latest = quests.findLastIndex(
+      quest => quest.ticket === ticket && quest.status === 'active',
+    )
+
+    return quests.map((quest, index) =>
+      index === latest ? { ...quest, status: outcome, endedAt } : quest,
     )
   })
 }

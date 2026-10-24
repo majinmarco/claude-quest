@@ -1,9 +1,9 @@
 // The Game Engine: every game rule, as one pure step from (state, event) to
 // (state, effects). It knows nothing of Claude Code.
 
-import type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, Question, QuestionAnswer, QuestionContent, StatName, Vitals } from '../types'
+import type { Badge, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, StatName, Vitals } from '../types'
 
-export type { Battle, BattleEncounter, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, Question, QuestionAnswer, QuestionContent, Vitals } from '../types'
+export type { Badge, Battle, BattleEncounter, BossFight, CheckKind, CraftingEncounter, Difficulty, Encounter, FileChange, GameState, Player, Quest, QuestOutcome, Question, QuestionAnswer, QuestionContent, Vitals } from '../types'
 
 export type GameEvent =
   /**
@@ -59,6 +59,19 @@ export type GameEvent =
    * (and counted), refused once spent. Ask before each call, never after.
    */
   | { type: 'HAIKU_CALL_REQUESTED'; purpose: HaikuPurpose }
+  /**
+   * A git commit was made through Claude's Bash tool: `sha` as git printed
+   * it, `cwd` the folder the command moved to first (null: the session's).
+   */
+  | { type: 'COMMIT'; sha: string; cwd: string | null }
+  /** The Boss Fight of Quest `ticket` has its review Questions, made at `at`. */
+  | { type: 'BOSS_FIGHT_READY'; ticket: string; questions: QuestionContent[]; at: number }
+  /** No Boss Fight could be made for Quest `ticket`: why, in `reason`. */
+  | { type: 'BOSS_FIGHT_UNAVAILABLE'; ticket: string; reason: string }
+  /** The Player chose option `choice` of the Boss Fight's Question `id`, at `at`. */
+  | { type: 'BOSS_ANSWERED'; id: string; choice: number; at: number }
+  /** The Player skipped the Boss Fight. */
+  | { type: 'BOSS_FIGHT_SKIPPED' }
 
 export type Effect =
   | { type: 'ENCOUNTER_STARTED'; encounter: Encounter }
@@ -90,6 +103,27 @@ export type Effect =
   | { type: 'HAIKU_CALL_GRANTED'; purpose: HaikuPurpose; used: number; limit: number }
   /** The budget for `purpose` is spent (`used` of `limit`): no call is made. */
   | { type: 'HAIKU_CALL_REFUSED'; purpose: HaikuPurpose; used: number; limit: number }
+  /**
+   * The active Quest's first commit summoned its Boss Fight: its Questions are
+   * to be made from the commit's diff (`sha`, in `cwd`, null for the
+   * session's folder), or from `changes`, the Quest's own, when git cannot
+   * give it.
+   */
+  | {
+      type: 'BOSS_FIGHT_SUMMONED'
+      ticket: string
+      sha: string
+      cwd: string | null
+      changes: FileChange[]
+    }
+  /** The Boss Fight's Questions wait: the boss stands with `hp`, one per Question. */
+  | { type: 'BOSS_FIGHT_STARTED'; ticket: string; hp: number }
+  /** A right answer hit the boss: `hp` left. */
+  | { type: 'BOSS_HIT'; hp: number }
+  /** A badge joined the Player's: a Boss Fight won. */
+  | { type: 'BADGE_EARNED'; badge: Badge }
+  /** The active Quest closed, its Boss Fight ended as `outcome`. */
+  | { type: 'QUEST_CLOSED'; ticket: string; outcome: QuestOutcome }
 
 /**
  * What a Haiku call is for: the Sage's Question after a code-changing
@@ -184,10 +218,23 @@ export const HASTY_ANSWER_XP = QUESTION_XP / 4
 export const WRONG_ANSWER_HP = 10
 
 /**
+ * The XP a Boss Fight won earns, beside each right answer's QUESTION_XP:
+ * five answers' worth, as careful review is the biggest reward.
+ */
+export const BOSS_FIGHT_XP = 100
+
+/**
  * How many edits made during a Battle the Sage asks about once it is won:
  * the latest, the fix; the earlier ones are often false starts.
  */
 export const MAX_FIX_EDITS = 5
+
+/**
+ * How many of a Quest's changes it keeps for its Boss Fight, the latest:
+ * enough to review when git cannot give the commit's diff, few enough to
+ * keep the session's state small.
+ */
+export const MAX_QUEST_CHANGES = 20
 
 /**
  * Whether an Encounter changed code, for the Sage to ask about: a Crafting,
@@ -281,6 +328,7 @@ export const newGame = (player: Player = newPlayer()): GameState => ({
   questionsAsked: 0,
   lastAnswer: null,
   sageCallsOutsideQuest: 0,
+  bossFight: null,
 })
 
 export const step = (
@@ -300,7 +348,7 @@ export const step = (
     case 'TEST_PASS':
       return checkPassed(state, event.check)
     case 'FILE_EDIT':
-      return craft(withFix(state, event), event)
+      return craft(withFix(withQuestChange(state, event), event), event)
     case 'QUESTION_READY':
       return queueQuestion(state, event.question, event.at)
     case 'QUESTION_SHOWN':
@@ -311,6 +359,16 @@ export const step = (
       return { state: { ...state, lastAnswer: null }, effects: [] }
     case 'HAIKU_CALL_REQUESTED':
       return requestHaikuCall(state, event.purpose, rules)
+    case 'COMMIT':
+      return summonBoss(state, event.sha, event.cwd)
+    case 'BOSS_FIGHT_READY':
+      return startBossFight(state, event)
+    case 'BOSS_FIGHT_UNAVAILABLE':
+      return isSummoned(state, event.ticket) ? closeQuest(state, 'unfought') : { state, effects: [] }
+    case 'BOSS_ANSWERED':
+      return answerBoss(state, event)
+    case 'BOSS_FIGHT_SKIPPED':
+      return isUnderWay(state.bossFight) ? closeQuest(state, 'skipped') : { state, effects: [] }
   }
 }
 
@@ -522,8 +580,9 @@ const startQuest = (
     state.quest === null ? [] : [{ type: 'QUEST_ABANDONED', ticket: state.quest.ticket }]
   const quest: Quest = { ticket, encounters: [] }
 
+  // The Boss Fight belongs to the Quest it ends: a new Quest has none yet.
   return {
-    state: { ...state, quest },
+    state: { ...state, quest, bossFight: null },
     effects: [...abandoned, { type: 'QUEST_STARTED', ticket }],
   }
 }
@@ -753,5 +812,212 @@ const answerQuestion = (
       { type: 'XP_GAINED', amount: xp, stat: 'intelligence' },
       ...gained.effects,
     ],
+  }
+}
+
+// Every change made during a Quest is kept on it, the latest
+// MAX_QUEST_CHANGES: the Boss Fight's diff when git cannot give its commit's.
+const withQuestChange = (
+  state: GameState,
+  { path, diff }: Extract<GameEvent, { type: 'FILE_EDIT' }>,
+): GameState =>
+  state.quest === null
+    ? state
+    : {
+        ...state,
+        quest: {
+          ...state.quest,
+          changes: [...(state.quest.changes ?? []), { path, diff }].slice(-MAX_QUEST_CHANGES),
+        },
+      }
+
+// The first commit in an active Quest summons its Boss Fight; later commits
+// summon no other, as the Quest has one. Its Questions are made outside the
+// engine, then BOSS_FIGHT_READY starts the fight. A commit between Quests
+// plays nothing.
+const summonBoss = (
+  state: GameState,
+  sha: string,
+  cwd: string | null,
+): { state: GameState; effects: Effect[] } => {
+  const { quest } = state
+  if (quest === null || state.bossFight?.ticket === quest.ticket) {
+    return { state, effects: [] }
+  }
+
+  const bossFight: BossFight = {
+    ticket: quest.ticket,
+    sha,
+    cwd,
+    status: 'summoned',
+    hp: 0,
+    maxHp: 0,
+    questions: [],
+    lastAnswer: null,
+  }
+
+  return {
+    state: { ...state, bossFight },
+    effects: [
+      { type: 'BOSS_FIGHT_SUMMONED', ticket: quest.ticket, sha, cwd, changes: quest.changes ?? [] },
+    ],
+  }
+}
+
+/** Whether a Boss Fight is being summoned or fought: not yet ended. */
+export const isUnderWay = (bossFight: BossFight | null | undefined): bossFight is BossFight =>
+  bossFight?.status === 'summoned' || bossFight?.status === 'fighting'
+
+/** Whether the active Quest `ticket`'s Boss Fight is waiting for its Questions. */
+const isSummoned = (state: GameState, ticket: string): boolean =>
+  state.bossFight?.status === 'summoned' &&
+  state.bossFight.ticket === ticket &&
+  state.quest?.ticket === ticket
+
+// The Questions made, the fight starts: the boss has one HP per Question.
+// Questions for a Boss Fight no longer summoned (skipped, or its Quest
+// replaced) start nothing; none at all leave the Quest unfought.
+const startBossFight = (
+  state: GameState,
+  { ticket, questions, at }: Extract<GameEvent, { type: 'BOSS_FIGHT_READY' }>,
+): { state: GameState; effects: Effect[] } => {
+  if (!isSummoned(state, ticket) || state.bossFight === null || state.bossFight === undefined) {
+    return { state, effects: [] }
+  }
+  if (questions.length === 0) {
+    return closeQuest(state, 'unfought')
+  }
+
+  const asked: Question[] = questions.map((content, index) => ({
+    ...content,
+    id: `boss-${index + 1}`,
+    npc: 'Boss',
+    queuedAt: at,
+    shownAt: null,
+  }))
+  const hp = asked.length
+
+  return {
+    state: {
+      ...state,
+      bossFight: { ...state.bossFight, status: 'fighting', hp, maxHp: hp, questions: asked },
+    },
+    effects: [{ type: 'BOSS_FIGHT_STARTED', ticket, hp }],
+  }
+}
+
+/** The name of the badge Quest `ticket`'s Boss Fight won earns: `Bane of #12's Boss`. */
+export const badgeNameOf = (ticket: string): string => `Bane of ${ticket}'s Boss`
+
+const badgeOf = (ticket: string, earnedAt: number): Badge => ({
+  name: badgeNameOf(ticket),
+  ticket,
+  earnedAt,
+})
+
+// Each right answer hits the boss and earns QUESTION_XP of Intelligence; a
+// wrong one costs WRONG_ANSWER_HP, as the Sage's do. No haste rule: the
+// boss's Questions are not timed. The boss at 0 HP is won: BOSS_FIGHT_XP and
+// a badge. The last Question answered with the boss standing is lost: the
+// answers keep what they earned or cost, and nothing more. Either way the
+// Quest closes.
+const answerBoss = (
+  state: GameState,
+  { id, choice, at }: Extract<GameEvent, { type: 'BOSS_ANSWERED' }>,
+): { state: GameState; effects: Effect[] } => {
+  const { bossFight } = state
+  const question = bossFight?.status === 'fighting' ? bossFight.questions.find(each => each.id === id) : undefined
+  if (
+    bossFight === null ||
+    bossFight === undefined ||
+    question === undefined ||
+    !Number.isInteger(choice) ||
+    choice < 0 ||
+    choice >= question.options.length
+  ) {
+    return { state, effects: [] }
+  }
+
+  const isCorrect = choice === question.answer
+  const xp = isCorrect ? QUESTION_XP : 0
+  const hpLost = isCorrect ? 0 : Math.min(WRONG_ANSWER_HP, state.player.hp)
+  const answer: QuestionAnswer = {
+    question,
+    choice,
+    isCorrect,
+    answeredAt: at,
+    answerMs: question.shownAt === null ? null : at - question.shownAt,
+    isHasty: false,
+    xp,
+    hpLost,
+  }
+  const hp = isCorrect ? bossFight.hp - 1 : bossFight.hp
+  const questions = bossFight.questions.filter(each => each !== question)
+  const scored = isCorrect
+    ? gainStatXp(state.player, 'intelligence', xp)
+    : { player: { ...state.player, hp: state.player.hp - hpLost }, effects: [] }
+  const answered: GameState = {
+    ...state,
+    player: scored.player,
+    bossFight: { ...bossFight, hp, questions, lastAnswer: answer },
+  }
+  const effects: Effect[] = [
+    { type: 'QUESTION_ANSWERED', answer },
+    ...(isCorrect
+      ? [{ type: 'BOSS_HIT', hp } as const, { type: 'XP_GAINED', amount: xp, stat: 'intelligence' } as const]
+      : [{ type: 'HP_LOST', amount: hpLost } as const]),
+    ...scored.effects,
+  ]
+
+  if (hp === 0) {
+    const won = gainStatXp(answered.player, 'intelligence', BOSS_FIGHT_XP)
+    const badge = badgeOf(bossFight.ticket, at)
+    const closed = closeQuest(
+      { ...answered, player: { ...won.player, badges: [...(won.player.badges ?? []), badge] } },
+      'won',
+    )
+
+    return {
+      state: closed.state,
+      effects: [
+        ...effects,
+        { type: 'XP_GAINED', amount: BOSS_FIGHT_XP, stat: 'intelligence' },
+        ...won.effects,
+        { type: 'BADGE_EARNED', badge },
+        ...closed.effects,
+      ],
+    }
+  }
+
+  if (questions.length === 0) {
+    const closed = closeQuest(answered, 'lost')
+
+    return { state: closed.state, effects: [...effects, ...closed.effects] }
+  }
+
+  return { state: answered, effects }
+}
+
+// The Boss Fight ended, so its Quest closes: no Quest is active after it.
+// The Boss Fight stays, ended, until the next Quest starts; the Encounter
+// under way is put away, so the Scene shows how the Quest ended until the
+// next Encounter.
+const closeQuest = (
+  state: GameState,
+  outcome: QuestOutcome,
+): { state: GameState; effects: Effect[] } => {
+  const ticket = state.bossFight?.ticket ?? state.quest?.ticket
+  if (ticket === undefined) {
+    return { state, effects: [] }
+  }
+
+  return {
+    state: {
+      ...state,
+      quest: null,
+      encounter: null,
+      bossFight: state.bossFight == null ? null : { ...state.bossFight, status: outcome },
+    },
+    effects: [{ type: 'QUEST_CLOSED', ticket, outcome }],
   }
 }

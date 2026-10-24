@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { SessionUsage } from 'claude-code'
 
-import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
+import { translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import * as commits from './fixtures/git-commits'
 import { glob, grep, read, readMissing } from './fixtures/tool-calls'
 import * as bash from './fixtures/bash-calls'
 import { CLAUDE_PLUGIN_TEST_FAILING, vitestFailing3 } from './fixtures/bash-calls'
@@ -560,5 +561,43 @@ describe('Event translator: a file changed', () => {
       linesAdded: 14,
       linesRemoved: 0,
     })
+  })
+})
+
+describe('Event translator: git commits', () => {
+  test('a commit chained after git add becomes a COMMIT of its sha', () => {
+    expect(translateCommit(commits.commitAfterAdd.input, commits.commitAfterAdd.result)).toEqual({
+      type: 'COMMIT',
+      sha: '7ab19e4',
+      cwd: null,
+    })
+  })
+
+  test('git commit -am and a plain git commit -m are commits too', () => {
+    expect(translateCommit(commits.commitAll.input, commits.commitAll.result)).toMatchObject({ sha: '348c470' })
+    expect(translateCommit(commits.commitPlain.input, commits.commitPlain.result)).toMatchObject({ sha: '691eb59' })
+  })
+
+  test('a commit under cd keeps the folder it ran in, for reading its diff', () => {
+    expect(translateCommit(commits.commitInFolder.input, commits.commitInFolder.result)).toEqual({
+      type: 'COMMIT',
+      sha: '7db2a90',
+      cwd: 'vault',
+    })
+  })
+
+  test('a failed commit, a dry run and an amend are no commit', () => {
+    for (const call of [commits.commitNothingToCommit, commits.commitDryRun, commits.commitAmend]) {
+      expect(translateCommit(call.input, call.result)).toBeNull()
+    }
+  })
+
+  test('a Bash call that commits nothing, or another tool, is no commit', () => {
+    expect(translateCommit(commits.gitStatus.input, commits.gitStatus.result)).toBeNull()
+    expect(translateCommit(changes.writeNewFile.input, changes.writeNewFile.result)).toBeNull()
+  })
+
+  test('a commit a hook denied is no commit', () => {
+    expect(translateCommit(commits.commitAfterAdd.input, { deny: 'no commits' })).toBeNull()
   })
 })

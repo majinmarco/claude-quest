@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { generateQuestion } from '../src/content-generator'
+import { changesOfGitShow, generateQuestion, generateReviewQuestions, MAX_REVIEW_DIFF_CHARS } from '../src/content-generator'
 import type { Model, QuestionInput } from '../src/content-generator'
+import { GIT_SHOW_DELETED, GIT_SHOW_DEPOSIT, GIT_SHOW_MIXED, GIT_SHOW_NEW_FILES } from './fixtures/git-commits'
 
 /** An edit the Sage asks about: a discount applied once an order is large. */
 const LEDGER_DIFF = [
@@ -292,5 +293,147 @@ describe('Content Generator: what is sent', () => {
 
     expect(asked[0]?.prompt).toContain('+line 2')
     expect(asked[0]?.prompt).not.toContain('+line 3')
+  })
+})
+
+describe('Content Generator: a commit\'s diff, from git show', () => {
+  test('one file changed is one change: its path and its hunks', () => {
+    expect(changesOfGitShow(GIT_SHOW_DEPOSIT)).toEqual([
+      {
+        path: 'src/vault.ts',
+        diff: [
+          '@@ -3,3 +3,10 @@ export type Vault = { gold: number; locked: boolean }',
+          ' export function openVault(vault: Vault): Vault {',
+          '   return { ...vault, locked: false }',
+          ' }',
+          '+',
+          '+export function deposit(vault: Vault, amount: number): Vault {',
+          '+  if (vault.locked) {',
+          '+    throw new Error("The vault is locked")',
+          '+  }',
+          '+  return { ...vault, gold: vault.gold + amount }',
+          '+}',
+        ].join('\n'),
+      },
+    ])
+  })
+
+  test('a binary file has no lines to read and is left out; a new file is all added', () => {
+    expect(changesOfGitShow(GIT_SHOW_NEW_FILES)).toEqual([
+      { path: 'src/limits.ts', diff: '@@ -0,0 +1 @@\n+export const LIMIT = 1000' },
+    ])
+  })
+
+  test('several files are a change each, in git\'s order', () => {
+    expect(changesOfGitShow(GIT_SHOW_MIXED).map(change => change.path)).toEqual(['old.txt', 'src/vault.ts'])
+  })
+
+  test('a deleted file is a change too, by its old path', () => {
+    expect(changesOfGitShow(GIT_SHOW_DELETED)).toEqual([{ path: 'old.txt', diff: '@@ -1 +0,0 @@\n-gone' }])
+  })
+
+  test('no diff is no change', () => {
+    expect(changesOfGitShow('')).toEqual([])
+  })
+})
+
+describe('Content Generator: the Boss Fight\'s review Questions', () => {
+  const VAULT = [{ path: 'src/vault.ts', diff: changesOfGitShow(GIT_SHOW_DEPOSIT)[0]?.diff ?? '' }]
+  const question = (n: number, lines = ['  if (vault.locked) {']) => ({
+    question: `Review question ${n}?`,
+    options: [`Right ${n}`, `Wrong ${n}a`, `Wrong ${n}b`, `Wrong ${n}c`],
+    answer: n % 4,
+    explanation: `Explanation ${n}.`,
+    stat: 'intelligence',
+    path: 'src/vault.ts',
+    source_lines: lines,
+  })
+
+  test('asks the model once for three review Questions about the diff and returns them, checked', async () => {
+    const { model, asked } = answering(JSON.stringify({ questions: [question(1), question(2), question(3)] }))
+
+    const generated = await generateReviewQuestions({ changes: VAULT, ticket: '#12 Boss Fight on commit', avoid: [] }, model)
+
+    expect(generated.ok).toBe(true)
+    expect(generated.ok && generated.questions.map(each => [each.prompt, each.answer, each.source])).toEqual([
+      ['Review question 1?', 1, { path: 'src/vault.ts', lines: ['  if (vault.locked) {'] }],
+      ['Review question 2?', 2, { path: 'src/vault.ts', lines: ['  if (vault.locked) {'] }],
+      ['Review question 3?', 3, { path: 'src/vault.ts', lines: ['  if (vault.locked) {'] }],
+    ])
+    expect(asked).toHaveLength(1)
+    expect(asked[0]?.prompt).toContain('#12 Boss Fight on commit')
+    expect(asked[0]?.prompt).toContain('+  if (vault.locked) {')
+    expect(asked[0]?.system).toMatch(/three/i)
+  })
+
+  test('a Question breaking the contract is dropped, the others kept', async () => {
+    const broken = { ...question(2), source_lines: ['nowhere in the diff'] }
+    const model = replying({ questions: [question(1), broken, question(3)] })
+
+    const generated = await generateReviewQuestions({ changes: VAULT, ticket: null, avoid: [] }, model)
+
+    expect(generated.ok && generated.questions.map(each => each.prompt)).toEqual([
+      'Review question 1?',
+      'Review question 3?',
+    ])
+  })
+
+  test('a Question already asked (in `avoid`), or twice in one reply, is dropped', async () => {
+    const model = replying({ questions: [question(1), question(2), question(2)] })
+
+    const generated = await generateReviewQuestions(
+      { changes: VAULT, ticket: null, avoid: ['Review question 1?'] },
+      model,
+    )
+
+    expect(generated.ok && generated.questions.map(each => each.prompt)).toEqual(['Review question 2?'])
+  })
+
+  test('the Questions already asked are named, so the model asks others', async () => {
+    const { model, asked } = answering(JSON.stringify({ questions: [question(3)] }))
+
+    await generateReviewQuestions({ changes: VAULT, ticket: null, avoid: ['Review question 1?'] }, model)
+
+    expect(asked[0]?.prompt).toContain('Review question 1?')
+  })
+
+  test('at most three are kept', async () => {
+    const model = replying({ questions: [question(1), question(2), question(3), question(4)] })
+
+    const generated = await generateReviewQuestions({ changes: VAULT, ticket: null, avoid: [] }, model)
+
+    expect(generated.ok && generated.questions).toHaveLength(3)
+  })
+
+  test('a reply with no valid Question, no JSON or no text is a skip, never a throw', async () => {
+    const none = await generateReviewQuestions({ changes: VAULT, ticket: null, avoid: [] }, replying({ questions: [{}] }))
+    const prose = await generateReviewQuestions({ changes: VAULT, ticket: null, avoid: [] }, answering('No.').model)
+    const failed = await generateReviewQuestions({ changes: VAULT, ticket: null, avoid: [] }, async () => ({ ok: false, reason: 'api-error' }))
+
+    expect(none).toMatchObject({ ok: false, reason: 'invalid' })
+    expect(prose).toMatchObject({ ok: false, reason: 'not-json' })
+    expect(failed).toMatchObject({ ok: false, reason: 'model-failed' })
+  })
+
+  test('no diff calls no model', async () => {
+    const { model, asked } = answering('{}')
+
+    const generated = await generateReviewQuestions({ changes: [], ticket: null, avoid: [] }, model)
+
+    expect(generated).toMatchObject({ ok: false, reason: 'no-change' })
+    expect(asked).toHaveLength(0)
+  })
+
+  test(`a huge diff is sent up to ${MAX_REVIEW_DIFF_CHARS} characters, in whole hunks`, async () => {
+    const hunk = (n: number) => `@@ -${n},1 +${n},1 @@\n+${'x'.repeat(4000)}${n}`
+    const { model, asked } = answering('{}')
+
+    await generateReviewQuestions(
+      { changes: [{ path: 'src/big.ts', diff: Array.from({ length: 10 }, (_, n) => hunk(n + 1)).join('\n') }], ticket: null, avoid: [] },
+      model,
+    )
+
+    expect(asked[0]?.prompt).toContain(hunk(5))
+    expect(asked[0]?.prompt).not.toContain(hunk(7))
   })
 })

@@ -4,9 +4,9 @@
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
-import { BATTLE_XP_PER_HP, CRAFTING_XP, DISCOVERY_XP } from './engine'
-import type { BattleEncounter, CheckKind, CraftingEncounter, Encounter } from './engine'
-import { MONSTERS, sceneSvg } from './scene-art'
+import { badgeNameOf, BATTLE_XP_PER_HP, BOSS_FIGHT_XP, CRAFTING_XP, DISCOVERY_XP, isUnderWay } from './engine'
+import type { BattleEncounter, BossFight, CheckKind, CraftingEncounter, Encounter } from './engine'
+import { bossSceneSvg, MONSTERS, sceneSvg } from './scene-art'
 
 /** How wide the scene is drawn, in CSS pixels: its 128 pixels at 3x. */
 const ART_WIDTH = 384
@@ -73,6 +73,46 @@ export const describeCrafting = (crafting: CraftingEncounter): string => {
   return `The blacksmith ${made} · +${CRAFTING_XP} XP`
 }
 
+/** The Boss Fight in one line: how it stands after the last answer, or how it ended. */
+export const describeBossFight = (fight: BossFight): string => {
+  const boss = `the boss of Quest ${fight.ticket}`
+  const hp = `${fight.hp}/${fight.maxHp} HP`
+  const last = fight.lastAnswer
+
+  switch (fight.status) {
+    case 'summoned':
+      return `A boss approaches Quest ${fight.ticket}: its review Questions are being made`
+    case 'fighting':
+      if (last === null) {
+        return `The boss of Quest ${fight.ticket} bars the way: ${fight.maxHp} review Questions · ${hp} · /boss`
+      }
+
+      return last.isCorrect
+        ? `A hit on ${boss} · ${hp} · /boss`
+        : `The boss of Quest ${fight.ticket} strikes back: -${last.hpLost} HP · ${hp} · /boss`
+    case 'won':
+      return `The boss of Quest ${fight.ticket} falls! +${BOSS_FIGHT_XP} XP (Intelligence) and a badge: ${badgeNameOf(fight.ticket)}`
+    case 'lost':
+      return `The boss of Quest ${fight.ticket} still stands, ${hp}: Quest closed without its reward`
+    case 'skipped':
+      return `Boss Fight skipped: Quest ${fight.ticket} closed without its reward`
+    case 'unfought':
+      return `No boss came for Quest ${fight.ticket}: Quest closed without a Boss Fight`
+  }
+}
+
+/**
+ * What the Scene plays: the Boss Fight while it is under way, whatever else
+ * happens; once it has ended, until the next Encounter; else the Encounter.
+ */
+export const sceneOf = (
+  encounter: Encounter | null,
+  fight: BossFight | null,
+): { kind: 'boss'; fight: BossFight } | { kind: 'encounter'; encounter: Encounter | null } =>
+  fight !== null && (isUnderWay(fight) || encounter === null)
+    ? { kind: 'boss', fight }
+    : { kind: 'encounter', encounter }
+
 /** The Encounter in one line, as the terminal shows it and the art's alt says. */
 export const describeScene = (encounter: Encounter | null): string => {
   if (encounter === null) {
@@ -96,21 +136,25 @@ export function drawScene(
   $: EngineInterface,
   e: RenderInput<'Pane'>,
   encounter: Encounter | null,
+  fight: BossFight | null = null,
 ) {
   const elements = $.ui.resolve(e)
   const { Box, Text } = elements
-  const line = describeScene(encounter)
+  const shown = sceneOf(encounter, fight)
+  const line = shown.kind === 'boss' ? describeBossFight(shown.fight) : describeScene(encounter)
+  const isIdle = shown.kind === 'encounter' && encounter === null
 
   if (!('Svg' in elements)) {
-    return <Text dimColor={encounter === null}>{line}</Text>
+    return <Text dimColor={isIdle}>{line}</Text>
   }
 
   const { Svg } = elements
+  const art = shown.kind === 'boss' ? bossSceneSvg(shown.fight, ART_WIDTH) : sceneSvg(encounter, ART_WIDTH)
 
   return (
     <Box flexDirection="column" gap={1}>
-      <Svg source={sceneSvg(encounter, ART_WIDTH)} alt={line} isInteractive />
-      <Text dimColor={encounter === null}>{line}</Text>
+      <Svg source={art} alt={line} isInteractive />
+      <Text dimColor={isIdle}>{line}</Text>
     </Box>
   )
 }

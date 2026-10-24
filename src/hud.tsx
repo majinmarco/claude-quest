@@ -1,10 +1,10 @@
-// The HUD band above the prompt: level, HP, XP bar, the active Quest, the
-// Questions waiting and the current Encounter, and below them the session's
+// The HUD band above the prompt: level, HP, XP bar, the active Quest, its
+// Boss Fight under way, the Questions waiting and the current Encounter, and below them the session's
 // vitals: Mana, the model and the spend.
 
 import type { EngineInterface, RenderInput } from 'claude-code'
 
-import { manaLevel, xpToClear } from './engine'
+import { isUnderWay, manaLevel, xpToClear } from './engine'
 import type { Encounter, GameState, ManaLevel } from './engine'
 import { MONSTERS } from './scene-art'
 
@@ -44,7 +44,7 @@ const describeEncounter = (encounter: Encounter): string => {
 export function drawHud(
   $: EngineInterface,
   e: RenderInput<'AbovePrompt'>,
-  { player, encounter, vitals, quest, questions }: GameState,
+  { player, encounter, vitals, quest, questions, bossFight }: GameState,
 ) {
   const { Box, Text } = $.ui.resolve(e)
   const toClear = xpToClear(player.level)
@@ -67,6 +67,13 @@ export function drawHud(
         {quest !== null && (
           <Text bold color="magenta">
             Quest {quest.ticket}
+          </Text>
+        )}
+        {isUnderWay(bossFight) && (
+          <Text bold color="red">
+            {bossFight.status === 'summoned'
+              ? 'Boss approaching'
+              : `Boss ${bossFight.hp}/${bossFight.maxHp} HP · /boss`}
           </Text>
         )}
         {questions.length > 0 && (

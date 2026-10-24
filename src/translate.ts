@@ -320,6 +320,58 @@ const translateCheck = (command: string, outcome: ToolCallOutcome): GameEvent | 
     : { type: 'TEST_FAIL', check: check.command, kind: check.kind, failures }
 }
 
+/**
+ * The folder a command's commit ran in, when the command moved there first
+ * (`cd vault && git commit ...`): the target of its last `cd` before the
+ * `git commit`, as written, relative to the session's folder or absolute.
+ * Null when it changed no folder, so the commit ran where the session works.
+ */
+const commitFolderOf = (command: string): string | null => {
+  let folder: string | null = null
+  for (const segment of command.split(/&&|\|\||;|\n/)) {
+    const words = segment.trim().split(/\s+/)
+    if (words[0] === 'git' && words.includes('commit')) {
+      break
+    }
+    if (words[0] === 'cd' && words[1] !== undefined) {
+      folder = words[1].replace(/^(['"])(.*)\1$/, '$2')
+    }
+  }
+
+  return folder
+}
+
+// A commit is read from what Claude Code says the Bash call did, not from
+// the command: Claude Code 2.1.308 hands a successful Bash call's record a
+// gitOperation, { commit: { sha, kind, branch } } when it committed. Only a
+// new commit (`committed`) counts: an amend rewrites one already made, a
+// cherry-pick replays another's work. A dry run or a failed commit (an error,
+// `Exit code 1`) hands over no gitOperation, so it is no commit.
+export const translateCommit = (
+  input: ToolCallSeen,
+  outcome: ToolCallOutcome,
+): GameEvent | null => {
+  if (input.tool !== 'Bash' || outcome.deny !== undefined || outcome.isError === true) {
+    return null
+  }
+
+  const record = outcome.result
+  if (typeof record !== 'object' || record === null) {
+    return null
+  }
+  const commit = (record as { gitOperation?: { commit?: { sha?: unknown; kind?: unknown } } })
+    .gitOperation?.commit
+  if (commit?.kind !== 'committed' || typeof commit.sha !== 'string') {
+    return null
+  }
+
+  return {
+    type: 'COMMIT',
+    sha: commit.sha,
+    cwd: typeof input.command === 'string' ? commitFolderOf(input.command) : null,
+  }
+}
+
 /** The part of a `session.measure` input, or of `$.session.usage()`, it reads. */
 export type MeasureSeen = {
   context: { percent?: number }

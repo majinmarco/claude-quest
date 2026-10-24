@@ -73,13 +73,17 @@ The pane that plays the current Encounter: animated pixel art where the surface 
 _Avoid_: Encounter view, animation pane
 
 **Boss Fight**:
-The code-review challenge that ends a Quest, built from the Quest's actual diff.
+The code-review challenge that ends a Quest, built from the Quest's actual diff: the first commit Claude makes during a Quest summons it, three review Questions about that commit's diff (the Quest's own changes when git cannot show it). The boss has one HP per Question: a right answer hits it and earns Intelligence XP, a wrong one costs HP. Every Question right wins, for bonus XP and a Badge; the boss left standing is a loss; the Player may skip it. However it ends, the Quest closes, its outcome in the Region file (won, lost, skipped, or unfought when no Boss Fight could be made).
 _Avoid_: Final review, boss battle
+
+**Badge**:
+A mark on the Player for a Boss Fight won, named after its Quest (`Bane of #12's Boss`); it travels with the Player across projects.
+_Avoid_: Achievement, trophy
 
 ## Learning
 
 **NPC**:
-A persona (Sage, Cartographer, Merchant, Rival, Scribe, Quest Giver) that speaks to the Player and delivers Questions.
+A persona (Sage, Cartographer, Merchant, Rival, Scribe, Quest Giver) that speaks to the Player and delivers Questions. A Boss Fight's boss asks its review Questions too, though it is the Quest's foe rather than an NPC.
 _Avoid_: Character, bot
 
 **Question**:

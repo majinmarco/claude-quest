@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { DEFAULT_RULES, HASTY_ANSWER_XP, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
+import { BOSS_FIGHT_XP, DEFAULT_RULES, HASTY_ANSWER_XP, MAX_QUEST_CHANGES, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
 import type { GameState, QuestionContent } from '../types'
 
 describe('Game Engine: a new Player', () => {
@@ -1082,5 +1082,279 @@ describe('Game Engine: hasty answers', () => {
     const { state: after } = step(state, { type: 'QUESTION_ANSWERED', id: 'sage-1', choice: 1, at: T + 1000 })
 
     expect(after.lastAnswer).toMatchObject({ isCorrect: false, isHasty: false, xp: 0, hpLost: 10 })
+  })
+})
+
+describe('Game Engine: the Boss Fight is summoned by the first commit', () => {
+  const commit = (sha = '7ab19e4', cwd: string | null = null) => ({ type: 'COMMIT', sha, cwd }) as const
+  const edit = (path: string, diff: string) => ({
+    type: 'FILE_EDIT' as const,
+    path,
+    module: 'src',
+    isNewFile: false,
+    linesBefore: 40,
+    linesAdded: 1,
+    linesRemoved: 1,
+    diff,
+  })
+  const questing = step(newGame(), { type: 'QUEST_START', ticket: '#12' }).state
+
+  test('a new game has no Boss Fight', () => {
+    expect(newGame().bossFight).toBeNull()
+  })
+
+  test('the first commit in an active Quest summons its Boss Fight, with the commit and the Quest\'s changes', () => {
+    const edited = step(questing, edit('/work/vault/src/vault.ts', '@@ -1 +1 @@\n-a\n+b')).state
+
+    const { state, effects } = step(edited, commit('7ab19e4', 'vault'))
+
+    expect(effects).toEqual([
+      {
+        type: 'BOSS_FIGHT_SUMMONED',
+        ticket: '#12',
+        sha: '7ab19e4',
+        cwd: 'vault',
+        changes: [{ path: '/work/vault/src/vault.ts', diff: '@@ -1 +1 @@\n-a\n+b' }],
+      },
+    ])
+    expect(state.bossFight).toEqual({
+      ticket: '#12',
+      sha: '7ab19e4',
+      cwd: 'vault',
+      status: 'summoned',
+      hp: 0,
+      maxHp: 0,
+      questions: [],
+      lastAnswer: null,
+    })
+    expect(state.quest?.ticket).toBe('#12')
+  })
+
+  test('later commits in the same Quest summon no other', () => {
+    const summoned = step(questing, commit('7ab19e4')).state
+
+    const { state, effects } = step(summoned, commit('348c470'))
+
+    expect(effects).toEqual([])
+    expect(state.bossFight?.sha).toBe('7ab19e4')
+  })
+
+  test('a commit outside a Quest summons nothing', () => {
+    const { state, effects } = step(newGame(), commit())
+
+    expect(effects).toEqual([])
+    expect(state.bossFight).toBeNull()
+  })
+
+  test(`a Quest keeps its latest ${MAX_QUEST_CHANGES} changes, for when git cannot give the commit's diff`, () => {
+    let state = questing
+    for (let n = 0; n < MAX_QUEST_CHANGES + 2; n += 1) {
+      state = step(state, edit(`src/file-${n}.ts`, `@@ -1 +1 @@\n+${n}`)).state
+    }
+
+    expect(state.quest?.changes).toHaveLength(MAX_QUEST_CHANGES)
+    expect(state.quest?.changes?.[0]).toEqual({ path: 'src/file-2.ts', diff: '@@ -1 +1 @@\n+2' })
+  })
+
+  test('changes made between Quests belong to none', () => {
+    const { state } = step(newGame(), edit('src/a.ts', '@@ -1 +1 @@\n+a'))
+
+    expect(state.quest).toBeNull()
+  })
+})
+
+describe('Game Engine: the Boss Fight', () => {
+  const T = Date.UTC(2026, 9, 23, 21, 0)
+  const review = (n: number): QuestionContent => ({
+    prompt: `Review question ${n}?`,
+    options: ['Right', 'Wrong one', 'Wrong two', 'Wrong three'],
+    answer: 0,
+    explanation: `Explanation ${n}.`,
+    stat: 'intelligence',
+    source: { path: 'src/vault.ts', lines: ['  if (vault.locked) {'] },
+  })
+  const ready = (ticket = '#12') => ({
+    type: 'BOSS_FIGHT_READY' as const,
+    ticket,
+    questions: [review(1), review(2), review(3)],
+    at: T,
+  })
+  const answer = (n: number, choice: number) =>
+    ({ type: 'BOSS_ANSWERED', id: `boss-${n}`, choice, at: T + n * 60_000 }) as const
+
+  /** Steps `state` through `events`, keeping every effect. */
+  const play = (state: GameState, ...events: Parameters<typeof step>[1][]) => {
+    const effects: ReturnType<typeof step>['effects'] = []
+    for (const event of events) {
+      const stepped = step(state, event)
+      state = stepped.state
+      effects.push(...stepped.effects)
+    }
+
+    return { state, effects }
+  }
+
+  const summoned = play(
+    newGame(),
+    { type: 'QUEST_START', ticket: '#12' },
+    { type: 'COMMIT', sha: '7ab19e4', cwd: null },
+  ).state
+  const fighting = play(summoned, ready()).state
+
+  test('its Questions ready, the fight starts: the boss has one HP per Question', () => {
+    const { state, effects } = play(summoned, ready())
+
+    expect(effects).toEqual([{ type: 'BOSS_FIGHT_STARTED', ticket: '#12', hp: 3 }])
+    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 3, maxHp: 3 })
+    expect(state.bossFight?.questions.map(question => [question.id, question.npc, question.prompt])).toEqual([
+      ['boss-1', 'Boss', 'Review question 1?'],
+      ['boss-2', 'Boss', 'Review question 2?'],
+      ['boss-3', 'Boss', 'Review question 3?'],
+    ])
+  })
+
+  test('the boss\'s Questions stay out of the Sage\'s Question Queue', () => {
+    expect(fighting.questions).toEqual([])
+  })
+
+  test(`a right answer hits the boss and earns ${QUESTION_XP} Intelligence XP`, () => {
+    const { state, effects } = play(fighting, answer(1, 0))
+
+    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 2 })
+    expect(state.bossFight?.questions.map(question => question.id)).toEqual(['boss-2', 'boss-3'])
+    expect(state.bossFight?.lastAnswer).toMatchObject({ isCorrect: true, xp: 20 })
+    expect(effects).toContainEqual({ type: 'BOSS_HIT', hp: 2 })
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 20, stat: 'intelligence' })
+    expect(state.player.stats.intelligence).toBe(20)
+  })
+
+  test(`a wrong answer costs ${WRONG_ANSWER_HP} HP and leaves the boss unhurt`, () => {
+    const { state, effects } = play(fighting, answer(1, 2))
+
+    expect(state.player.hp).toBe(90)
+    expect(state.bossFight).toMatchObject({ status: 'fighting', hp: 3 })
+    expect(state.bossFight?.lastAnswer).toMatchObject({ isCorrect: false, hpLost: 10 })
+    expect(effects).toContainEqual({ type: 'HP_LOST', amount: 10 })
+    expect(effects.some(effect => effect.type === 'BOSS_HIT')).toBe(false)
+  })
+
+  test(`every Question right wins: ${BOSS_FIGHT_XP} XP and a badge, and the Quest closes won`, () => {
+    const { state, effects } = play(fighting, answer(1, 0), answer(2, 0), answer(3, 0))
+
+    // 3 right answers (60) and the win (100): 160 XP, level 2 with 60 over.
+    expect(state.player).toMatchObject({ level: 2, xp: 60, stats: { intelligence: 160 } })
+    expect(state.player.badges).toEqual([
+      { name: 'Bane of #12\'s Boss', ticket: '#12', earnedAt: T + 180_000 },
+    ])
+    expect(state.quest).toBeNull()
+    expect(state.bossFight).toMatchObject({ status: 'won', hp: 0, questions: [] })
+    expect(effects).toContainEqual({ type: 'XP_GAINED', amount: 100, stat: 'intelligence' })
+    expect(effects).toContainEqual({
+      type: 'BADGE_EARNED',
+      badge: { name: 'Bane of #12\'s Boss', ticket: '#12', earnedAt: T + 180_000 },
+    })
+    expect(effects).toContainEqual({ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'won' })
+  })
+
+  test('a badge joins those the Player already has', () => {
+    const decorated = {
+      ...fighting,
+      player: { ...fighting.player, badges: [{ name: 'Bane of #11\'s Boss', ticket: '#11', earnedAt: 1 }] },
+    }
+
+    const { state } = play(decorated, answer(1, 0), answer(2, 0), answer(3, 0))
+
+    expect(state.player.badges?.map(badge => badge.ticket)).toEqual(['#11', '#12'])
+  })
+
+  test('the last Question answered with the boss standing loses: no win XP, no badge, the Quest closes lost', () => {
+    const { state, effects } = play(fighting, answer(1, 0), answer(2, 1), answer(3, 0))
+
+    expect(state.player).toMatchObject({ hp: 90, xp: 40, stats: { intelligence: 40 } })
+    expect(state.player.badges ?? []).toEqual([])
+    expect(state.quest).toBeNull()
+    expect(state.bossFight).toMatchObject({ status: 'lost', hp: 1 })
+    expect(effects).toContainEqual({ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'lost' })
+    expect(effects.some(effect => effect.type === 'BADGE_EARNED')).toBe(false)
+  })
+
+  test('skipping closes the Quest without the Boss Fight\'s reward; answers given keep theirs', () => {
+    const answered = play(fighting, answer(1, 0)).state
+    const { state, effects } = play(answered, { type: 'BOSS_FIGHT_SKIPPED' })
+
+    expect(effects).toEqual([{ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'skipped' }])
+    expect(state.player.xp).toBe(20)
+    expect(state.player.badges).toBeUndefined()
+    expect(state.quest).toBeNull()
+    expect(state.bossFight?.status).toBe('skipped')
+  })
+
+  test('a Boss Fight still being summoned can be skipped too', () => {
+    const { state, effects } = play(summoned, { type: 'BOSS_FIGHT_SKIPPED' })
+
+    expect(effects).toEqual([{ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'skipped' }])
+    expect(state.quest).toBeNull()
+  })
+
+  test('Questions arriving after a skip start nothing', () => {
+    const skipped = play(summoned, { type: 'BOSS_FIGHT_SKIPPED' }).state
+
+    const { state, effects } = play(skipped, ready())
+
+    expect(effects).toEqual([])
+    expect(state.bossFight?.status).toBe('skipped')
+  })
+
+  test('when no Boss Fight can be made, the Quest closes unfought, without its reward', () => {
+    const { state, effects } = play(summoned, {
+      type: 'BOSS_FIGHT_UNAVAILABLE',
+      ticket: '#12',
+      reason: 'over budget',
+    })
+
+    expect(effects).toEqual([{ type: 'QUEST_CLOSED', ticket: '#12', outcome: 'unfought' }])
+    expect(state.quest).toBeNull()
+    expect(state.bossFight?.status).toBe('unfought')
+  })
+
+  test('with no Boss Fight under way, an answer or a skip changes nothing', () => {
+    const questing = play(newGame(), { type: 'QUEST_START', ticket: '#12' }).state
+
+    for (const event of [answer(1, 0), { type: 'BOSS_FIGHT_SKIPPED' } as const]) {
+      const { state, effects } = play(questing, event)
+      expect(effects).toEqual([])
+      expect(state).toEqual(questing)
+    }
+  })
+
+  test('an answer to no Question of the fight, or no option, changes nothing', () => {
+    for (const event of [answer(9, 0), answer(1, 4)]) {
+      const { state, effects } = play(fighting, event)
+      expect(effects).toEqual([])
+      expect(state).toEqual(fighting)
+    }
+  })
+
+  test('the next Quest starts with no Boss Fight, and its own first commit summons one', () => {
+    const won = play(fighting, answer(1, 0), answer(2, 0), answer(3, 0)).state
+
+    const next = play(won, { type: 'QUEST_START', ticket: '#13' })
+    expect(next.state.bossFight).toBeNull()
+
+    const { effects } = play(next.state, { type: 'COMMIT', sha: '691eb59', cwd: null })
+    expect(effects).toContainEqual(expect.objectContaining({ type: 'BOSS_FIGHT_SUMMONED', ticket: '#13' }))
+  })
+
+  test('starting another Quest mid-fight abandons the Quest and drops its Boss Fight', () => {
+    const { state, effects } = play(fighting, { type: 'QUEST_START', ticket: '#13' })
+
+    expect(effects).toContainEqual({ type: 'QUEST_ABANDONED', ticket: '#12' })
+    expect(state.bossFight).toBeNull()
+  })
+
+  test('a commit after the Quest closed summons nothing: no Quest is active', () => {
+    const won = play(fighting, answer(1, 0), answer(2, 0), answer(3, 0)).state
+
+    expect(play(won, { type: 'COMMIT', sha: '691eb59', cwd: null }).effects).toEqual([])
   })
 })

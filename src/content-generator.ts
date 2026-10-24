@@ -83,8 +83,8 @@ const hunksOf = (diff: string): string[] =>
  * The changes as sent: whole hunks, in order, while they fit MAX_DIFF_CHARS.
  * The first hunk always goes, cut to the limit, so a huge one still asks.
  */
-const trimToBudget = (changes: readonly FileChange[]): FileChange[] => {
-  let room = MAX_DIFF_CHARS
+const trimToBudget = (changes: readonly FileChange[], limit = MAX_DIFF_CHARS): FileChange[] => {
+  let room = limit
   const fitted: FileChange[] = []
 
   for (const { path, diff } of changes) {
@@ -254,3 +254,114 @@ export const generateQuestion = async (input: QuestionInput, model: Model): Prom
 
   return validateQuestion(parsed, changes)
 }
+
+/** How many review Questions a Boss Fight asks. */
+export const REVIEW_QUESTION_COUNT = 3
+
+/**
+ * The most diff text sent for a Boss Fight, in characters: twice a Sage's,
+ * as it reviews a whole commit, whole hunks up to it.
+ */
+export const MAX_REVIEW_DIFF_CHARS = 24_000
+
+/**
+ * What the boss asks about: the Quest's diff (its first commit's, or its own
+ * changes), its ticket, and the Questions it already has, to ask others.
+ */
+export type ReviewInput = { changes: FileChange[]; ticket: string | null; avoid: string[] }
+
+export type ReviewGenerated =
+  | { ok: true; questions: QuestionContent[] }
+  | { ok: false; reason: SkipReason; detail: string }
+
+const REVIEW_SYSTEM = `You are the Boss at the end of a Quest in an RPG played over real coding work. The Player's Quest ends with this commit; challenge them with a short code review: THREE multiple-choice review questions about the diff, so they show they understand what was built.
+
+Rules for each question:
+- It must be answerable from the diff alone: the Player sees exactly these lines.
+- Ask what specific lines do, why they are there, or what would break if they changed; not trivia such as names or formatting.
+- The three questions are about different parts of the diff, and different from any question listed as already asked.
+- Exactly four options, exactly one right; the wrong ones plausible to someone who skimmed.
+- The explanation is one sentence saying why the right option is right.
+- stat is "intelligence" for logic, algorithms and design, or "wisdom" for how the change fits the wider system.
+- path is the file the question is about, as given.
+- source_lines are 1 to ${MAX_SOURCE_LINES} lines copied exactly from that file's diff, added or unchanged lines only (never removed ones), without the leading "+" or space: the lines the question is about.
+
+Answer with one JSON object and nothing else:
+{"questions": [{"question": string, "options": [string, string, string, string], "answer": 0-3, "explanation": string, "stat": "intelligence" | "wisdom", "path": string, "source_lines": [string, ...]}, ...three of them]}`
+
+const reviewPromptOf = ({ ticket, avoid }: ReviewInput, changes: readonly FileChange[]): string =>
+  [
+    promptOf(changes, ticket),
+    ...(avoid.length === 0
+      ? []
+      : [`Already asked; ask other questions:\n${avoid.map(prompt => `- ${prompt}`).join('\n')}`]),
+  ].join('\n\n')
+
+/**
+ * Asks `model` once for the Boss Fight's review Questions about `input`'s
+ * diff, and returns those that hold to the contract (validateQuestion), at
+ * most REVIEW_QUESTION_COUNT, none already asked (`avoid`) or asked twice.
+ * A reply with none is a skip, by reason; it never throws.
+ */
+export const generateReviewQuestions = async (
+  input: ReviewInput,
+  model: Model,
+): Promise<ReviewGenerated> => {
+  const changes = trimToBudget(input.changes, MAX_REVIEW_DIFF_CHARS)
+  if (changes.length === 0) {
+    return { ok: false, reason: 'no-change', detail: 'the Quest has no diff to review' }
+  }
+
+  let reply: ModelReply
+  try {
+    reply = await model({ system: REVIEW_SYSTEM, prompt: reviewPromptOf(input, changes) })
+  } catch (error) {
+    return { ok: false, reason: 'model-failed', detail: String(error) }
+  }
+  if (!reply.ok) {
+    return { ok: false, reason: 'model-failed', detail: reply.reason }
+  }
+
+  const parsed = objectIn(reply.text)
+  if (parsed === undefined) {
+    return { ok: false, reason: 'not-json', detail: reply.text.slice(0, 200) }
+  }
+
+  const listed = (parsed as { questions?: unknown }).questions
+  const asked = new Set(input.avoid.map(prompt => prompt.trim()))
+  const questions: QuestionContent[] = []
+  const problems: string[] = []
+  for (const each of Array.isArray(listed) ? listed : []) {
+    const checked = validateQuestion(each, changes)
+    if (!checked.ok) {
+      problems.push(checked.detail)
+    } else if (!asked.has(checked.question.prompt) && questions.length < REVIEW_QUESTION_COUNT) {
+      asked.add(checked.question.prompt)
+      questions.push(checked.question)
+    }
+  }
+
+  return questions.length > 0
+    ? { ok: true, questions }
+    : { ok: false, reason: 'invalid', detail: problems.length > 0 ? problems.join('; ') : 'no new question' }
+}
+
+/**
+ * The changes a commit made, from `git show --format= <sha>`'s unified diff:
+ * one per file, its path (the old one for a deleted file) and its hunks.
+ * A binary file has no lines to read, so it is left out.
+ */
+export const changesOfGitShow = (show: string): FileChange[] =>
+  show
+    .split(/^(?=diff --git )/m)
+    .flatMap(section => {
+      const newPath = /^\+\+\+ b\/(.+)$/m.exec(section)?.[1]
+      const oldPath = /^--- a\/(.+)$/m.exec(section)?.[1]
+      const hunks = section.indexOf('\n@@ ')
+      const path = newPath ?? oldPath
+      if (path === undefined || hunks === -1) {
+        return []
+      }
+
+      return [{ path, diff: section.slice(hunks + 1).replace(/\n+$/, '') }]
+    })

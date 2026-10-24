@@ -1,9 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import { generateQuestion, QUESTION_MODEL } from '../src/content-generator'
+import { bossAnswerText, bossOutcomeText, bossQuestionText, drawBoss, NO_BOSS } from '../src/boss'
+import type { BossActions } from '../src/boss'
+import {
+  changesOfGitShow,
+  generateQuestion,
+  generateReviewQuestions,
+  QUESTION_MODEL,
+  REVIEW_QUESTION_COUNT,
+} from '../src/content-generator'
 import type { Model, QuestionInput } from '../src/content-generator'
-import { newGame, step } from '../src/engine'
+import { isUnderWay, newGame, step } from '../src/engine'
 import type { Effect, FileChange, GameEvent, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
 import { drawHud } from '../src/hud'
 import {
@@ -12,6 +20,7 @@ import {
   readRegionFile,
   recordModulesDiscovered,
   recordQuestAbandoned,
+  recordQuestClosed,
   recordQuestStarted,
   savePlayer,
 } from '../src/persistence'
@@ -25,7 +34,7 @@ import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../sr
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
 import { rulesOf } from '../src/settings'
-import { translateCommand, translateMeasure, translateToolCall } from '../src/translate'
+import { translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard } from '../types'
 
@@ -53,6 +62,8 @@ const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 const SCENE = { id: 'scene', title: 'Scene' } as const
 
 const SAGE = { id: 'sage', title: 'The Sage' } as const
+
+const BOSS = { id: 'boss', title: 'The Boss' } as const
 
 /**
  * Haiku through the session's own client and credentials (`$.model.complete`):
@@ -209,6 +220,82 @@ const sageActions = ($: EngineInterface, rules: Rules): SageActions => ({
 })
 
 /**
+ * The diff the Boss Fight reviews: the commit's own, from `git show` where
+ * the commit ran; the Quest's changes when git cannot give it (not a repo,
+ * git missing, the sha gone, no text change).
+ */
+async function bossFightDiff(
+  $: EngineInterface,
+  { sha, cwd, changes }: Extract<Effect, { type: 'BOSS_FIGHT_SUMMONED' }>,
+): Promise<FileChange[]> {
+  const shown = await $.process
+    .run(['git', 'show', '--format=', '--no-color', '--no-ext-diff', sha], cwd === null ? undefined : { cwd })
+    .catch(() => null)
+  const committed = shown?.exitCode === 0 ? changesOfGitShow(shown.stdout) : []
+
+  return committed.length > 0 ? committed : changes
+}
+
+/**
+ * Makes the Boss Fight's review Questions from its diff and starts the fight.
+ * Each Haiku call asks for the Questions still missing, while the Boss
+ * Fight's budget lasts; whatever Questions it has then (one to three) make
+ * the fight. With none (no diff, Haiku failed, no budget) the Quest closes
+ * unfought. Started unawaited after the commit's tool call has returned.
+ */
+async function summonBossFight(
+  $: EngineInterface,
+  summoned: Extract<Effect, { type: 'BOSS_FIGHT_SUMMONED' }>,
+  rules: Rules,
+): Promise<void> {
+  const changes = await bossFightDiff($, summoned)
+  let ticket: string | null | undefined
+  const questions: QuestionContent[] = []
+  let reason = changes.length === 0 ? 'no diff to review' : 'its budget is spent'
+
+  while (changes.length > 0 && questions.length < REVIEW_QUESTION_COUNT) {
+    // Skipped, or its Quest replaced, meanwhile: another Quest's budget is
+    // not this Boss Fight's to spend.
+    const fight = (await read($, game))?.bossFight
+    if (fight?.status !== 'summoned' || fight.ticket !== summoned.ticket) {
+      return
+    }
+    if (!(await spendHaikuCall($, 'boss', rules))) {
+      break
+    }
+    ticket ??= await activeTicket($)
+    const generated = await generateReviewQuestions(
+      { changes, ticket, avoid: questions.map(question => question.prompt) },
+      haikuModel($),
+    )
+    if (generated.ok) {
+      questions.push(...generated.questions.slice(0, REVIEW_QUESTION_COUNT - questions.length))
+    } else {
+      reason = `${generated.reason}: ${generated.detail}`
+      $.ui.log(`The boss skipped its Questions (${reason})`, { to: 'debug' })
+    }
+  }
+
+  await play(
+    $,
+    questions.length > 0
+      ? { type: 'BOSS_FIGHT_READY', ticket: summoned.ticket, questions, at: await $.clock.now() }
+      : { type: 'BOSS_FIGHT_UNAVAILABLE', ticket: summoned.ticket, reason },
+    rules,
+  )
+}
+
+/** What the boss's dialogue box's buttons do. */
+const bossActions = ($: EngineInterface, rules: Rules): BossActions => ({
+  answer: (id, choice) => {
+    void $.clock.now().then(at => play($, { type: 'BOSS_ANSWERED', id, choice, at }, rules))
+  },
+  skip: () => {
+    void play($, { type: 'BOSS_FIGHT_SKIPPED' }, rules)
+  },
+})
+
+/**
  * Opens the Scene, unasked, when one of `surfaces` draws its art. In the
  * terminal alone it waits for /scene: the HUD already tells the Encounter.
  */
@@ -350,6 +437,24 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
       $.ui.toast(`Quest started: ${effect.ticket}`)
       await recordQuestStarted($, effect.ticket)
     }
+    if (effect.type === 'BOSS_FIGHT_SUMMONED') {
+      $.ui.toast(`A boss approaches Quest ${effect.ticket}: the commit summoned the Boss Fight.`)
+      // Never awaited: the commit's tool call returns at once.
+      void summonBossFight($, effect, rules).catch(() => undefined)
+    }
+    if (effect.type === 'BOSS_FIGHT_STARTED') {
+      $.ui.toast(`The boss of Quest ${effect.ticket} bars the way: ${effect.hp} review Questions. /boss`)
+    }
+    if (effect.type === 'BADGE_EARNED') {
+      $.ui.toast(`Badge earned: ${effect.badge.name}`)
+    }
+    if (effect.type === 'QUEST_CLOSED') {
+      const fight = saved?.bossFight
+      if (fight != null) {
+        $.ui.toast(bossOutcomeText(fight))
+      }
+      await recordQuestClosed($, effect.ticket, effect.outcome)
+    }
   }
 }
 
@@ -394,8 +499,28 @@ export const register: Register = (on, options) => {
         description: 'Answer the Sage\'s Questions; /sage A-D answers the first one',
       })
       .catch(() => undefined)
+    await $.command
+      .register({
+        name: 'boss',
+        description: 'Fight the Quest\'s Boss Fight; /boss A-D answers, /boss skip skips it',
+      })
+      .catch(() => undefined)
 
     await openSceneForArt($, await $.session.surfaces().catch(() => []))
+
+    // A Boss Fight summoned before a reload of the mod may have lost the
+    // unawaited work making its Questions: it is made again. Should that work
+    // still run, the first to finish starts the fight and the other's
+    // Questions start nothing; the budget bounds the calls either way.
+    const resumed = await read($, game)
+    if (resumed?.bossFight?.status === 'summoned' && resumed.quest?.ticket === resumed.bossFight.ticket) {
+      const { ticket, sha, cwd } = resumed.bossFight
+      void summonBossFight(
+        $,
+        { type: 'BOSS_FIGHT_SUMMONED', ticket, sha, cwd: cwd ?? null, changes: resumed.quest.changes ?? [] },
+        rules,
+      ).catch(() => undefined)
+    }
 
     const started = await next(e)
 
@@ -417,6 +542,12 @@ export const register: Register = (on, options) => {
 
     if (event !== null) {
       await play($, event, rules)
+    }
+
+    // A Bash call may run a check and commit too (`npm test && git commit`).
+    const commit = translateCommit(e, outcome)
+    if (commit !== null) {
+      await play($, commit, rules)
     }
 
     return outcome
@@ -480,6 +611,40 @@ export const register: Register = (on, options) => {
     return { text: questionText(first, current?.questions.length ?? 1) }
   })
 
+  // /boss opens the boss's dialogue box and tells its Question as text, for
+  // the terminal; /boss A to D answers it, /boss skip skips the fight.
+  on('command.run', { command: 'boss' }, async ($, e) => {
+    const args = e.args.trim()
+    const fight = (await read($, game))?.bossFight ?? null
+    await $.ui.open(BOSS).catch(() => undefined)
+
+    if (!isUnderWay(fight)) {
+      return { text: fight === null ? NO_BOSS : `${NO_BOSS} ${bossOutcomeText(fight)}` }
+    }
+
+    if (args.toLowerCase() === 'skip') {
+      await play($, { type: 'BOSS_FIGHT_SKIPPED' }, rules)
+      const skipped = (await read($, game))?.bossFight
+
+      return { text: skipped == null ? NO_BOSS : bossOutcomeText(skipped) }
+    }
+
+    const choice = args === '' ? undefined : choiceOf(args)
+    if (args !== '' && choice === undefined) {
+      return { text: 'Answer with /boss A, B, C or D, or skip it with /boss skip.' }
+    }
+
+    const first = fight.questions[0]
+    if (choice === undefined || first === undefined) {
+      return { text: fight.status === 'fighting' ? bossQuestionText(fight) : bossOutcomeText(fight) }
+    }
+
+    await play($, { type: 'BOSS_ANSWERED', id: first.id, choice, at: await $.clock.now() }, rules)
+    const answered = (await read($, game))?.bossFight
+
+    return { text: answered == null ? 'The boss did not hear that answer.' : bossAnswerText(answered) }
+  })
+
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
     await openSceneForArt($, [e.surface])
@@ -515,9 +680,11 @@ export const register: Register = (on, options) => {
 
   // The Scene draws what the game already holds: it never runs in a tool
   // call, so it never slows one.
-  on('ui.render', { component: 'Pane', requestId: SCENE.id }, async ($, e) =>
-    drawScene($, e, (await read($, game))?.encounter ?? null),
-  )
+  on('ui.render', { component: 'Pane', requestId: SCENE.id }, async ($, e) => {
+    const current = await read($, game)
+
+    return drawScene($, e, current?.encounter ?? null, current?.bossFight ?? null)
+  })
 
   on('ui.render', { component: 'Pane', requestId: SAGE.id }, async ($, e) => {
     const current = await read($, game)
@@ -529,6 +696,10 @@ export const register: Register = (on, options) => {
       sageActions($, rules),
     )
   })
+
+  on('ui.render', { component: 'Pane', requestId: BOSS.id }, async ($, e) =>
+    drawBoss($, e, (await read($, game))?.bossFight ?? null, bossActions($, rules)),
+  )
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, game)

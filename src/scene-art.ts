@@ -2,7 +2,7 @@
 // the bundled 16-bit sprites (src/sprites.ts). The animation is SMIL, so the
 // surface plays it with no script and no redraw from the mod.
 
-import type { BattleEncounter, CheckKind, CraftingEncounter, Encounter } from '../types'
+import type { BattleEncounter, BossFight, CheckKind, CraftingEncounter, Encounter } from '../types'
 import { SPRITE_SIZE, SPRITES } from './sprites'
 import type { Sprite, SpriteName } from './sprites'
 
@@ -332,6 +332,94 @@ export const sceneSvg = (encounter: Encounter | null, width: number): string => 
     backdrop() +
     banners() +
     actors +
+    '</svg>'
+  )
+}
+
+/** Where the boss stands, in pixels: twice a tile's size, on the floor's right. */
+const BOSS_X = 4 * SPRITE_SIZE + 4
+const BOSS_Y = SPRITE_SIZE + 6
+const BOSS_SCALE = 2
+
+/**
+ * The boss's HP bar over its head, one segment per Question: dark where a
+ * hit landed, red where HP remains. The last hit drains from what the boss
+ * had to what it has.
+ */
+const bossHpBar = (fight: BossFight, struck: boolean): string => {
+  const segments = Math.max(1, fight.maxHp)
+  const gap = 1
+  const width = Math.floor((2 * SPRITE_SIZE - gap * (segments - 1)) / segments)
+  const y = BOSS_Y - 5
+  const frame =
+    `<rect x="${BOSS_X - 1}" y="${y - 1}" width="${segments * width + (segments - 1) * gap + 2}" height="4" fill="#181425"/>`
+  const cells = Array.from({ length: segments }, (_, at) => {
+    const x = BOSS_X + at * (width + gap)
+    const isLeft = at < fight.hp
+    const isLastHit = struck && at === fight.hp
+    const fill = isLeft
+      ? `<rect x="${x}" y="${y}" width="${width}" height="2" fill="#e43b44"/>`
+      : isLastHit
+        ? `<rect x="${x}" y="${y}" width="${width}" height="2" fill="#e43b44">${beat('opacity', '1;0', `0;${STRIKES_AT}`)}</rect>`
+        : ''
+
+    return `<rect x="${x}" y="${y}" width="${width}" height="2" fill="#3a4466"/>${fill}`
+  }).join('')
+
+  return frame + cells
+}
+
+/**
+ * The Boss Fight: the hero faces the boss, drawn twice a monster's size, its
+ * HP bar a segment per Question. Summoned, the boss fades in; a right answer
+ * is the hero's lunge, the boss's flash and a segment draining; a wrong one,
+ * the boss's lunge and the hero's flash. Won, the boss falls under
+ * sparkles; skipped or unfought, it fades to a shadow.
+ */
+export const bossSceneSvg = (fight: BossFight, width: number): string => {
+  const height = Math.round((width * HEIGHT) / WIDTH)
+  const last = fight.lastAnswer
+  const struck = fight.status !== 'summoned' && last?.isCorrect === true
+  const countered = fight.status === 'fighting' && last !== null && !last.isCorrect
+  const boss =
+    `<g transform="translate(${BOSS_X} ${BOSS_Y}) scale(${BOSS_SCALE})">${drawSprite('boss')}</g>`
+  const bob = (period: number) =>
+    `<animateTransform attributeName="transform" type="translate" values="0 0;0 -1" calcMode="discrete" dur="${period}s" repeatCount="indefinite"/>`
+  const heroLunge = struck
+    ? `<animateTransform attributeName="transform" type="translate" values="${HERO_X} ${PATH_Y};${BOSS_X - 12} ${PATH_Y};${HERO_X} ${PATH_Y}" keyTimes="0;${STRIKES_AT};${STRIKES_AT * 2}" dur="${BEAT}s" repeatCount="indefinite"/>`
+    : ''
+  const heroFlash = countered ? beat('opacity', '1;0.2;1', `0;${STRIKES_AT};${STRIKES_AT * 1.5}`) : ''
+  const theHero =
+    `<g transform="translate(${HERO_X} ${PATH_Y})">${heroLunge}` +
+    `<g>${drawSprite('hero')}${bob(0.5)}</g>${heroFlash}</g>`
+
+  let theBoss: string
+  if (fight.status === 'won') {
+    const sparkles = SPARKLES.map(
+      ({ x: left, y: top, begin }) =>
+        `<rect x="${left - 18}" y="${top}" width="1" height="1" fill="#fee761">` +
+        `<animate attributeName="opacity" values="0;1;0" calcMode="discrete" dur="0.9s" begin="${begin}s" repeatCount="indefinite"/></rect>`,
+    ).join('')
+    theBoss = `<g>${boss}${beat('opacity', '1;0.5;0', `0;${STRIKES_AT};${STRIKES_AT * 2}`)}</g>${sparkles}`
+  } else if (fight.status === 'skipped' || fight.status === 'unfought') {
+    theBoss = `<g opacity="0.3">${boss}</g>`
+  } else if (fight.status === 'summoned') {
+    theBoss = `<g>${boss}<animate attributeName="opacity" values="0;0.6;0" dur="2s" repeatCount="indefinite"/></g>`
+  } else {
+    const lunge = countered
+      ? `<animateTransform attributeName="transform" type="translate" values="0 0;${HERO_X + 12 - BOSS_X} 0;0 0" keyTimes="0;${STRIKES_AT};${STRIKES_AT * 2}" dur="${BEAT}s" repeatCount="indefinite"/>`
+      : bob(0.8)
+    const flash = struck ? beat('opacity', '1;0.2;1', `0;${STRIKES_AT};${STRIKES_AT * 1.5}`) : ''
+    theBoss = `<g><g>${boss}${lunge}</g>${flash}</g>`
+  }
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${width}" height="${height}" shape-rendering="crispEdges">` +
+    backdrop() +
+    banners() +
+    theBoss +
+    (fight.status === 'summoned' ? '' : bossHpBar(fight, struck)) +
+    theHero +
     '</svg>'
   )
 }
