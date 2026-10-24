@@ -135,9 +135,10 @@ describe('The Haiku budget', () => {
     await $.session.start(START)
     await run($, 'mattpocock-skills:implement', '#11')
 
-    // Twelve different changes: a Write of a new file, each with a body of its own.
+    // Twelve different changes: a Write of a new file, each with a body of
+    // its own, three lines long so it forges.
     for (let n = 0; n < 12; n += 1) {
-      const content = `export const n = ${n}\n`
+      const content = `export const n = ${n}\nexport const m = ${n}\nexport const o = ${n}\n`
       const write = {
         input: { ...writeNewFile.input, content, tool_use_id: `toolu_budget_${n}` },
         result: { ...writeNewFile.result, result: { ...writeNewFile.result.result, content } },

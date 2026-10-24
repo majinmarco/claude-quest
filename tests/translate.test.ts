@@ -70,6 +70,53 @@ describe('Event translator: tool.call', () => {
     expect(translateToolCall(relative, read.result, ROOT)).toMatchObject({ module: 'src' })
   })
 
+  test('a Module is the first two segments of the folder: deeper folders belong to it', () => {
+    const deep = { ...read.input, file_path: '/work/claude-quest/packages/api/src/routes/users.ts' }
+
+    expect(translateToolCall(deep, read.result, ROOT)).toMatchObject({ module: 'packages/api' })
+  })
+
+  test('a file one folder deep is in that folder\'s Module', () => {
+    const shallow = { ...read.input, file_path: '/work/claude-quest/src/engine.ts' }
+
+    expect(translateToolCall(shallow, read.result, ROOT)).toMatchObject({ module: 'src' })
+  })
+
+  const IGNORED = ['node_modules', '.git', 'dist', 'build', 'target', 'vendor', '.venv', 'coverage']
+  for (const folder of IGNORED) {
+    test(`a Read under ${folder} is in no Module`, () => {
+      const ignored = { ...read.input, file_path: `/work/claude-quest/${folder}/pkg/index.js` }
+
+      expect(translateToolCall(ignored, read.result, ROOT)).toEqual({
+        type: 'FILE_READ',
+        path: `/work/claude-quest/${folder}/pkg/index.js`,
+        module: null,
+      })
+    })
+  }
+
+  test('a search of an ignored folder itself is in no Module', () => {
+    const folder = { ...glob.input, path: '/work/claude-quest/node_modules' }
+
+    expect(translateToolCall(folder, glob.result, ROOT)).toMatchObject({ module: null })
+  })
+
+  test('a folder only named like an ignored one deeper down is still a Module', () => {
+    const nested = { ...read.input, file_path: '/work/claude-quest/src/build/plan.ts' }
+
+    expect(translateToolCall(nested, read.result, ROOT)).toMatchObject({ module: 'src/build' })
+  })
+
+  test('Windows backslash paths are split as slashes', () => {
+    const relative = { ...read.input, file_path: 'src\\engine\\x.ts' }
+    const absolute = { ...read.input, file_path: 'C:\\work\\quest\\packages\\api\\src\\x.ts' }
+    const ignored = { ...read.input, file_path: 'C:\\work\\quest\\node_modules\\a\\b.js' }
+
+    expect(translateToolCall(relative, read.result, ROOT)).toMatchObject({ module: 'src/engine' })
+    expect(translateToolCall(absolute, read.result, 'C:\\work\\quest')).toMatchObject({ module: 'packages/api' })
+    expect(translateToolCall(ignored, read.result, 'C:\\work\\quest')).toMatchObject({ module: null })
+  })
+
   test('a Grep of a file becomes a FILE_READ of it, in its directory\'s module', () => {
     expect(translateToolCall(grep.input, grep.result, ROOT)).toEqual({
       type: 'FILE_READ',
@@ -228,7 +275,7 @@ describe('Event translator: real runner output', () => {
     ['jestPassing', { type: 'TEST_PASS', check: 'jest', kind: 'test' }],
     ['jestSuiteBroken', { type: 'TEST_FAIL', check: 'jest', kind: 'test', failures: null }],
     ['pytestFailing', { type: 'TEST_FAIL', check: 'pytest', kind: 'test', failures: 3 }],
-    ['pytestPassing', { type: 'TEST_PASS', check: 'pytest -q', kind: 'test' }],
+    ['pytestPassing', { type: 'TEST_PASS', check: 'pytest', kind: 'test' }],
     ['pytestCollectionError', { type: 'TEST_FAIL', check: 'pytest', kind: 'test', failures: 1 }],
     ['tscFailing3', { type: 'TEST_FAIL', check: 'tsc --noEmit bad3.ts', kind: 'typecheck', failures: 3 }],
     ['tscFailing1', { type: 'TEST_FAIL', check: 'tsc --noEmit bad1.ts', kind: 'typecheck', failures: 1 }],
@@ -284,6 +331,18 @@ describe('Event translator: which Bash commands are checks', () => {
     ['cd app && CI=1 npx vitest run 2>&1', 'vitest run', 'test'],
     ['npm run test:unit', 'npm run test:unit', 'test'],
     ['(cd app; npx --yes vitest run > out.txt)', 'vitest run', 'test'],
+    // Output-only flags are left out: the same Check, however it prints.
+    ['vitest run -q', 'vitest run', 'test'],
+    ['npx vitest run --reporter=dot', 'vitest run', 'test'],
+    ['vitest run --reporter dot src', 'vitest run src', 'test'],
+    ['jest --verbose --silent --reporters=default', 'jest', 'test'],
+    ['pytest -v tests', 'pytest tests', 'test'],
+    // To tsc and vitest -v is the version: no output flag, another command.
+    ['tsc -v', 'tsc -v', 'typecheck'],
+    ['vitest -v', 'vitest -v', 'test'],
+    ['eslint --no-color --color=always src', 'eslint src', 'lint'],
+    ['npm test -- --reporter=verbose', 'npm test', 'test'],
+    ['npm test -- -q src', 'npm test -- src', 'test'],
   ] as const
 
   for (const [command, check, kind] of CHECKS) {
@@ -457,6 +516,18 @@ describe('Event translator: a file changed', () => {
     const { input, result } = changes.editReplaceAll
 
     expect(translateToolCall(input, result, FORGE)).toMatchObject({ linesAdded: 32, linesRemoved: 32 })
+  })
+
+  test('an Edit replacing all occurrences says so: a rename, never a major edit', () => {
+    const { input, result } = changes.editReplaceAll
+
+    expect(translateToolCall(input, result, FORGE)).toMatchObject({ type: 'FILE_EDIT', replaceAll: true })
+  })
+
+  test('an Edit of one occurrence is no replace-all', () => {
+    const { input, result } = changes.editTwelveLines
+
+    expect(translateToolCall(input, result, FORGE)).not.toHaveProperty('replaceAll')
   })
 
   test('a Write over an existing file is no new file: its diff is counted', () => {

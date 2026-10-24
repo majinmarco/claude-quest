@@ -111,6 +111,11 @@ export type Encounter =
       isFirstVisit: boolean
       /** The XP it paid, pools capped; absent in one kept by an older mod. */
       xp?: number
+      /**
+       * Of `xp`, the Wisdom XP a first visit paid for the discovery; absent
+       * on a later visit, and in one kept by an older mod.
+       */
+      discoveryXp?: number
     }
   | BattleEncounter
   | CraftingEncounter
@@ -327,10 +332,11 @@ export type GameState = {
   quest: Quest | null
   /**
    * The Modules the Player has explored in this Region, in order of first
-   * visit. A Module is the folder a read or search was in, relative to the
-   * project's root (`src`, `tests/fixtures`, `.` for the root itself); a
-   * folder outside the project is no Module. Seeded from the Region file at
-   * session start.
+   * visit. A Module is the first two segments of the folder a read or search
+   * was in, relative to the project's root (`src`, `packages/api`, `.` for
+   * the root itself); a folder outside the project, or in an ignored
+   * root-level folder (`node_modules`, `dist`...), is no Module. Seeded at
+   * session start from the Player's `$.store` key `discovered:<root>`.
    */
   visitedModules: string[]
   /**
@@ -387,8 +393,9 @@ export type Region = {
   /** Where the Region's Quests come from; GitHub Issues when absent. */
   questSource?: QuestSourceSetting
   /**
-   * The Modules the Player has explored in the project, in order of first
-   * visit (GameState.visitedModules), so a first visit is a first visit once.
+   * The Modules an older mod kept here, in order of first visit. Read once,
+   * to seed the Player's own (`$.store` key `discovered:<root>`), and never
+   * written again.
    */
   discoveredModules?: string[]
 }
@@ -475,6 +482,8 @@ declare module 'claude-code' {
       board: QuestBoard
       /** Questions made, by their change's hash: see src/question-cache.ts. */
       questionCache: { key: string; question: QuestionContent }[]
+      /** Whether the Scene opened itself this session: once at most. */
+      sceneOpened: boolean
     }
   }
 }

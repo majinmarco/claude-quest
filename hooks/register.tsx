@@ -15,7 +15,7 @@ import { isUnderWay, newGame, step } from '../src/engine'
 import type { Effect, FileChange, GameEvent, HaikuPurpose, QuestionContent, Rules } from '../src/engine'
 import { badgesText, drawHud } from '../src/hud'
 import {
-  discoveredModulesOf,
+  loadDiscovered,
   loadPlayer,
   loadPlayerMigrated,
   migratePlayer,
@@ -35,8 +35,8 @@ import { questSourceFor, questSourceSettingOf, unavailable } from '../src/quest-
 import { answerText, choiceOf, drawSage, NO_QUESTION, questionText } from '../src/sage'
 import type { SageActions } from '../src/sage'
 import { drawScene } from '../src/scene'
-import { rulesOf } from '../src/settings'
-import { translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
+import { autoOpenSceneOf, rulesOf } from '../src/settings'
+import { moduleOfFolder, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { Difficulty, QuestBoard, XpPool } from '../types'
 
@@ -58,6 +58,9 @@ const questionCache = atom(
   { plugin: 'quest-mod', key: 'questionCache' } as const,
   [] as QuestionCache,
 )
+
+/** Whether the Scene has opened itself this session: it does so once at most. */
+const sceneOpened = atom({ plugin: 'quest-mod', key: 'sceneOpened' } as const, false)
 
 const QUEST_BOARD = { id: 'quest-board', title: 'Quest Board' } as const
 
@@ -301,14 +304,26 @@ const bossActions = ($: EngineInterface, rules: Rules): BossActions => ({
 })
 
 /**
- * Opens the Scene, unasked, when one of `surfaces` draws its art. In the
- * terminal alone it waits for /scene: the HUD already tells the Encounter.
+ * Opens the Scene, unasked, when one of `surfaces` draws its art, at most once
+ * per session, and only with the `autoOpenScene` setting on. In the terminal
+ * alone it waits for /scene: the HUD already tells the Encounter.
  */
 async function openSceneForArt(
   $: EngineInterface,
   surfaces: readonly RenderSurface[],
+  autoOpen: boolean,
 ): Promise<void> {
-  if (surfaces.some(surface => surface !== 'terminal')) {
+  if (!autoOpen || !surfaces.some(surface => surface !== 'terminal')) {
+    return
+  }
+
+  // Taken in one update, so a start and an attach at once open it once.
+  let wasOpened = true
+  await update($, sceneOpened, opened => {
+    wasOpened = opened
+    return true
+  })
+  if (!wasOpened) {
     await $.ui.open(SCENE).catch(() => undefined)
   }
 }
@@ -429,11 +444,15 @@ async function play($: EngineInterface, event: GameEvent, rules: Rules): Promise
     await savePlayer($, saved.player)
   }
 
-  // The session's whole list goes to the Region file, not awaited: a file
-  // write never holds up the tool call that made the discovery. One that
-  // fails leaves the discovery to this session, until the next writes it.
+  // The session's whole list goes to the Player's for this project, not
+  // awaited: a write never holds up the tool call that made the discovery.
+  // One that fails leaves the discovery to this session, until the next
+  // writes it.
   if (saved !== null && effects.some(effect => effect.type === 'MODULE_DISCOVERED')) {
-    void recordModulesDiscovered($, saved.visitedModules).catch(() => undefined)
+    void $.session
+      .root()
+      .then(root => recordModulesDiscovered($, root, saved.visitedModules))
+      .catch(() => undefined)
   }
 
   for (const effect of effects) {
@@ -506,6 +525,7 @@ export const register: Register = (on, options) => {
   // The Player's settings, from /config: a change there reloads the mod, and
   // register runs again with the new values.
   const rules = rulesOf(options)
+  const autoOpenScene = autoOpenSceneOf(options)
 
   on('session.start', async ($, e, next) => {
     // After a reload of the mod the session's game is still in $.state; one
@@ -526,10 +546,9 @@ export const register: Register = (on, options) => {
     }
     const root = await $.session.root().catch(() => null)
     const regionName = root === null ? null : (root.split(/[\\/]/).filter(Boolean).pop() ?? null)
-    // The modules explored in this Region in earlier sessions are no first
-    // visit; with no Region file to read, every module is new.
-    const region = await readRegionFile($).catch(() => ({ ok: false as const }))
-    const discovered = region.ok ? discoveredModulesOf(region.value) : []
+    // The modules the Player explored in this project in earlier sessions
+    // are no first visit (seeded once from an older mod's Region file).
+    const discovered = root === null ? [] : await loadDiscovered($, root).catch(() => [])
     await update($, game, current => {
       const resumed = { ...newGame(player), ...current }
 
@@ -537,7 +556,11 @@ export const register: Register = (on, options) => {
         ...resumed,
         player,
         region: regionName,
-        visitedModules: [...new Set([...discovered, ...resumed.visitedModules])],
+        // A game kept by an older mod may hold deeper folders: each is the
+        // Module it is in now.
+        visitedModules: [
+          ...new Set([...discovered, ...resumed.visitedModules.map(moduleOfFolder).filter(module => module !== null)]),
+        ],
       }
     })
 
@@ -564,7 +587,7 @@ export const register: Register = (on, options) => {
       })
       .catch(() => undefined)
 
-    await openSceneForArt($, await $.session.surfaces().catch(() => []))
+    await openSceneForArt($, await $.session.surfaces().catch(() => []), autoOpenScene)
 
     // A Boss Fight summoned before a reload of the mod may have lost the
     // unawaited work making its Questions: it is made again. Should that work
@@ -711,7 +734,7 @@ export const register: Register = (on, options) => {
 
   on('session.attach', async ($, e, next) => {
     const attached = await next(e)
-    await openSceneForArt($, [e.surface])
+    await openSceneForArt($, [e.surface], autoOpenScene)
 
     return attached
   })

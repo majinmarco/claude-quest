@@ -136,7 +136,19 @@ export const describeScene = (encounter: Encounter | null): string => {
 
   const where = `Exploring ${nameOf(encounter.target)} ${whereIn(encounter.module)}`
 
-  return encounter.isFirstVisit ? `${where} · first visit${paidXp(encounter.xp, ', ')}` : where
+  if (!encounter.isFirstVisit) {
+    return where
+  }
+
+  // The read's XP, then the discovery's, which is Wisdom; an older mod's
+  // Exploration has their sum alone.
+  const discoveryXp = encounter.discoveryXp
+  if (discoveryXp === undefined) {
+    return `${where} · first visit${paidXp(encounter.xp, ', ')}`
+  }
+  const readXp = (encounter.xp ?? 0) - discoveryXp
+
+  return `${where}${paidXp(readXp, ' · ')} · first visit${paidXp(discoveryXp, ', ', 'Wisdom')}`
 }
 
 export function drawScene(

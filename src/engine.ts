@@ -27,6 +27,11 @@ export type GameEvent =
       linesAdded: number
       linesRemoved: number
       diff: string
+      /**
+       * True for an Edit that replaced every occurrence of a string (a rename
+       * across the file): never a major edit, however many lines it touched.
+       */
+      replaceAll?: boolean
     }
   | {
       type: 'SESSION_MEASURED'
@@ -223,6 +228,13 @@ export const MAJOR_EDIT_LINES = 10
  * near-complete rewrite, a major edit however small the file: 4 of 5 lines.
  */
 export const REWRITE_SHARE = 0.8
+
+/**
+ * The fewest lines a Crafting changes: a new file adds at least this many,
+ * and a near-complete rewrite changes at least this many, so an empty stub
+ * or a one-line file rewritten forges nothing.
+ */
+export const MIN_CRAFT_LINES = 3
 
 /** The XP a Crafting pays: something made, by Claude, so ambient. */
 export const CRAFTING_XP = 5
@@ -497,23 +509,17 @@ const requestHaikuCall = (
   }
 }
 
-// A new file, or a major edit, is forged: the blacksmith makes an item named
-// after the component. A major edit changes MAJOR_EDIT_LINES lines or more,
-// or rewrites a file near completely (REWRITE_SHARE of its lines replaced).
-// A minor edit plays nothing.
+// A new file of MIN_CRAFT_LINES lines or more, or a major edit, is forged:
+// the blacksmith makes an item named after the component. A major edit
+// changes MAJOR_EDIT_LINES lines or more, or rewrites a file near completely
+// (REWRITE_SHARE of its lines replaced, MIN_CRAFT_LINES lines at least). An
+// Edit of every occurrence (`replace_all`, a rename) is never major. Anything
+// else plays nothing; its change is still kept on the Quest and the Battles.
 const craft = (
   state: GameState,
   event: Extract<GameEvent, { type: 'FILE_EDIT' }>,
 ): { state: GameState; effects: Effect[] } => {
-  const { linesBefore } = event
-  const changed = Math.max(event.linesAdded, event.linesRemoved)
-  // Emptying a file makes nothing, so a rewrite must add lines too.
-  const isRewrite =
-    linesBefore !== null &&
-    linesBefore > 0 &&
-    event.linesAdded > 0 &&
-    event.linesRemoved >= REWRITE_SHARE * linesBefore
-  if (!event.isNewFile && changed < MAJOR_EDIT_LINES && !isRewrite) {
+  if (!isForged(event)) {
     return { state, effects: [] }
   }
 
@@ -540,6 +546,28 @@ const craft = (
   }
 }
 
+/** Whether a file change forges an item: a new file of some size, or a major edit. */
+const isForged = (event: Extract<GameEvent, { type: 'FILE_EDIT' }>): boolean => {
+  if (event.isNewFile) {
+    return event.linesAdded >= MIN_CRAFT_LINES
+  }
+  if (event.replaceAll === true) {
+    return false
+  }
+
+  const { linesBefore } = event
+  const changed = Math.max(event.linesAdded, event.linesRemoved)
+  // Emptying a file makes nothing, so a rewrite must add lines too.
+  const isRewrite =
+    linesBefore !== null &&
+    linesBefore > 0 &&
+    event.linesAdded > 0 &&
+    changed >= MIN_CRAFT_LINES &&
+    event.linesRemoved >= REWRITE_SHARE * linesBefore
+
+  return changed >= MAJOR_EDIT_LINES || isRewrite
+}
+
 // A read pays READ_XP, a first visit to a Module DISCOVERY_XP of Wisdom
 // beside it, both ambient: a full pool pays nothing, but a discovery still
 // counts toward the Cartographer.
@@ -554,6 +582,7 @@ const explore = (
   let played = readPaid.state
   const effects: Effect[] = [...readPaid.effects]
   let xp = readPaid.paid
+  let discoveryXp = 0
 
   if (isFirstVisit) {
     const found = pay(played, 'ambient', 'wisdom', DISCOVERY_XP)
@@ -566,10 +595,18 @@ const explore = (
     const awarded = award(tallied, {})
     played = awarded.state
     xp += found.paid
+    discoveryXp = found.paid
     effects.push({ type: 'MODULE_DISCOVERED', module }, ...found.effects, ...awarded.effects)
   }
 
-  const encounter: Encounter = { kind: 'Exploration', target: path, module, isFirstVisit, xp }
+  const encounter: Encounter = {
+    kind: 'Exploration',
+    target: path,
+    module,
+    isFirstVisit,
+    xp,
+    ...(isFirstVisit ? { discoveryXp } : {}),
+  }
 
   return {
     state: { ...played, encounter, quest: attach(played.quest, encounter) },
@@ -792,6 +829,8 @@ const measure = (
 // Quest a refusal would hold the session to its first Quest for good. The
 // Quest already running, started again, carries on with its Encounters. A new
 // Quest heals QUEST_HEAL HP; the Quest just closed, started again, does not.
+// The Battles under way are cleared, silently: they belong to the work before
+// it, and a win now would pay the new Quest for it.
 const startQuest = (
   state: GameState,
   ticket: string,
@@ -808,7 +847,7 @@ const startQuest = (
 
   // The Boss Fight belongs to the Quest it ends: a new Quest has none yet.
   return {
-    state: { ...state, player: rested.player, quest, bossFight: null },
+    state: { ...state, player: rested.player, quest, bossFight: null, battles: [] },
     effects: [...abandoned, { type: 'QUEST_STARTED', ticket }, ...rested.effects],
   }
 }
@@ -850,8 +889,9 @@ const withFix = (
 // A Battle is against one Check: the same command run again. Its
 // monster's HP is the failures the check last counted; each failure fewer on
 // the next run is a hit. A run that counts none readable spawns a one-HP
-// monster, or leaves the one standing as it was. Another Check has its own
-// Battle.
+// placeholder, or leaves the one standing as it was; the first counted run
+// after a placeholder spawns the monster at its count. Another Check has its
+// own Battle.
 const checkFailed = (
   state: GameState,
   event: Extract<GameEvent, { type: 'TEST_FAIL' }>,
@@ -877,14 +917,28 @@ const checkFailed = (
     }
   }
 
+  // The placeholder stood for failures unread: the first count is the real
+  // monster, spawned at its HP, the fix made so far still its fix.
+  if (!open.isCounted && failures !== null) {
+    const battle: Battle = { ...open, hp: failures, maxHp: failures, isCounted: true, firstHp: failures }
+    const encounter = encounterOf(battle, 0, 'spawned')
+
+    return {
+      state: playBattle(
+        state,
+        encounter,
+        state.battles.map(each => (each === open ? battle : each)),
+      ),
+      effects: [{ type: 'ENCOUNTER_STARTED', encounter }],
+    }
+  }
+
   const hp = failures ?? open.hp
   const hits = Math.max(0, open.hp - hp)
   const battle: Battle = {
     ...open,
     hp,
     maxHp: Math.max(open.maxHp, hp),
-    isCounted: failures === null ? open.isCounted : true,
-    ...(open.firstHp === undefined && failures !== null ? { firstHp: hp } : {}),
   }
   const outcome = hits > 0 ? 'hit' : hp > open.hp ? 'grew' : 'stands'
   const encounter = encounterOf(battle, hits, outcome)
@@ -1254,6 +1308,7 @@ const isConsoled = (player: Player, region: string | null, ticket: string): bool
 // and never after a win; lost or skipped, nothing. The tally and Badges follow. The Boss
 // Fight stays, ended, until the next Quest starts; the Encounter under way is
 // put away, so the Scene shows how the Quest ended until the next Encounter.
+// The Battles under way are cleared, paying nothing: the Quest's work is done.
 const closeQuest = (
   state: GameState,
   outcome: QuestOutcome,
@@ -1315,6 +1370,7 @@ const closeQuest = (
       ...awarded.state,
       quest: null,
       encounter: null,
+      battles: [],
       bossFight:
         fight === null
           ? null

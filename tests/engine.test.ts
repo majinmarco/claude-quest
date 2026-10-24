@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { BOSS_ANSWER_XP, DEFAULT_RULES, HASTY_ANSWER_XP, MAX_QUEST_CHANGES, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
+import { BOSS_ANSWER_XP, DEFAULT_RULES, HASTY_ANSWER_XP, MAX_QUEST_CHANGES, isCodeChanging, itemNameOf, MAJOR_EDIT_LINES, MIN_CRAFT_LINES, MAX_FIX_EDITS, QUESTION_XP, REWRITE_SHARE, WRONG_ANSWER_HP, manaLevel, newGame, questXp, step } from '../src/engine'
 import type { GameState, QuestionContent } from '../types'
 
 describe('Game Engine: a new Player', () => {
@@ -60,7 +60,7 @@ describe('Game Engine: first visit to a module', () => {
 
     expect(state.player.xp).toBe(6)
     expect(state.visitedModules).toEqual(['src'])
-    const encounter = { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true, xp: 6 }
+    const encounter = { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true, xp: 6, discoveryXp: 5 }
     expect(state.encounter).toEqual(encounter)
     expect(effects).toEqual([
       { type: 'ENCOUNTER_STARTED', encounter },
@@ -283,7 +283,7 @@ describe('Game Engine: Quest start', () => {
     const { state } = step(once, { type: 'FILE_READ', path: 'src/hud.tsx', module: 'src' })
 
     expect(state.quest?.encounters).toEqual([
-      { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true, xp: 6 },
+      { kind: 'Exploration', target: 'src/engine.ts', module: 'src', isFirstVisit: true, xp: 6, discoveryXp: 5 },
       { kind: 'Exploration', target: 'src/hud.tsx', module: 'src', isFirstVisit: false, xp: 1 },
     ])
   })
@@ -400,6 +400,36 @@ describe('Game Engine: Battle', () => {
     expect(state.encounter).toMatchObject({ hp: 5, maxHp: 5, hits: 0, outcome: 'grew' })
   })
 
+  test('the first counted run keeps its HP as what the win pays by', () => {
+    expect(play(fail(3)).state.battles[0]?.firstHp).toBe(3)
+    expect(play(fail(3), fail(5)).state.battles[0]?.firstHp).toBe(3)
+    expect(play(fail(null)).state.battles[0]).not.toHaveProperty('firstHp')
+  })
+
+  test('a one-HP placeholder then a counted run respawns the monster at the count', () => {
+    const { state, effects } = play(fail(null), fail(4))
+
+    const encounter = {
+      kind: 'Battle',
+      check: 'vitest run',
+      foe: 'test',
+      hp: 4,
+      maxHp: 4,
+      hits: 0,
+      outcome: 'spawned',
+      isCounted: true,
+    }
+    expect(state.encounter).toEqual(encounter)
+    expect(effects).toEqual([{ type: 'ENCOUNTER_STARTED', encounter }])
+    expect(state.battles[0]).toMatchObject({ hp: 4, maxHp: 4, firstHp: 4, isCounted: true })
+  })
+
+  test('a respawned monster keeps the edits made while the placeholder stood', () => {
+    const { state } = play(fail(null), fix, fail(5), pass())
+
+    expect(state.encounter).toMatchObject({ outcome: 'won', xp: 30 })
+  })
+
   test('a failure with no counts mid-Battle leaves the monster as it was', () => {
     const { state } = play(fail(3), fail(null))
 
@@ -469,6 +499,43 @@ describe('Game Engine: Battle', () => {
       'spawned',
       'won',
     ])
+  })
+
+  test('a new Quest for another ticket clears the Battles under way, silently', () => {
+    const questing = play({ type: 'QUEST_START', ticket: '#8' }, fail(3), fix).state
+
+    const { state, effects } = step(questing, { type: 'QUEST_START', ticket: '#9' })
+
+    expect(state.battles).toEqual([])
+    expect(effects.map(effect => effect.type)).toEqual(['QUEST_ABANDONED', 'QUEST_STARTED'])
+    // The check passing now plays nothing: its Battle is gone.
+    expect(step(state, pass()).effects).toEqual([])
+  })
+
+  test('a Quest started between Quests clears the Battles left from before it', () => {
+    const { state } = play(fail(3), { type: 'QUEST_START', ticket: '#9' })
+
+    expect(state.battles).toEqual([])
+  })
+
+  test('the same Quest started again keeps its Battles', () => {
+    const { state } = play({ type: 'QUEST_START', ticket: '#8' }, fail(3), { type: 'QUEST_START', ticket: '#8' })
+
+    expect(state.battles).toHaveLength(1)
+  })
+
+  test('a Quest closing clears the Battles under way, paying nothing for them', () => {
+    const fighting = play(
+      { type: 'QUEST_START', ticket: '#8' },
+      fail(3),
+      fix,
+      { type: 'COMMIT', sha: 'abc1234', cwd: null },
+    ).state
+
+    const { state, effects } = step(fighting, { type: 'BOSS_FIGHT_SKIPPED' })
+
+    expect(state.battles).toEqual([])
+    expect(effects.map(effect => effect.type)).toEqual(['QUEST_CLOSED'])
   })
 
   test('winning can level the Player up', () => {
@@ -541,10 +608,36 @@ describe('Game Engine: Crafting', () => {
     ])
   })
 
-  test('even a tiny new file is forged', () => {
-    const { state } = step(newGame(), { ...newFile, linesAdded: 1 })
+  test('a new file of 3 lines is forged', () => {
+    expect(MIN_CRAFT_LINES).toBe(3)
+
+    const { state } = step(newGame(), { ...newFile, linesAdded: 3 })
 
     expect(state.encounter?.kind).toBe('Crafting')
+  })
+
+  test('a new file of 2 lines or fewer forges nothing: an empty stub is no item', () => {
+    const before = newGame()
+
+    expect(step(before, { ...newFile, linesAdded: 2 })).toEqual({ state: before, effects: [] })
+    expect(step(before, { ...newFile, linesAdded: 0 }).effects).toEqual([])
+  })
+
+  test('an Edit of every occurrence (a rename) is never major, however many lines', () => {
+    const before = newGame()
+
+    expect(step(before, { ...edit(32, 32), replaceAll: true })).toEqual({ state: before, effects: [] })
+    expect(step(before, { ...edit(5, 5, 'src/config.ts', 5), replaceAll: true }).effects).toEqual([])
+  })
+
+  test('a replace-all Edit is still kept in the Quest\'s changes and a Battle\'s fix', () => {
+    const questing = step(newGame(), { type: 'QUEST_START', ticket: '#9' }).state
+    const fighting = step(questing, { type: 'TEST_FAIL', check: 'tsc', kind: 'typecheck', failures: 2 }).state
+
+    const { state } = step(fighting, { ...edit(32, 32), replaceAll: true })
+
+    expect(state.quest?.changes).toEqual([{ path: '/work/forge/src/order-ledger.ts', diff: '@@ -1,1 +1,1 @@\n-a\n+b' }])
+    expect(state.battles[0]?.edits).toEqual([{ path: '/work/forge/src/order-ledger.ts', diff: '@@ -1,1 +1,1 @@\n-a\n+b' }])
   })
 
   test('an edit of 10 changed lines is a major edit, and forges', () => {
@@ -580,6 +673,15 @@ describe('Game Engine: Crafting', () => {
       kind: 'Crafting',
       item: 'Config',
     })
+  })
+
+  test('a rewrite of a 3-line file forges: every line replaced, 3 lines changed', () => {
+    expect(step(newGame(), edit(3, 3, 'src/config.ts', 3)).state.encounter?.kind).toBe('Crafting')
+  })
+
+  test('rewriting a 2-line file is too small to forge, though every line was replaced', () => {
+    expect(step(newGame(), edit(2, 2, 'src/config.ts', 2)).effects).toEqual([])
+    expect(step(newGame(), edit(1, 1, 'src/one.ts', 1)).effects).toEqual([])
   })
 
   test('replacing 3 of 5 lines is no rewrite, and too few lines: minor', () => {

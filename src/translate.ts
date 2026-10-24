@@ -49,26 +49,56 @@ const folderOf = (path: string): string => `${path.replace(/\/+$/, '')}/..`
 /** Whether the last segment looks like a file's name: `engine.ts`, not `.claude`. */
 const namesFile = (path: string): boolean => /[^/.][^/]*\.[^/.]+$/.test(path)
 
+/** How many leading segments of a folder, relative to the root, name its Module. */
+const MODULE_DEPTH = 2
+
 /**
- * The Module a folder is: its path relative to the project's root, `.` for
- * the root itself. A relative folder is taken from the root, where the
- * session works. A folder outside the project, or any folder when the root is
- * not known, is no Module (null).
+ * Folders that hold no code of the project's own (dependencies, build output,
+ * caches): nothing in them is a Module, when they are a root-level folder.
+ */
+const IGNORED_FOLDERS = new Set(['node_modules', '.git', 'dist', 'build', 'target', 'vendor', '.venv', 'coverage'])
+
+/**
+ * A path with Windows' backslashes as slashes (`src\engine\x.ts` is
+ * `src/engine/x.ts`), and a drive's path absolute (`C:\work` is `/C:/work`).
+ */
+const slashed = (path: string): string => path.replace(/\\/g, '/').replace(/^([A-Za-z]:\/)/, '/$1')
+
+/**
+ * The Module a folder is in: the first two segments of its path relative to
+ * the project's root (`src/engine`, `packages/api`), `.` for the root itself.
+ * A relative folder is taken from the root, where the session works. A folder
+ * outside the project, in an ignored root-level folder (`node_modules`,
+ * `dist`...), or any folder when the root is not known, is in no Module (null).
  */
 const moduleOf = (folder: string, root: string | null): string | null => {
   if (root === null) {
     return null
   }
 
-  const base = resolve('/', root)
-  const absolute = resolve(base, folder)
+  const base = resolve('/', slashed(root))
+  const absolute = resolve(base, slashed(folder))
   if (absolute === base) {
     return '.'
   }
 
   const prefix = base === '/' ? '/' : `${base}/`
 
-  return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : null
+  return absolute.startsWith(prefix) ? moduleOfFolder(absolute.slice(prefix.length)) : null
+}
+
+/**
+ * The Module a folder relative to the project's root is in: its first two
+ * segments; null in an ignored root-level folder. As an older mod kept a
+ * Module (any depth), it is the Module it is in now.
+ */
+export const moduleOfFolder = (relative: string): string | null => {
+  const segments = slashed(relative).split('/').filter(segment => segment !== '' && segment !== '.')
+  if (segments.length === 0) {
+    return '.'
+  }
+
+  return IGNORED_FOLDERS.has(segments[0] ?? '') ? null : segments.slice(0, MODULE_DEPTH).join('/')
 }
 
 // A Module is a folder of the project: a Read is in its file's folder; a
@@ -236,6 +266,8 @@ const translateFileChange = (
     isNewFile,
     linesBefore,
     ...change,
+    // An Edit of every occurrence (a rename) is said so: it is never major.
+    ...(tool === 'Edit' && record.replaceAll === true ? { replaceAll: true } : {}),
   }
 }
 

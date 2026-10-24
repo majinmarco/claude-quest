@@ -39,7 +39,7 @@ One epic within a Region; cleared when all its Quests are done.
 _Avoid_: Epic (outside the Jira adapter), area
 
 **Module**:
-A folder of a Region's project, as the Player explores it: the folder a read file is in, or the folder searched, relative to the project's root (`.` for the root itself). The first visit to a Module earns Wisdom XP (from the ambient XP pool) and counts toward the Cartographer Badge; the Region file keeps the Modules discovered.
+A part of a Region's project, as the Player explores it: the first two segments of the folder a read file is in, or of the folder searched, relative to the project's root (`src/engine`, `packages/api`; `.` for a file at the root). Nothing under a root-level `node_modules`, `.git`, `dist`, `build`, `target`, `vendor`, `.venv` or `coverage` is a Module. The first visit to a Module earns Wisdom XP (from the ambient XP pool) and counts toward the Cartographer Badge, once per Player per project: the Player keeps the Modules discovered in each project (a Region file kept by an older mod seeds them once).
 _Avoid_: Package, directory (outside the event translator)
 
 **Fog**:
@@ -65,23 +65,23 @@ A game moment produced by real session activity during a Quest (Exploration, Bat
 _Avoid_: Event (that's the raw session activity), scene
 
 **Battle**:
-The Encounter a failing Check plays: a monster (a bug for tests, a slime for lint, a ghost for type errors) whose HP is the failures the Check counts, or one HP when its output counts none readable. The next run of the same Check failing fewer lands a hit per failure gone; the Check passing wins, for Strength XP by the monster's HP at its first counted run (three HP at most, from the battle XP pool), only when edits were made while it stood.
+The Encounter a failing Check plays: a monster (a bug for tests, a slime for lint, a ghost for type errors) whose HP is the failures the Check counts, or one HP when its output counts none readable. The first counted run after such a one-HP placeholder spawns the monster again at its count. The next run of the same Check failing fewer lands a hit per failure gone; the Check passing wins, for Strength XP by the monster's HP at its first counted run (three HP at most, from the battle XP pool), only when edits were made while it stood. A new Quest (for another ticket) and a Quest closing clear the Battles under way, paying nothing.
 _Avoid_: Fight, test encounter
 
 **Crafting**:
-The Encounter a new file or a major edit plays: the blacksmith forges an item named after the component, the file's name without its extension in words (`order-ledger.ts` forges the Order Ledger; an `index` file is named after its folder). A code-changing Encounter, as a Battle won is.
+The Encounter a new file of at least 3 lines, or a major edit, plays: the blacksmith forges an item named after the component, the file's name without its extension in words (`order-ledger.ts` forges the Order Ledger; an `index` file is named after its folder). A code-changing Encounter, as a Battle won is.
 _Avoid_: Forging, file encounter
 
 **Major edit**:
-An edit (an Edit, a Write over an existing file, a NotebookEdit) changing at least 10 lines of its diff, a line replaced counted once: the larger of the lines added and the lines removed. A near-complete rewrite is one too, however small the file: lines added, and at least 80% of the file's lines removed. A smaller edit plays no Encounter.
+An edit (an Edit, a Write over an existing file, a NotebookEdit) changing at least 10 lines of its diff, a line replaced counted once: the larger of the lines added and the lines removed. A near-complete rewrite is one too: lines added, at least 80% of the file's lines removed, and at least 3 lines changed. An Edit replacing every occurrence (`replace_all`, a rename) never is, though its change is still kept for the Boss Fight and a Battle's fix. A smaller edit plays no Encounter.
 _Avoid_: Big change, large diff
 
 **Check**:
-A test run, lint or type-check, read from a Bash command by its runner (vitest, jest, pytest, bun test, tsc, eslint, biome, ruff, or a package's test, lint or typecheck script) and kept as the command to rerun it, launchers and environment left out (`vitest run`, `npm test`). A Battle is against one Check.
+A test run, lint or type-check, read from a Bash command by its runner (vitest, jest, pytest, bun test, tsc, eslint, biome, ruff, or a package's test, lint or typecheck script) and kept as the command to rerun it, launchers, environment and output-only flags (`-q`, `-v`, `--verbose`, `--silent`, `--no-color`, `--color=…`, `--reporter…`) left out, so `vitest run -q` and `vitest run` are one Check. A Battle is against one Check.
 _Avoid_: Test suite, job (outside the event translator)
 
 **Scene**:
-The pane that plays the current Encounter: animated pixel art where the surface draws it, one line of text in the terminal.
+The pane that plays the current Encounter: animated pixel art where the surface draws it, one line of text in the terminal. It opens itself at most once per session, when a surface that draws its art is there, unless the `autoOpenScene` setting is off; `/scene` opens it any time. The Quest Board never opens itself.
 _Avoid_: Encounter view, animation pane
 
 **Boss Fight**:

@@ -1,9 +1,9 @@
-// The Player's settings: the Haiku budget and the hasty-answer rule, as the
-// rows of Claude Code's own settings menu (/config). They are the plugin's
-// `userConfig` fields (.claude-plugin/plugin.json), stored by Claude Code in
-// settings.json under pluginConfigs["quest-mod"].options and handed to
-// `register(on, options)`; a change in /config reloads the mod with the new
-// values. The manifest's defaults match DEFAULT_RULES.
+// The Player's settings: the Haiku budget, the hasty-answer rule and whether
+// the Scene opens itself, as the rows of Claude Code's own settings menu
+// (/config). They are the plugin's `userConfig` fields
+// (.claude-plugin/plugin.json), stored by Claude Code in settings.json under
+// pluginConfigs["quest-mod"].options and handed to `register(on, options)`; a
+// change in /config reloads the mod with the new values. The manifest's defaults match DEFAULT_RULES.
 
 import type { PluginOptions } from 'claude-code'
 
@@ -39,3 +39,9 @@ export const rulesOf = (options: PluginOptions): Rules => {
     nonTrivialLines: countOf(options.nonTrivialLines) ?? DEFAULT_RULES.nonTrivialLines,
   }
 }
+
+/**
+ * Whether the Scene opens itself, once per session, where a surface draws its
+ * art (the `autoOpenScene` setting): yes unless the Player turned it off.
+ */
+export const autoOpenSceneOf = (options: PluginOptions): boolean => options.autoOpenScene !== false

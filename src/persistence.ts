@@ -1,5 +1,6 @@
 // Persistence: the Player in `$.store`, shared by every session and project,
-// and the Region in the project's `.claude/claude-quest.json`.
+// with the Modules they discovered in each project (`discovered:<root>`), and
+// the Region in the project's `.claude/claude-quest.json`.
 // (The session's game is in `$.state`, held in hooks/register.tsx: Claude Code's
 // mod loader wants every state reference written in the file that uses it.)
 
@@ -8,6 +9,7 @@ import type { EngineInterface } from 'claude-code'
 import type { Badge, QuestOutcome, QuestRecord, Region, Stats, Tally, Trophy } from '../types'
 import { BADGES, emptyTally, levelOf, MAX_HP, newPlayer, trophyNameOf } from './engine'
 import type { Player } from './engine'
+import { moduleOfFolder } from './translate'
 
 const PLAYER = 'player'
 
@@ -173,22 +175,56 @@ function changeQuests(
   return changeRegion($, region => ({ ...region, quests: change(region.quests) }))
 }
 
+/** The `$.store` key the Player keeps a project's discovered Modules under. */
+export const discoveredKey = (root: string): string =>
+  `discovered:${root.replace(/\\/g, '/').replace(/(.)\/+$/, '$1')}`
+
+const isModuleList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every(module => typeof module === 'string')
+
 /**
- * Adds the modules the session has discovered to the Region's. The session's
- * whole list goes in, not one module, so a write that failed is made good by
- * the next.
+ * The Modules the Player has discovered in the project at `root`, kept in
+ * `$.store` per project. On the first load for a project they are seeded,
+ * once, from the Region file an older mod kept them in (as the Modules they
+ * are in now), and kept; the Region file is left as it is.
  */
-export function recordModulesDiscovered(
-  $: EngineInterface,
-  modules: readonly string[],
-): Promise<void> {
-  return changeRegion($, region => ({
-    ...region,
-    discoveredModules: [...new Set([...discoveredModulesOf(region), ...modules])],
-  }))
+export async function loadDiscovered($: EngineInterface, root: string): Promise<string[]> {
+  const kept = await $.store.get(discoveredKey(root))
+  if (isModuleList(kept)) {
+    return kept
+  }
+
+  // A Region file that could not be read now is tried again next session.
+  const region = await readRegionFile($).catch(() => null)
+  if (region === null) {
+    return []
+  }
+  const seeded = region.ok ? discoveredModulesOf(region.value) : []
+  const modules = [...new Set(seeded.map(moduleOfFolder).filter(module => module !== null))]
+  await $.store.set(discoveredKey(root), modules)
+
+  return modules
 }
 
-/** The modules a Region file's JSON says were discovered; none when it says none. */
+/**
+ * Adds the modules the session has discovered to the Player's for the
+ * project at `root`. The session's whole list goes in, not one module, so a
+ * write that failed is made good by the next.
+ */
+export async function recordModulesDiscovered(
+  $: EngineInterface,
+  root: string,
+  modules: readonly string[],
+): Promise<void> {
+  // Seeded first when it never was, so a Region file's list is never lost.
+  const kept = await loadDiscovered($, root)
+  await $.store.set(discoveredKey(root), [...new Set([...kept, ...modules])])
+}
+
+/**
+ * The modules an older mod's Region file says were discovered; none when it
+ * says none. Read once per project, to seed the Player's.
+ */
 export const discoveredModulesOf = (region: unknown): string[] => {
   const modules =
     typeof region === 'object' && region !== null

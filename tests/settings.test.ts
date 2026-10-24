@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { DEFAULT_RULES } from '../src/engine'
-import { rulesOf } from '../src/settings'
+import { autoOpenSceneOf, rulesOf } from '../src/settings'
 
 describe('Settings', () => {
   test('with nothing set, the rules are the defaults', () => {
@@ -36,5 +36,13 @@ describe('Settings', () => {
     expect(
       rulesOf({ sageCallsPerQuest: -1, bossFightCallsPerQuest: 2.9, hastyAnswerSeconds: 'soon', nonTrivialLines: Number.NaN }),
     ).toEqual({ ...DEFAULT_RULES, bossFightCallsPerQuest: 2 })
+  })
+
+  test('the Scene opens itself unless the Player turned it off', () => {
+    expect(autoOpenSceneOf({})).toBe(true)
+    expect(autoOpenSceneOf({ autoOpenScene: true })).toBe(true)
+    expect(autoOpenSceneOf({ autoOpenScene: false })).toBe(false)
+    // A value that is no switch keeps the default.
+    expect(autoOpenSceneOf({ autoOpenScene: 'no' })).toBe(true)
   })
 })

@@ -12,7 +12,8 @@ export type Check = {
   /**
    * The check's command as the Player would rerun it: its runner and
    * arguments, without the launcher (`npx`, a path), environment
-   * assignments or redirections. A Battle is against one Check.
+   * assignments, redirections or output-only flags (`-q`, `--reporter=dot`).
+   * A Battle is against one Check.
    */
   command: string
   kind: CheckKind
@@ -219,13 +220,50 @@ const commandWords = (segment: string): string[] => {
   return kept
 }
 
+/** Flags that change how a check prints, never what it checks. */
+const OUTPUT_FLAGS = new Set(['-q', '--verbose', '--no-color', '--silent'])
+
+/**
+ * The runners whose `-v` is verbose. To tsc, eslint, jest and vitest `-v`
+ * prints the version and checks nothing, so there it stays in the key.
+ */
+const VERBOSE_V = new Set(['pytest', 'py.test'])
+
+/**
+ * A check's arguments without its output-only flags (`-q`, pytest's `-v`, `--verbose`,
+ * `--silent`, `--no-color`, `--color=...`, `--reporter...` and its value), so
+ * `vitest run -q` and `vitest run` are one Check. A `--` left with nothing
+ * after it goes too: `npm test -- --reporter=dot` is `npm test`.
+ */
+const withoutOutputFlags = (name: string, words: readonly string[]): string[] => {
+  const kept: string[] = []
+  for (let at = 0; at < words.length; at++) {
+    const word = words[at] ?? ''
+    if (OUTPUT_FLAGS.has(word) || word.startsWith('--color=') || (word === '-v' && VERBOSE_V.has(name))) {
+      continue
+    }
+    if (word.startsWith('--reporter')) {
+      // `--reporter dot`: its value is the next word.
+      const next = words[at + 1]
+      if (!word.includes('=') && next !== undefined && !next.startsWith('-')) {
+        at += 1
+      }
+      continue
+    }
+    kept.push(word)
+  }
+
+  return kept.at(-1) === '--' ? kept.slice(0, -1) : kept
+}
+
 /** The check one segment of a command runs, or null. */
 const checkOf = (segment: string): Omit<Check, 'endsCommand'> | null => {
-  const [first, ...rest] = commandWords(segment)
+  const [first, ...words] = commandWords(segment)
   if (first === undefined) {
     return null
   }
   const name = baseName(first)
+  const rest = withoutOutputFlags(name, words)
 
   if (PACKAGE_MANAGERS.has(name)) {
     const script = rest[0] === 'run' || rest[0] === 'run-script' ? rest[1] : rest[0] === 't' ? 'test' : rest[0]

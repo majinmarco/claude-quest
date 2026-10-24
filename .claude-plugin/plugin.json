@@ -42,6 +42,12 @@
       "description": "A Question pointing at this many source lines or more is non-trivial, so a hasty right answer to it earns reduced XP.",
       "default": 3,
       "min": 0
+    },
+    "autoOpenScene": {
+      "type": "boolean",
+      "title": "Open the Scene automatically",
+      "description": "Open the Scene pane once per session when a surface that draws its art (the desktop, the editor) joins. Off, it opens only with /scene.",
+      "default": true
     }
   }
 }

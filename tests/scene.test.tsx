@@ -37,6 +37,9 @@ const START = { cwd: '/work/claude-quest', surface: 'desktop', isInteractive: tr
 const ROOT = '/work/claude-quest'
 const REGION = `${ROOT}/.claude/claude-quest.json`
 
+/** Where the Player keeps the modules discovered in this project. */
+const DISCOVERED = `discovered:${ROOT}`
+
 /**
  * Answers the engine's side of the mod: its store, its command, its panes, the
  * surfaces it draws on and the project's files (the Region file among them).
@@ -46,9 +49,10 @@ const engine = (
   {
     surfaces = ['desktop'],
     files = {},
-  }: { surfaces?: RenderSurface[]; files?: Record<string, string> } = {},
+    store = {},
+  }: { surfaces?: RenderSurface[]; files?: Record<string, string>; store?: Record<string, unknown> } = {},
 ) => {
-  const kept = new Map<string, unknown>()
+  const kept = new Map<string, unknown>(Object.entries(store))
   on('store.get', (_, e) => ({ value: kept.get(e.key) }))
   on('store.set', (_, e) => {
     kept.set(e.key, e.value)
@@ -80,7 +84,7 @@ const engine = (
   // The clock lets a test wait out what the mod does not await.
   const clock = mock.clock(on, { now: Date.UTC(2026, 9, 23, 20, 0) })
 
-  return { opened, project, clock, player: () => kept.get('player') }
+  return { opened, project, clock, kept, player: () => kept.get('player') }
 }
 
 /** Runs `/scene` as the person types it. */
@@ -131,6 +135,39 @@ describe('Scene pane', () => {
     expect(opened).toEqual(['scene'])
   })
 
+  test('the Scene opens itself once per session: the desktop attaching again leaves it be', async ($, on) => {
+    const { opened } = engine(on, { surfaces: ['desktop'] })
+    on('session.attach', (_, e) => ({ clientId: e.clientId }))
+    await $.session.start(START)
+
+    await $.session.attach({ surface: 'desktop', clientId: 'desktop:second' })
+    await $.session.attach({ surface: 'vscode', clientId: 'vscode:default' })
+
+    expect(opened).toEqual(['scene'])
+  })
+
+  test('with autoOpenScene off the Scene waits for /scene, even on the desktop', { options: { autoOpenScene: false } }, async ($, on) => {
+    const { opened } = engine(on, { surfaces: ['desktop'] })
+    on('session.attach', (_, e) => ({ clientId: e.clientId }))
+    await $.session.start(START)
+    await $.session.attach({ surface: 'desktop', clientId: 'desktop:second' })
+
+    expect(opened).toEqual([])
+
+    await scene($)
+    expect(opened).toEqual(['scene'])
+  })
+
+  test('the Quest Board never opens itself', async ($, on) => {
+    const { opened } = engine(on, { surfaces: ['desktop'] })
+    on('session.attach', (_, e) => ({ clientId: e.clientId }))
+    await $.session.start(START)
+    await $.session.attach({ surface: 'desktop', clientId: 'desktop:second' })
+    await $.tool.call(readOf('src/engine.ts'))
+
+    expect(opened).not.toContain('quest-board')
+  })
+
   test('before any Encounter the desktop shows the hero waiting', async ($, on) => {
     engine(on)
     await $.session.start(START)
@@ -154,7 +191,7 @@ describe('Scene pane', () => {
     const art = await ui.find({ type: 'Svg' })
     expect(art?.props.isInteractive).toBe(true)
     expect(String(art?.props.source)).toMatch(/^<svg [^>]*>.*<animateTransform /)
-    expect(art?.props.alt).toBe('Exploring engine.ts in src · first visit, +6 XP')
+    expect(art?.props.alt).toBe('Exploring engine.ts in src · +1 XP · first visit, +5 XP (Wisdom)')
     await ui.unmount()
   })
 
@@ -179,7 +216,7 @@ describe('Scene pane', () => {
 
     const ui = await $.ui.mount({ ...SCENE, surface: 'terminal' })
     expect((await ui.find({ type: 'Text' }))?.text).toBe(
-      'Exploring GLOSSARY.md in the project root · first visit, +6 XP',
+      'Exploring GLOSSARY.md in the project root · +1 XP · first visit, +5 XP (Wisdom)',
     )
     await ui.unmount()
   })
@@ -221,25 +258,35 @@ describe('Exploration: first visit to a module', () => {
     await ui.unmount()
   })
 
-  test('the Region file keeps the modules discovered', async ($, on) => {
-    const { project, clock } = engine(on)
+  test('the Scene names the two-segment Module of a deep file', async ($, on) => {
+    engine(on)
+    await $.session.start(START)
+
+    await $.tool.call(readOf('packages/api/src/routes/users.ts'))
+
+    const ui = await $.ui.mount({ ...SCENE, surface: 'terminal' })
+    expect((await ui.find({ type: 'Text' }))?.text).toBe(
+      'Exploring users.ts in packages/api · +1 XP · first visit, +5 XP (Wisdom)',
+    )
+    await ui.unmount()
+  })
+
+  test('the Player keeps the modules discovered, per project, not the Region file', async ($, on) => {
+    const { kept, project, clock } = engine(on)
     await $.session.start(START)
 
     await $.tool.call(readOf('src/engine.ts'))
     await $.tool.call(readOf('src/hud.tsx'))
     await $.tool.call(readOf('tests/fixtures/tool-calls.ts'))
-    // The Region file is written after the tool call, never holding it up.
+    // Kept after the tool call, never holding it up.
     await clock.settle()
 
-    expect(JSON.parse(project.get(REGION) ?? 'null')).toEqual({
-      quests: [],
-      discoveredModules: ['src', 'tests/fixtures'],
-    })
+    expect(kept.get(DISCOVERED)).toEqual(['src', 'tests/fixtures'])
+    expect(project.has(REGION)).toBe(false)
   })
 
   test('a module discovered in an earlier session earns no bonus', async ($, on) => {
-    const earlier = { quests: [], discoveredModules: ['src'] }
-    const { player } = engine(on, { files: { [REGION]: JSON.stringify(earlier) } })
+    const { player } = engine(on, { store: { [DISCOVERED]: ['src'] } })
     await $.session.start(START)
 
     await $.tool.call(readOf('src/engine.ts'))
@@ -247,19 +294,48 @@ describe('Exploration: first visit to a module', () => {
     expect(player()).toMatchObject({ xp: 1 })
   })
 
-  test('discovering a module keeps the rest of the Region file as it was', async ($, on) => {
-    const quest = { ticket: '#7', startedAt: '2026-10-23T19:00:00.000Z', status: 'active' }
-    const earlier = { quests: [quest], questSource: { kind: 'github' }, discoveredModules: ['src'] }
-    const { project, clock } = engine(on, { files: { [REGION]: JSON.stringify(earlier) } })
+  test('another project\'s modules are no discovery here', async ($, on) => {
+    const { player } = engine(on, { store: { 'discovered:/work/other': ['src'] } })
     await $.session.start(START)
 
+    await $.tool.call(readOf('src/engine.ts'))
+
+    expect(player()).toMatchObject({ xp: 6 })
+  })
+
+  test('an older Region file\'s modules are taken once, as two-segment Modules, and the file is left as it was', async ($, on) => {
+    const quest = { ticket: '#7', startedAt: '2026-10-23T19:00:00.000Z', status: 'active' }
+    const earlier = {
+      quests: [quest],
+      questSource: { kind: 'github' },
+      discoveredModules: ['src', 'tests/fixtures/deep', 'node_modules/x'],
+    }
+    const file = JSON.stringify(earlier)
+    const { kept, player, project, clock } = engine(on, { files: { [REGION]: file } })
+    await $.session.start(START)
+
+    expect(kept.get(DISCOVERED)).toEqual(['src', 'tests/fixtures'])
+
+    await $.tool.call(readOf('tests/fixtures/tool-calls.ts'))
+    expect(player()).toMatchObject({ xp: 1 })
+
     await $.tool.call(readOf('hooks/register.tsx'))
-    // The Region file is written after the tool call, never holding it up.
     await clock.settle()
 
-    expect(JSON.parse(project.get(REGION) ?? 'null')).toEqual({
-      ...earlier,
-      discoveredModules: ['src', 'hooks'],
+    expect(kept.get(DISCOVERED)).toEqual(['src', 'tests/fixtures', 'hooks'])
+    expect(project.get(REGION)).toBe(file)
+  })
+
+  test('once seeded, the Region file\'s list is not read again', async ($, on) => {
+    const earlier = { quests: [], discoveredModules: ['src'] }
+    const { player } = engine(on, {
+      files: { [REGION]: JSON.stringify(earlier) },
+      store: { [DISCOVERED]: ['hooks'] },
     })
+    await $.session.start(START)
+
+    await $.tool.call(readOf('src/engine.ts'))
+
+    expect(player()).toMatchObject({ xp: 6 })
   })
 })
