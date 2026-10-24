@@ -467,7 +467,7 @@ export const overworldSvg = (
   const lettered = name.toUpperCase()
   const title =
     plate(lettering, lettered, 2, 4) +
-    (subtitle === undefined || subtitle === '' ? '' : plate(lettering, subtitle, pixelWidth(lettered) + 8, 4, MAP_COLORS.dark))
+    (subtitle === undefined || subtitle === '' ? '' : plate(lettering, fitName(subtitle, Math.max(width - pixelWidth(lettered) - 14, 8)), pixelWidth(lettered) + 8, 4, MAP_COLORS.dark))
 
   return svgOf(width, height, lettering.defs() + `<defs>${tiles.defs()}</defs>` + land + fog + marks + title)
 }

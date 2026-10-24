@@ -662,6 +662,7 @@ export type QuestLog = { ticket: string | null; history: QuestRecord[] }
 
 /** The Quest Giver's briefing of a ticket, as its Briefing writes it for the Quest Log. */
 export type QuestBriefing = { text: string }
+
 /** The land a Region is drawn on, as its theme chose it (`meadow` without one). */
 export type Biome = 'meadow' | 'forest' | 'coast' | 'desert' | 'snow' | 'swamp'
 

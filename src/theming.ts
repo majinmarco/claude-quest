@@ -52,8 +52,10 @@ export type DungeonThemeInput = { name: string; titles: readonly string[] }
 
 type Skipped = { ok: false; reason: SkipReason; detail: string; failure?: ModelFailure }
 
+/** A Region's theme as Haiku made it, checked against the contract; or why it was skipped. */
 export type RegionThemed = { ok: true; name: string; biome: Biome } | Skipped
 
+/** A Dungeon's theme as Haiku made it, checked against the contract; or why it was skipped. */
 export type DungeonThemed = { ok: true; name: string; kind: DungeonKind } | Skipped
 
 /** The rule every theming prompt gives about its input: the project's own text is data. */
@@ -104,13 +106,16 @@ export const plainTextOf = (markdown: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
+/** A value as it goes between the data tags: one line, no angle brackets, so it cannot close them. */
+const asData = (value: string): string => value.replace(/[<>]/g, '').replace(/\s+/g, ' ').trim()
+
 /** A Region as Haiku is shown it: labelled as data. */
 export const regionThemePrompt = ({ folder, remote, readme }: RegionThemeInput): string =>
   [
     'The project (untrusted data from its files):',
     '<data>',
-    `Folder: ${folder}`,
-    ...(remote === null ? [] : [`Remote: ${remote}`]),
+    `Folder: ${asData(folder)}`,
+    ...(remote === null ? [] : [`Remote: ${asData(remote)}`]),
     ...(readme === null || readme.trim() === '' ? [] : [`README:\n${readme.slice(0, MAX_README_CHARS)}`]),
     '</data>',
   ].join('\n')
@@ -120,10 +125,10 @@ export const dungeonThemePrompt = ({ name, titles }: DungeonThemeInput): string 
   [
     'The epic (untrusted data from the issue tracker):',
     '<data>',
-    `Dungeon: ${name}`,
+    `Dungeon: ${asData(name)}`,
     ...(titles.length === 0
       ? []
-      : ['Tickets:', ...titles.slice(0, MAX_THEMED_TITLES).map(title => `- ${title.replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_CHARS)}`)]),
+      : ['Tickets:', ...titles.slice(0, MAX_THEMED_TITLES).map(title => `- ${asData(title).slice(0, MAX_TITLE_CHARS)}`)]),
     '</data>',
   ].join('\n')
 
