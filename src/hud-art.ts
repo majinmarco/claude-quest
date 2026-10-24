@@ -14,8 +14,10 @@ import type { Sprite, SpriteName } from './sprites'
 /** CSS px a strip pixel takes. */
 const SCALE = 2
 
-/** The strip's height in its own pixels, and in CSS px. */
+/** The strip's height in its own pixels. */
 const HEIGHT = 24
+
+/** The strip's height in CSS px. */
 export const STRIP_HEIGHT = HEIGHT * SCALE
 
 /** Strip pixels a column of the band takes: about 8 CSS px. */
@@ -28,14 +30,17 @@ export const SEGMENT_GAP = 6
 const BAR = 36
 const BAR_THICKNESS = 3
 
-/** Where a line of text sits: alone, centred; over a bar, above it. */
+/** Where a line of text alone sits, centred. */
 const LINE_Y = 8
+
+/** Where a bar's label sits, and the bar under it. */
 const LABEL_Y = 3
 const BAR_Y = 13
 
 /** Where a 16 px sprite sits, centred on the strip. */
 const SPRITE_Y = 4
 
+/** The strip's colours, from the sprites' palette. */
 const COLORS = {
   panel: '#181425',
   panelInner: '#262b44',
@@ -51,18 +56,28 @@ const COLORS = {
   flash: '#ffffff',
 } as const
 
+/** Mana's colour as it fills, as the text band colours it. */
 const MANA_COLORS: Record<ManaLevel, string> = { calm: COLORS.blue, filling: COLORS.gold, warning: COLORS.red }
 
-/** The portraits a Player can have: the hero until a Title, then the Title's. */
-export type Portrait = 'hero' | 'scholar' | 'pathfinder' | 'warrior'
+/** The portraits a Player can have: a plain adventurer until a Title, then the Title's. */
+export type Portrait = 'adventurer' | 'scholar' | 'pathfinder' | 'warrior'
 
+/** Each Title's portrait. */
 const PORTRAITS: Record<string, Portrait> = { Scholar: 'scholar', Pathfinder: 'pathfinder', Warrior: 'warrior' }
 
-/** The Player's portrait: by their Title (a Veteran's too), else the hero. */
+/** The sprite each portrait is drawn with: the adventurer is the Scene's hero tile. */
+const PORTRAIT_SPRITES: Record<Portrait, SpriteName> = {
+  adventurer: 'hero',
+  scholar: 'scholar',
+  pathfinder: 'pathfinder',
+  warrior: 'warrior',
+}
+
+/** The Player's portrait: by their Title (a Veteran's too), else the plain adventurer. */
 export const portraitOf = (player: Player): Portrait => {
   const title = titleOf(player)
 
-  return title === null ? 'hero' : (PORTRAITS[title.replace(/^Veteran /, '')] ?? 'hero')
+  return title === null ? 'adventurer' : (PORTRAITS[title.replace(/^Veteran /, '')] ?? 'adventurer')
 }
 
 /** A segment of the strip: what it shows, as the HUD's parts say. */
@@ -82,12 +97,14 @@ export type StripSegment =
 /** The one-shot motion of a draw: HP lost since the last, or XP gained from `xpFrom` (a share). */
 export type StripMotion = { isHpLost: boolean; xpFrom: number | null }
 
+/** A draw with nothing to play. */
 export const STILL: StripMotion = { isHpLost: false, xpFrom: null }
 
 /** Small marks the font lacks: a star for the Badges, a heart for the boss's HP. */
 const STAR = ['...#...', '..###..', '#######', '.#####.', '..###..', '.##.##.', '.#...#.']
 const HEART = ['.##.##.', '#######', '#######', '.#####.', '..###..', '...#...']
 
+/** One of the marks above, its `#` pixels in `color`. */
 const mark = (canvas: Canvas, rows: readonly string[], x: number, y: number, color: string): void =>
   rows.forEach((row, at) => [...row].forEach((pixel, column) => pixel === '#' && canvas.set(x + column, y + at, color)))
 
@@ -97,14 +114,17 @@ const upright = (sprite: Sprite): Sprite => ({
   rows: [...(sprite.rows[0] ?? '')].map((_, x) => sprite.rows.map(row => row[x] ?? '.').join('')),
 })
 
-/** A roller standing on the strip's full height: its rounded caps top and bottom. */
+/** A banner's roller, standing on the strip's full height: the Scrolls' rod upright. */
 const ROLLER_WIDTH = 10
 const ROLLER_CAP = upright(SPRITES.rodCap)
+
+/** The roller's foot: its cap upside down. */
 const ROLLER_FOOT: Sprite = { palette: ROLLER_CAP.palette, rows: [...ROLLER_CAP.rows].reverse() }
 
 /** The banner's paper, inside its rollers; the text starts this far in. */
 const BANNER_TEXT_X = ROLLER_WIDTH + 2
 
+/** A segment's words: a bar's label, a count, the Quest's ticket and title. */
 const labelOf = (segment: StripSegment): string => {
   switch (segment.kind) {
     case 'hp':
@@ -114,8 +134,9 @@ const labelOf = (segment: StripSegment): string => {
     case 'mana':
       return segment.mana === null ? 'Mana --' : `Mana ${segment.mana}%`
     case 'badges':
+      return String(segment.count)
     case 'questions':
-      return segment.kind === 'badges' ? String(segment.count) : `${segment.count} waiting`
+      return `${segment.count} waiting`
     case 'quest':
       return `${segment.ticket} ${segment.title}`.trim()
     case 'boss':
@@ -125,7 +146,11 @@ const labelOf = (segment: StripSegment): string => {
   }
 }
 
-const COMPACTION = 'Compaction near'
+/** What Mana says beside its bar when compaction is near. */
+export const COMPACTION_WARNING = 'Compaction near'
+
+/** How wide Mana's bar is: its label's width, or the bars' least. */
+const manaBarWidth = (segment: StripSegment): number => Math.max(BAR, pixelWidth(labelOf(segment)))
 
 /** How wide a segment is drawn, in strip pixels. */
 export const segmentWidth = (segment: StripSegment): number => {
@@ -137,7 +162,7 @@ export const segmentWidth = (segment: StripSegment): number => {
     case 'xp':
       return Math.max(BAR, label)
     case 'mana':
-      return Math.max(BAR, label) + (segment.level === 'warning' ? 4 + pixelWidth(COMPACTION) : 0)
+      return manaBarWidth(segment) + (segment.level === 'warning' ? 4 + pixelWidth(COMPACTION_WARNING) : 0)
     case 'badges':
       return STAR.length + 2 + label
     case 'quest':
@@ -152,23 +177,30 @@ export const segmentWidth = (segment: StripSegment): number => {
   }
 }
 
-/** What one segment adds to the strip: pixels on the canvas, and markup over it. */
-type Drawn = { markup: string }
+/** The pixels of a bar `width` across that `share` of it fills. */
+const filledOf = (width: number, share: number): number => Math.round(width * Math.max(0, Math.min(1, share)))
 
-/** A bar `width` across at `x`: dark, filled by `share` in `color`; its fill element returned to animate. */
-const bar = (canvas: Canvas, x: number, width: number, share: number, color: string): { fill: number } => {
-  const fill = Math.round(width * Math.max(0, Math.min(1, share)))
+/**
+ * A bar `width` across at `x`, dark, outlined; filled by `share` in `color`
+ * unless `color` is null, when the caller draws the fill. Its fill's width.
+ */
+const bar = (canvas: Canvas, x: number, width: number, share: number, color: string | null): number => {
+  const fill = filledOf(width, share)
   canvas.rect(x - 1, BAR_Y - 1, width + 2, BAR_THICKNESS + 2, COLORS.panel)
   canvas.rect(x, BAR_Y, width, BAR_THICKNESS, COLORS.barEmpty)
+  if (color !== null) {
+    canvas.rect(x, BAR_Y, fill, BAR_THICKNESS, color)
+  }
 
-  return { fill }
+  return fill
 }
 
+/** A segment at `x`: its pixels onto the canvas, and the markup it adds over them. */
 const draw = (
   segment: StripSegment,
   x: number,
   { canvas, lettering, motion }: { canvas: Canvas; lettering: Lettering; motion: StripMotion },
-): Drawn => {
+): string => {
   const width = segmentWidth(segment)
   const label = labelOf(segment)
   const sprite = (name: SpriteName) => canvas.sprite(SPRITES[name], x, SPRITE_Y)
@@ -176,51 +208,47 @@ const draw = (
     case 'level': {
       const portrait = new Canvas()
       portrait.rect(0, 0, 16, 16, COLORS.frame)
-      portrait.sprite(SPRITES[segment.portrait], 0, 0)
+      portrait.sprite(SPRITES[PORTRAIT_SPRITES[segment.portrait]], 0, 0)
 
-      return {
-        markup:
-          `<g transform="translate(${x} 0) scale(1.5)">${portrait.svg()}</g>` +
-          lettering.text(segment.text, x + HEIGHT + 4, LINE_Y, COLORS.gold),
-      }
+      return (
+        `<g transform="translate(${x} 0) scale(1.5)">${portrait.svg()}</g>` +
+        lettering.text(segment.text, x + HEIGHT + 4, LINE_Y, COLORS.gold)
+      )
     }
     case 'hp': {
-      const barWidth = width
       const isExhausted = segment.hp <= 0
-      const { fill } = bar(canvas, x, barWidth, segment.hp / Math.max(1, segment.maxHp), COLORS.red)
-      canvas.rect(x, BAR_Y, fill, BAR_THICKNESS, COLORS.red)
+      bar(canvas, x, width, segment.hp / Math.max(1, segment.maxHp), COLORS.red)
       const flash = motion.isHpLost
-        ? `<rect x="${x}" y="${BAR_Y}" width="${barWidth}" height="${BAR_THICKNESS}" fill="${COLORS.flash}" opacity="0">` +
+        ? `<rect x="${x}" y="${BAR_Y}" width="${width}" height="${BAR_THICKNESS}" fill="${COLORS.flash}" opacity="0">` +
           '<animate attributeName="opacity" values="0.9;0" dur="0.4s" fill="freeze"/></rect>'
         : ''
 
-      return { markup: lettering.text(label, x, LABEL_Y, isExhausted || segment.isLow ? COLORS.red : COLORS.text) + flash }
+      return lettering.text(label, x, LABEL_Y, isExhausted || segment.isLow ? COLORS.red : COLORS.text) + flash
     }
     case 'xp': {
       const share = segment.xp / Math.max(1, segment.toClear)
-      const { fill } = bar(canvas, x, width, share, COLORS.xp)
-      const from = motion.xpFrom === null ? null : Math.round(width * Math.max(0, Math.min(1, motion.xpFrom)))
-      const filled =
-        from === null || from >= fill
-          ? (canvas.rect(x, BAR_Y, fill, BAR_THICKNESS, COLORS.xp), '')
-          : `<rect x="${x}" y="${BAR_Y}" width="${fill}" height="${BAR_THICKNESS}" fill="${COLORS.xp}">` +
-            `<animate attributeName="width" values="${from};${fill}" dur="0.6s" fill="freeze"/></rect>`
+      const from = motion.xpFrom === null ? null : filledOf(width, motion.xpFrom)
+      const isFilling = from !== null && from < filledOf(width, share)
+      const fill = bar(canvas, x, width, share, isFilling ? null : COLORS.xp)
+      const filling = isFilling
+        ? `<rect x="${x}" y="${BAR_Y}" width="${fill}" height="${BAR_THICKNESS}" fill="${COLORS.xp}">` +
+          `<animate attributeName="width" values="${from};${fill}" dur="0.6s" fill="freeze"/></rect>`
+        : ''
 
-      return { markup: lettering.text(label, x, LABEL_Y, COLORS.text) + filled }
+      return lettering.text(label, x, LABEL_Y, COLORS.text) + filling
     }
     case 'mana': {
       const color = MANA_COLORS[segment.level]
-      const barWidth = Math.max(BAR, pixelWidth(label))
-      const { fill } = bar(canvas, x, barWidth, (segment.mana ?? 0) / 100, color)
-      canvas.rect(x, BAR_Y, fill, BAR_THICKNESS, color)
-      const warning = segment.level === 'warning' ? lettering.text(COMPACTION, x + barWidth + 4, LINE_Y, COLORS.red) : ''
+      const barWidth = manaBarWidth(segment)
+      bar(canvas, x, barWidth, (segment.mana ?? 0) / 100, color)
+      const warning = segment.level === 'warning' ? lettering.text(COMPACTION_WARNING, x + barWidth + 4, LINE_Y, COLORS.red) : ''
 
-      return { markup: lettering.text(label, x, LABEL_Y, color) + warning }
+      return lettering.text(label, x, LABEL_Y, color) + warning
     }
     case 'badges':
       mark(canvas, STAR, x, LINE_Y, COLORS.gold)
 
-      return { markup: lettering.text(label, x + STAR.length + 2, LINE_Y, COLORS.gold) }
+      return lettering.text(label, x + STAR.length + 2, LINE_Y, COLORS.gold)
     case 'quest': {
       const right = x + width - ROLLER_WIDTH
       canvas.rect(x + 4, 4, width - 8, HEIGHT - 8, SCROLL_COLORS.paper)
@@ -232,36 +260,35 @@ const draw = (
       }
       const ticket = `${segment.ticket} `
 
-      return {
-        markup:
-          lettering.text(ticket, x + BANNER_TEXT_X, LINE_Y, SCROLL_COLORS.ticket) +
-          lettering.text(segment.title, x + BANNER_TEXT_X + pixelWidth(ticket), LINE_Y, SCROLL_COLORS.ink),
-      }
+      return (
+        lettering.text(ticket, x + BANNER_TEXT_X, LINE_Y, SCROLL_COLORS.ticket) +
+        lettering.text(segment.title, x + BANNER_TEXT_X + pixelWidth(ticket), LINE_Y, SCROLL_COLORS.ink)
+      )
     }
     case 'boss': {
       if (segment.isApproaching) {
         const shadow = new Canvas()
         shadow.sprite(SPRITES.boss, x, SPRITE_Y)
 
-        return { markup: `<g opacity="0.5">${shadow.svg()}</g>` + lettering.text(label, x + 18, LINE_Y, COLORS.red) }
+        return `<g opacity="0.5">${shadow.svg()}</g>` + lettering.text(label, x + 18, LINE_Y, COLORS.red)
       }
       sprite('boss')
       for (let at = 0; at < segment.maxHp; at++) {
         mark(canvas, HEART, x + 18 + at * (HEART.length + 2), LINE_Y + 1, at < segment.hp ? COLORS.red : COLORS.barEmpty)
       }
 
-      return { markup: '' }
+      return ''
     }
     case 'questions':
       sprite('sage')
 
-      return { markup: lettering.text(label, x + 18, LINE_Y, COLORS.green) }
+      return lettering.text(label, x + 18, LINE_Y, COLORS.green)
     case 'encounter':
       sprite(segment.sprite)
 
-      return { markup: lettering.text(label, x + 18, LINE_Y, COLORS.dim) }
+      return lettering.text(label, x + 18, LINE_Y, COLORS.dim)
     default:
-      return { markup: lettering.text(label, x, LINE_Y, COLORS.dim) }
+      return lettering.text(label, x, LINE_Y, COLORS.dim)
   }
 }
 
@@ -280,13 +307,13 @@ export const hudStrip = (
   maxWidth: number,
   motion: StripMotion = STILL,
 ): { svg: string; width: number } => {
-  const width = Math.max(1, Math.min(stripWidth(segments) + 2, maxWidth))
+  const width = Math.max(1, Math.min(stripWidth(segments), maxWidth))
   const canvas = new Canvas()
   const lettering = new Lettering()
   let x = 0
   let markup = ''
   for (const segment of segments) {
-    markup += draw(segment, x, { canvas, lettering, motion }).markup
+    markup += draw(segment, x, { canvas, lettering, motion })
     x += segmentWidth(segment) + SEGMENT_GAP
   }
 

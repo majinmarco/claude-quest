@@ -55,7 +55,7 @@ const SPRITES = {
   staff: { sheet: 'dungeon', index: 129 },
   sage: { sheet: 'dungeon', index: 84 },
   boss: { sheet: 'dungeon', index: 110 },
-  // The HUD's portraits by Title; a Player with none is the hero.
+  // The HUD's portraits by Title; before a Title it is the hero tile, a plain adventurer.
   scholar: { sheet: 'dungeon', index: 111 },
   pathfinder: { sheet: 'dungeon', index: 112 },
   warrior: { sheet: 'dungeon', index: 87 },

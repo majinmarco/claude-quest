@@ -10,7 +10,7 @@ import type { EngineInterface, RenderInput } from 'claude-code'
 
 import { BADGES, isExhausted, isUnderWay, manaLevel, titleOf, xpToClear } from './engine'
 import type { Encounter, GameState, ManaLevel, Player } from './engine'
-import { hudStrip, PIXELS_PER_COLUMN, portraitOf, STRIP_HEIGHT, stripWidth } from './hud-art'
+import { COMPACTION_WARNING, hudStrip, PIXELS_PER_COLUMN, portraitOf, STILL, STRIP_HEIGHT, stripWidth } from './hud-art'
 import type { StripMotion, StripSegment } from './hud-art'
 import { MONSTERS } from './scene-art'
 import type { HudStyle } from './settings'
@@ -61,15 +61,18 @@ const encounterSprite = (encounter: Encounter): SpriteName => {
 /** The most of a Quest's title the HUD shows, in characters. */
 const TITLE_CHARS = 30
 
+/** A Quest's title cut to `chars`, `…` after it when cut; empty when it has none. */
+const cutTitle = (title: string | undefined, chars: number): string => {
+  const shown = (title ?? '').trim()
+
+  return shown.length <= chars ? shown : `${shown.slice(0, chars - 1).trimEnd()}…`
+}
+
 /** The active Quest as the HUD names it, its title cut to `chars`: `Quest #4 Bulk discounts for big…`. */
 export const questLine = ({ ticket, title }: { ticket: string; title?: string }, chars = TITLE_CHARS): string => {
-  if (title === undefined || title.trim() === '') {
-    return `Quest ${ticket}`
-  }
+  const shown = cutTitle(title, chars)
 
-  const shown = title.trim()
-
-  return `Quest ${ticket} ${shown.length <= chars ? shown : `${shown.slice(0, chars - 1).trimEnd()}…`}`
+  return shown === '' ? `Quest ${ticket}` : `Quest ${ticket} ${shown}`
 }
 
 /** The MVP Stats, abbreviated, in one line: `INT 120 · WIS 15 · STR 40`. */
@@ -146,52 +149,79 @@ const packRows = (parts: Piece[][], columns: number): Piece[][] => {
 }
 
 /**
- * The HUD's rows for a band `columns` wide and `maxRows` tall. The parts are
- * placed by rank in their shortest version, a part that no longer fits left
- * out; then each, by rank, takes its longest version that still fits. Drawn
- * in their own order, filled row by row.
+ * A version of each part for a band, by rank: each part's shortest while the
+ * band still `fits` (level, HP and XP always), then each its longest that
+ * still fits. `isStrict`: the first part that does not fit leaves out every
+ * lesser one too.
  */
-const layOut = (parts: Part[], columns: number, maxRows: number): Piece[][] => {
-  const chosen = new Map<Part, Piece[]>()
-  const inOrder = () => parts.flatMap(part => (chosen.has(part) ? [chosen.get(part) ?? []] : []))
-  const fitsWith = (part: Part, version: Piece[]): boolean => {
+const chooseVersions = <V,>(
+  parts: Part[],
+  versionsOf: (part: Part) => V[],
+  fits: (chosen: Map<Part, V>) => boolean,
+  isStrict = false,
+): Map<Part, V> => {
+  const chosen = new Map<Part, V>()
+  const fitsWith = (part: Part, version: V): boolean => {
     const before = chosen.get(part)
     chosen.set(part, version)
-    const rows = packRows(inOrder(), columns)
+    const isFitting = fits(chosen)
     if (before === undefined) {
       chosen.delete(part)
     } else {
       chosen.set(part, before)
     }
 
-    return rows.length <= maxRows && rows.every(row => cellsOf(row) <= columns || row.length === 1)
+    return isFitting
   }
   const byRank = [...parts].sort((a, b) => a.rank - b.rank)
   for (const part of byRank) {
-    const shortest = part.versions.at(-1) ?? []
-    if (part.rank <= LAST_ALWAYS_SHOWN || fitsWith(part, shortest)) {
+    const shortest = versionsOf(part).at(-1)
+    if (shortest !== undefined && (part.rank <= LAST_ALWAYS_SHOWN || fitsWith(part, shortest))) {
       chosen.set(part, shortest)
+    } else if (isStrict) {
+      break
     }
   }
   for (const part of byRank) {
-    const longest = chosen.has(part) ? part.versions.find(version => fitsWith(part, version)) : undefined
+    const longest = chosen.has(part) ? versionsOf(part).find(version => fitsWith(part, version)) : undefined
     if (longest !== undefined) {
       chosen.set(part, longest)
     }
   }
 
-  return packRows(inOrder(), columns)
+  return chosen
 }
 
-/** The active Quest's versions: its title cut ever shorter, then its reference alone. */
-const questVersions = (quest: { ticket: string; title?: string }): string[] => {
-  const versions = [questLine(quest)]
-  for (let chars = TITLE_CHARS - 1; chars > 1; chars--) {
-    versions.push(questLine(quest, chars))
-  }
-  versions.push(questLine({ ticket: quest.ticket }))
+/**
+ * The HUD's rows for a band `columns` wide and `maxRows` tall. The parts are
+ * placed by rank in their shortest version, a part that no longer fits left
+ * out; then each, by rank, takes its longest version that still fits. Drawn
+ * in their own order, filled row by row.
+ */
+const layOut = (parts: Part[], columns: number, maxRows: number): Piece[][] => {
+  const inOrder = (chosen: Map<Part, Piece[]>) => parts.flatMap(part => (chosen.has(part) ? [chosen.get(part) ?? []] : []))
+  const chosen = chooseVersions(
+    parts,
+    part => part.versions,
+    each => {
+      const rows = packRows(inOrder(each), columns)
 
-  return [...new Set(versions)]
+      return rows.length <= maxRows && rows.every(row => cellsOf(row) <= columns || row.length === 1)
+    },
+  )
+
+  return packRows(inOrder(chosen), columns)
+}
+
+/** The active Quest's titles, as its versions show them: cut ever shorter, then none. */
+const questTitles = ({ title }: { title?: string }): string[] => {
+  const titles = [cutTitle(title, TITLE_CHARS)]
+  for (let chars = TITLE_CHARS - 1; chars > 1; chars--) {
+    titles.push(cutTitle(title, chars))
+  }
+  titles.push('')
+
+  return [...new Set(titles)]
 }
 
 /** The HUD's parts for `state`, in the order they are drawn. */
@@ -220,13 +250,10 @@ const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: Gam
       ? null
       : {
           rank: 3,
-          versions: questVersions(quest).map(text => [{ text, bold: true, color: 'magenta' }]),
-          // The banner says `#6 Jira Quest…`: the text's versions, `Quest ` left out.
-          art: questVersions(quest).map(text => ({
-            kind: 'quest',
-            ticket: quest.ticket,
-            title: text.slice(`Quest ${quest.ticket}`.length).trim(),
-          })),
+          versions: questTitles(quest).map(title => [
+            { text: questLine({ ticket: quest.ticket, title }), bold: true, color: 'magenta' },
+          ]),
+          art: questTitles(quest).map(title => ({ kind: 'quest', ticket: quest.ticket, title })),
         },
     isUnderWay(bossFight)
       ? single(
@@ -263,7 +290,7 @@ const partsOf = ({ player, encounter, vitals, quest, questions, bossFight }: Gam
         [
           { text: bar((vitals.mana ?? 0) / 100), color: MANA_COLOR[mana] },
           { text: vitals.mana === null ? 'Mana --' : `Mana ${vitals.mana}%`, color: MANA_COLOR[mana] },
-          ...(mana === 'warning' ? [{ text: 'Compaction near', bold: true, color: 'red' }] : []),
+          ...(mana === 'warning' ? [{ text: COMPACTION_WARNING, bold: true, color: 'red' }] : []),
         ],
       ],
       art: [{ kind: 'mana', mana: vitals.mana, level: mana }],
@@ -300,44 +327,14 @@ const STRIP_ORDER: StripSegment['kind'][] = [
 ]
 
 /**
- * The strip's segments for a band `room` strip pixels wide, as the text rows
- * choose theirs but strictly by rank: each part's shortest version until one
- * does not fit (level, HP and XP always shown), then each its longest that
- * still fits; in strip order.
+ * The strip's segments for a band `room` strip pixels wide, in strip order:
+ * chosen as the text rows are, but strictly by rank, as it is one row.
  */
 const layOutStrip = (parts: Part[], room: number): StripSegment[] => {
-  const chosen = new Map<Part, StripSegment>()
-  const inOrder = () =>
+  const inOrder = (chosen: Map<Part, StripSegment>) =>
     [...chosen.values()].sort((a, b) => STRIP_ORDER.indexOf(a.kind) - STRIP_ORDER.indexOf(b.kind))
-  const fitsWith = (part: Part, version: StripSegment): boolean => {
-    const before = chosen.get(part)
-    chosen.set(part, version)
-    const fits = stripWidth(inOrder()) <= room
-    if (before === undefined) {
-      chosen.delete(part)
-    } else {
-      chosen.set(part, before)
-    }
 
-    return fits
-  }
-  const byRank = [...parts].sort((a, b) => a.rank - b.rank)
-  for (const part of byRank) {
-    const shortest = part.art.at(-1)
-    if (shortest === undefined || (part.rank > LAST_ALWAYS_SHOWN && !fitsWith(part, shortest))) {
-      // One row: the first part that does not fit ends it, so none lesser shows in its place.
-      break
-    }
-    chosen.set(part, shortest)
-  }
-  for (const part of byRank) {
-    const longest = chosen.has(part) ? part.art.find(version => fitsWith(part, version)) : undefined
-    if (longest !== undefined) {
-      chosen.set(part, longest)
-    }
-  }
-
-  return inOrder()
+  return inOrder(chooseVersions(parts, part => part.art, each => stripWidth(inOrder(each)) <= room, true))
 }
 
 /** The strip's segments for `state` in a band `columns` wide, in the order drawn. */
@@ -345,12 +342,12 @@ export const stripOf = (state: GameState, columns: number): StripSegment[] =>
   layOutStrip(partsOf(state), columns * PIXELS_PER_COLUMN)
 
 /** What a surface last drew of the Player, to tell a loss of HP or a gain of XP since. */
-type Drawn = { level: number; hp: number; totalXp: number; xpShare: number }
+type LastDrawn = { level: number; hp: number; totalXp: number; xpShare: number }
 
 /** The motion a draw plays: HP lost, or XP gained, since `before`. */
-const motionOf = (before: Drawn | undefined, player: Player): StripMotion => {
+const motionOf = (before: LastDrawn | undefined, player: Player): StripMotion => {
   if (before === undefined) {
-    return { isHpLost: false, xpFrom: null }
+    return STILL
   }
   const isXpGained = player.totalXp > before.totalXp
 
@@ -361,7 +358,7 @@ const motionOf = (before: Drawn | undefined, player: Player): StripMotion => {
 }
 
 /** What each surface drew last, so the next draw knows what changed. */
-const lastDrawn = new Map<string, Drawn>()
+const lastDrawn = new Map<string, LastDrawn>()
 
 /**
  * The HUD: its parts filled into at most three rows of the band's width. When

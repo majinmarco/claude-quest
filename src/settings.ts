@@ -1,6 +1,6 @@
 // The Player's settings: the Haiku budget, the hasty-answer rule, whether
-// the Scene opens itself and how the HUD is drawn, as the rows of Claude Code's own settings menu
-// (/config). They are the plugin's `userConfig` fields
+// the Scene opens itself and how the HUD is drawn, as the rows of Claude
+// Code's own settings menu (/config). They are the plugin's `userConfig` fields
 // (.claude-plugin/plugin.json), stored by Claude Code in settings.json under
 // pluginConfigs["quest-mod"].options and handed to `register(on, options)`; a
 // change in /config reloads the mod with the new values. The manifest's defaults match DEFAULT_RULES.

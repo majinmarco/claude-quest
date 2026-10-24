@@ -55,8 +55,8 @@ describe('HUD strip: by the band\'s width', () => {
 
 describe('HUD strip: the portrait', () => {
   test('below level 3 the portrait is the plain adventurer; then it follows the Title', () => {
-    expect(portraitOf(playerAt(2, { intelligence: 50 }))).toBe('hero')
-    expect(portraitOf(playerAt(3))).toBe('hero')
+    expect(portraitOf(playerAt(2, { intelligence: 50 }))).toBe('adventurer')
+    expect(portraitOf(playerAt(3))).toBe('adventurer')
     expect(portraitOf(playerAt(3, { intelligence: 5, wisdom: 2 }))).toBe('scholar')
     expect(portraitOf(playerAt(5, { wisdom: 9, strength: 3 }))).toBe('pathfinder')
     expect(portraitOf(playerAt(4, { strength: 9 }))).toBe('warrior')

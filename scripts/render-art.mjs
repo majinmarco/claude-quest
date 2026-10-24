@@ -139,6 +139,6 @@ for (const columns of [40, 80, 120, 200]) {
 write('hud-calm-80.svg', strip(HUD_CALM, 80))
 write('hud-calm-200.svg', strip(HUD_CALM, 200))
 write('hud-battle-200.svg', strip(HUD_BATTLE, 200))
-for (const [name, stats] of [['hero', {}], ['scholar', { intelligence: 9 }], ['pathfinder', { wisdom: 9 }], ['warrior', { strength: 9 }]]) {
-  write(`hud-portrait-${name}.svg`, strip({ ...HUD_CALM, player: { ...playerAt(name === 'hero' ? 2 : 3, stats) } }, 80))
+for (const [name, stats] of [['adventurer', {}], ['scholar', { intelligence: 9 }], ['pathfinder', { wisdom: 9 }], ['warrior', { strength: 9 }]]) {
+  write(`hud-portrait-${name}.svg`, strip({ ...HUD_CALM, player: { ...playerAt(name === 'adventurer' ? 2 : 3, stats) } }, 80))
 }
