@@ -31,6 +31,15 @@ Change these in `/config` under the mod:
 - `hastyAnswerSeconds` (5) and `nonTrivialLines` (3): when a right answer counts as hasty and pays less.
 - `autoOpenScene` (on): open the Scene once per session on surfaces that draw its art.
 - `hudStyle` (`pixel`): on the desktop and in VS Code the HUD is a pixel-art strip (your portrait by Title, the HP, XP and Mana bars, the Quest on a banner, a Prophecy armed, the Stats); `text` brings back the text band there. The terminal always shows the text band. A Prophecy's Buttons show in the band either way, beside the strip.
+- `soundVolume` (60): how loud the Sound cues play, 0 to 100; 0 turns sound off. See [Sound](#sound).
+
+## Sound
+
+Every game event has a short clip of its own, from the mod's CC0 sounds in `assets/sounds/`: a horn when a Quest starts, a chime for a Module discovered, an anvil for a Crafting, a growl when a Battle's monster spawns (lower for a ghost, a squelch for a slime), a sword on each hit, a sting when it falls, a sparkle when the Sage has a Question (paper for the Quest Giver's Briefing, paper and a compass for the Cartographer's Scouting), a ding or a thud for an answer, a tick, chime or fizzle for a Prophecy, a roar when the boss is summoned, its hits and its fall, a fanfare for a Boss Fight won, a sting for one lost, a jingle for a level-up, coins for a Badge or Trophy, a heartbeat when you are Exhausted, a rising tone for a heal. Plain reads, a full XP pool and a Quest closing unfought play nothing.
+
+Sound is decoration: it never pays, gates or waits for anything, and a clip that cannot play is skipped (its cause logged to debug once). The same clip never plays over itself, a Battle's hits play at most one a second, and at most six clips play in ten seconds, the quieter ones dropped first; the boss, the fanfare, a level-up, a defeat and a Badge always play. Headless (`claude -p`) nothing plays.
+
+Where it plays, as Claude Code 2.1.308 plays a mod's clip (`$.audio.play`): where the engine has a web audio element, through it (louder than 100% is heard as 100%); otherwise on macOS through `afplay`; in a Linux or Windows terminal, nowhere (Claude Code has no player there and skips the clip; a `paplay` or `ffplay` installed is not used). Not yet heard by a person: the Linux desktop app and a macOS terminal.
 
 ## Quest Source
 
@@ -73,6 +82,6 @@ Your Player (level, XP, Badges, trophies, the Modules you've discovered) and the
 
 ## Credits
 
-The pixel art is Kenney's (all CC0): Tiny Dungeon for the Scene, the portraits and the Region map's Rooms, Tiny Town for the Region map's overworld, UI Pack – Pixel Adventure for the Quest Board's scrolls, and the Kenney Mini font for their lettering. See [`assets/CREDITS.md`](assets/CREDITS.md).
+The pixel art is Kenney's (all CC0): Tiny Dungeon for the Scene, the portraits and the Region map's Rooms, Tiny Town for the Region map's overworld, UI Pack – Pixel Adventure for the Quest Board's scrolls, and the Kenney Mini font for their lettering. The sounds are CC0 too: Kenney's RPG Audio, Interface Sounds, Impact Sounds and Music Jingles, and from OpenGameArt rubberduck's creatures, bart's heartbeat and AntumDeluge's fire. See [`assets/CREDITS.md`](assets/CREDITS.md).
 
 The art is baked into TypeScript, so nothing decodes a PNG or loads a font while a session runs: `node scripts/build-sprites.mjs` writes `src/sprites.ts` from the tilesheets, `node scripts/build-font.mjs` writes `src/pixel-font.ts` from the font. `node scripts/render-art.mjs <dir>` renders the Scene, the Boss Fight, the portraits, a sample Quest Board, a sample Quest Log, the World (themed too) and a sample Region map's three views (and its overworld in each biome, a Floor in each Dungeon kind: `themed-*`) to SVG files (and the board as `board.html`, the log as `log.html` and `log-terminal.txt`, the Overview as `overview.html` and `overview-terminal.txt`, the map's terminal grid as `map-*.txt`) for a look; `--snapshot` writes the art's test snapshots again after a deliberate change.

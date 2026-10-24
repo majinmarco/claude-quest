@@ -75,7 +75,8 @@ import type { ScoutingInput } from '../src/scouting'
 import { takeQuest } from '../src/take-quest'
 import { themeRegion } from '../src/theming'
 import type { ThemingDeps } from '../src/theming'
-import { autoOpenSceneOf, hudStyleOf, rulesOf } from '../src/settings'
+import { autoOpenSceneOf, hudStyleOf, rulesOf, soundVolumeOf } from '../src/settings'
+import { playCues, setSoundVolume } from '../src/sounds'
 import { moduleOfFolder, testFileEditedOf, translateCheckStart, translateCommand, translateCommit, translateMeasure, translateToolCall } from '../src/translate'
 import type { MeasureSeen } from '../src/translate'
 import type { QuestBoard, QuestCard, QuestLog, QuestSourceSetting, TicketDetails, TicketFetch, XpPool } from '../types'
@@ -1033,6 +1034,9 @@ async function playOne($: EngineInterface, event: GameEvent, rules: Rules, agent
     await savePlayer($, saved.player)
   }
 
+  // The step's Sound cues, never awaited: sound waits for nothing and fails nothing.
+  void playCues($, effects, saved?.player)
+
   // The session's whole list goes to the Player's for this project, not
   // awaited: a write never holds up the tool call that made the discovery.
   // One that fails leaves the discovery to this session, until the next
@@ -1254,6 +1258,7 @@ export const register: Register = (on, options) => {
   const rules = rulesOf(options)
   const autoOpenScene = autoOpenSceneOf(options)
   const hudStyle = hudStyleOf(options)
+  setSoundVolume(soundVolumeOf(options))
 
   on('session.start', async ($, e, next) => {
     // After a reload of the mod the session's game is still in $.state; one
